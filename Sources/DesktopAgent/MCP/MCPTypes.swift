@@ -196,6 +196,7 @@ struct AgentConfigFile: Codable {
     var apiKeys: [String: AIProviderConfig]?
     var activeModel: String?   // "provider/model" format, e.g. "anthropic/claude-sonnet-4-20250514"
     var mcpServers: [String: MCPServerConfig]?
+    var gateways: GatewayConfig?
     var maxTokens: Int?
     var maxScreenshotWidth: Int?
 

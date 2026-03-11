@@ -28,6 +28,16 @@ struct DesktopAgentCLI {
         let fileConfig = AgentConfigFile.load()
         mcpManager.startFromConfig(fileConfig)
 
+        // --- Gateway mode: osai gateway ---
+        if args.contains("gateway") {
+            let gwConfig = fileConfig.gateways ?? GatewayConfig()
+            let server = GatewayServer(config: config, mcpManager: mcpManager, gatewayConfig: gwConfig)
+            await server.start()
+            server.stop()
+            mcpManager.stopAll()
+            return
+        }
+
         // --- Single command mode (no banner, no status) ---
         // osai "do something"
         // echo "do something" | osai
@@ -38,6 +48,7 @@ struct DesktopAgentCLI {
             if skipNext { skipNext = false; continue }
             if arg == "--model" { skipNext = true; continue }
             if arg == "--verbose" || arg == "-v" { continue }
+            if arg == "gateway" { continue }
             commandArgs.append(arg)
         }
 
@@ -1082,6 +1093,7 @@ struct DesktopAgentCLI {
           \(c)osai\(r)                            Interactive mode (full UI)
           \(c)osai\(r) "do something"              Single command (no banner, just runs)
           \(c)echo\(r) "task" \(c)| osai\(r)               Pipe input
+          \(c)osai gateway\(r)                    Start gateway (Telegram, WhatsApp, Slack, Discord)
 
         \(b)BASICS\(r)
           \(c)/help\(r)                          Show this help
@@ -1147,6 +1159,12 @@ struct DesktopAgentCLI {
           \(c)/program prompt\(r)                Show custom system prompt
           \(c)/program reset\(r)                 Reset program to defaults
           \(c)/improve\(r) [focus]                Ask the agent to improve itself
+
+        \(b)GATEWAY\(r) \(d)(multi-platform messaging bridge)\(r)
+          \(c)osai gateway\(r)                  Start gateway server
+          \(d)Bridges Telegram, WhatsApp, Slack, Discord to osai.\(r)
+          \(d)Configure in ~/.desktop-agent/config.json under "gateways".\(r)
+          \(d)Each platform gets its own agent session per chat.\(r)
 
         \(b)SYSTEM\(r)
           \(c)/apps\(r) \(c)/windows\(r) \(c)/screen\(r) \(c)/perms\(r) \(c)/verbose\(r)
@@ -1244,6 +1262,7 @@ struct DesktopAgentCLI {
           osai "open Safari"             Single command (headless, just runs)
           osai --model openai/gpt-4o "translate this"
           echo "list my files" | osai    Pipe input
+          osai gateway                   Start multi-platform gateway
 
         OPTIONS:
           --model <provider/model>   Model to use (default: anthropic/claude-sonnet-4-20250514)
