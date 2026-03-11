@@ -100,62 +100,129 @@ final class SkillManager {
         ensureDir()
         let fm = FileManager.default
 
-        // GWS (Google Workspace)
+        // GWS (Google Workspace) — always overwrite to keep in sync
         let gwsPath = skillsDir + "/gws.md"
-        if !fm.fileExists(atPath: gwsPath) {
-            let gwsSkill = """
-            ---
-            name: Google Workspace
-            description: Gmail, Calendar, Drive, Docs via gws CLI
-            triggers: [email, correo, gmail, mail, calendar, calendario, evento, drive, docs, sheets, workspace, inbox, bandeja, unread, sin leer, enviar correo, send email, agenda, meeting, reunión, cita]
-            mcp: null
-            tools: [run_shell]
-            ---
+        let gwsSkill = """
+        ---
+        name: Google Workspace
+        description: Gmail, Calendar, Drive, Docs via gws CLI (REST-style API)
+        triggers: [email, correo, gmail, mail, calendar, calendario, evento, drive, docs, sheets, workspace, inbox, bandeja, unread, sin leer, enviar correo, send email, agenda, meeting, reunión, cita, leído, leido, marcar, read, send, draft]
+        mcp: null
+        tools: [run_shell]
+        ---
 
-            ## Google Workspace — gws CLI
+        ## Google Workspace — gws CLI
 
-            The user has `gws` CLI installed at /opt/homebrew/bin/gws. Use it via `run_shell` for ALL email/calendar/drive tasks.
+        The user has `gws` installed at /opt/homebrew/bin/gws. Use it via `run_shell` for ALL email/calendar/drive tasks.
 
-            ### Gmail Commands:
-            ```
-            gws gmail inbox                    # List inbox (unread first)
-            gws gmail inbox --unread           # Only unread messages
-            gws gmail inbox --max 20           # Limit results
-            gws gmail read <message_id>        # Read a specific email
-            gws gmail send --to user@email.com --subject "Subject" --body "Body"
-            gws gmail send --to user@email.com --subject "Subject" --body "Body" --html  # HTML body
-            gws gmail search "query"           # Search emails
-            gws gmail labels                   # List labels
-            gws gmail threads                  # List threads
-            gws gmail thread <thread_id>       # Read thread
-            ```
+        **SYNTAX:** `gws <service> <resource> [sub-resource] <method> [flags]`
 
-            ### Calendar Commands:
-            ```
-            gws calendar list                  # List today's events
-            gws calendar list --days 7         # Next 7 days
-            gws calendar create --title "Meeting" --start "2025-03-12T10:00:00" --end "2025-03-12T11:00:00"
-            gws calendar create --title "Lunch" --start "2025-03-12T13:00:00" --duration 60  # 60 minutes
-            ```
+        Accounts: enmaska@gmail.com (default), dev@puertozahara.com
+        Use `--params '{"accountEmail": "dev@puertozahara.com"}'` to switch account.
 
-            ### Drive Commands:
-            ```
-            gws drive list                     # List files
-            gws drive list --folder <id>       # List folder contents
-            gws drive search "query"           # Search files
-            gws drive download <file_id> --output ./file.pdf
-            ```
+        ### Gmail
 
-            ### IMPORTANT RULES:
-            - ALWAYS use `run_shell` with `gws` commands. NEVER open Gmail in a browser.
-            - For "check my emails" → `gws gmail inbox --unread`
-            - For "send email" → `gws gmail send --to ... --subject ... --body ...`
-            - For "what's on my calendar" → `gws calendar list`
-            - Parse the output and present it nicely to the user.
-            - If gws is not authenticated, tell the user to run `gws auth` first.
-            """
-            try? gwsSkill.write(toFile: gwsPath, atomically: true, encoding: .utf8)
-        }
+        **List unread messages:**
+        ```
+        gws gmail users messages list --params '{"userId": "me", "q": "is:unread", "maxResults": 10}'
+        ```
+
+        **List inbox:**
+        ```
+        gws gmail users messages list --params '{"userId": "me", "q": "in:inbox", "maxResults": 10}'
+        ```
+
+        **Search emails:**
+        ```
+        gws gmail users messages list --params '{"userId": "me", "q": "from:someone@email.com subject:hello", "maxResults": 10}'
+        ```
+
+        **Read a specific message (metadata only — fast):**
+        ```
+        gws gmail users messages get --params '{"userId": "me", "id": "MSG_ID", "format": "metadata", "metadataHeaders": ["From","To","Subject","Date"]}'
+        ```
+
+        **Read full message:**
+        ```
+        gws gmail users messages get --params '{"userId": "me", "id": "MSG_ID", "format": "full"}'
+        ```
+
+        **Mark as read (remove UNREAD label):**
+        ```
+        gws gmail users messages modify --params '{"userId": "me", "id": "MSG_ID"}' --json '{"removeLabelIds": ["UNREAD"]}'
+        ```
+        ⚠️ Requires full scopes. If you get 403 "insufficientPermissions", tell the user:
+        "Need write permissions. Run: `gws auth login --full` to re-authenticate with full scopes."
+        **DO NOT fall back to opening Gmail in browser.**
+
+        **Send email (base64-encoded RFC 2822):**
+        ```
+        # Build the raw email, base64url encode it, then send:
+        echo -e "From: me\\nTo: recipient@email.com\\nSubject: Hello\\nContent-Type: text/plain\\n\\nBody text here" | base64 | tr '+/' '-_' | tr -d '=' | xargs -I{} gws gmail users messages send --params '{"userId": "me"}' --json '{"raw": "{}"}'
+        ```
+
+        **List labels:**
+        ```
+        gws gmail users labels list --params '{"userId": "me"}'
+        ```
+
+        **Read thread:**
+        ```
+        gws gmail users threads get --params '{"userId": "me", "id": "THREAD_ID"}'
+        ```
+
+        ### Calendar
+
+        **List upcoming events:**
+        ```
+        gws calendar events list --params '{"calendarId": "primary", "timeMin": "2026-03-11T00:00:00Z", "maxResults": 10, "singleEvents": true, "orderBy": "startTime"}'
+        ```
+        ⚠️ Always set `timeMin` to today's date in ISO 8601 with Z suffix.
+
+        **Create event:**
+        ```
+        gws calendar events insert --params '{"calendarId": "primary"}' --json '{"summary": "Meeting title", "start": {"dateTime": "2026-03-12T10:00:00", "timeZone": "Europe/Madrid"}, "end": {"dateTime": "2026-03-12T11:00:00", "timeZone": "Europe/Madrid"}}'
+        ```
+
+        **Delete event:**
+        ```
+        gws calendar events delete --params '{"calendarId": "primary", "eventId": "EVENT_ID"}'
+        ```
+
+        ### Drive
+
+        **List recent files:**
+        ```
+        gws drive files list --params '{"pageSize": 10, "fields": "files(id,name,mimeType,modifiedTime)", "orderBy": "modifiedTime desc"}'
+        ```
+
+        **Search files:**
+        ```
+        gws drive files list --params '{"q": "name contains \\'report\\'", "pageSize": 10, "fields": "files(id,name,mimeType)"}'
+        ```
+
+        **Download file:**
+        ```
+        gws drive files get --params '{"fileId": "FILE_ID", "alt": "media"}' --output ./downloaded_file.pdf
+        ```
+
+        ### People / Contacts
+
+        **Search contacts:**
+        ```
+        gws people people searchContacts --params '{"query": "John", "readMask": "names,emailAddresses,phoneNumbers", "pageSize": 10}'
+        ```
+
+        ### CRITICAL RULES:
+        - **ALWAYS use `run_shell` with `gws` commands. NEVER open Gmail/Calendar/Drive in a browser.**
+        - **If a gws command fails with 403, tell the user to run `gws auth login --full`. DO NOT fall back to GUI.**
+        - **If a gws command fails with other errors, debug the command. DO NOT open a browser.**
+        - All params are JSON. Quote carefully with single quotes outside, double inside.
+        - Parse JSON output and present it nicely to the user (summary table, not raw JSON).
+        - When listing messages, ALWAYS batch `get` calls for details (From, Subject, Date).
+        - Use `format: "metadata"` for message listings (cheaper, faster than "full").
+        """
+        try? gwsSkill.write(toFile: gwsPath, atomically: true, encoding: .utf8)
     }
 
     // MARK: - Internal

@@ -225,10 +225,13 @@ struct AgentConfig {
             They might be: corrections, additional context, priority changes, or questions about progress.
             When you see an aside, briefly acknowledge it and adapt your next actions accordingly.
 
-            ## SKILLS:
+            ## SKILLS — FOLLOW THEM STRICTLY:
             Skills are knowledge files that activate automatically when the user's input matches trigger keywords.
             When a skill is active, its instructions appear in your system prompt under "ACTIVE SKILLS".
-            Follow skill instructions precisely — they tell you HOW to use specific tools/apps/MCPs.
+            **Follow skill instructions PRECISELY — they contain the EXACT syntax for CLI tools.**
+            **If a skill says to use a CLI command, ALWAYS use that command. NEVER fall back to GUI.**
+            **If a CLI command fails (403, error, etc.), TELL THE USER the error and how to fix it.**
+            **NEVER open a browser/app as fallback when a CLI approach fails. Report the error instead.**
             Skills dir: ~/.desktop-agent/skills/
 
             ## TASK SCHEDULING:
