@@ -74,6 +74,17 @@ final class ContextManager {
         self.pricing = ContextManager.pricing[model] ?? ContextManager.defaultPricing
     }
 
+    // MARK: - Reset
+
+    func reset() {
+        totalInputTokens = 0
+        totalOutputTokens = 0
+        turnCount = 0
+        lastInputTokens = 0
+        lastOutputTokens = 0
+        compactionCount = 0
+    }
+
     // MARK: - Track Usage
 
     func recordUsage(_ usage: TokenUsage?) {

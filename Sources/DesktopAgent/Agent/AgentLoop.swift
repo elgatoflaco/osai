@@ -414,6 +414,7 @@ final class AgentLoop {
 
     func clearHistory() {
         conversationHistory.removeAll()
+        context.reset()
         printColored("  Conversation cleared.", color: .green)
     }
 
