@@ -107,16 +107,30 @@ struct DesktopAgentCLI {
         while true {
             let prompt = buildPrompt(config: currentConfig, context: agent.context)
 
-            guard let input = lineEditor.readLine(prompt: prompt) else {
+            guard let inputResult = lineEditor.readInput(prompt: prompt) else {
                 // EOF (Ctrl+D)
                 print()
                 printColored("  Goodbye!", color: .gray)
                 return
             }
-            if input.isEmpty { continue }
+            let input = inputResult.text
+            if input.isEmpty && !inputResult.hasImages { continue }
+
+            // Show paste summary if large paste was collapsed
+            if inputResult.pastedLines > 0 {
+                printDim("  📋 Pasted \(inputResult.pastedLines) lines (\(input.count) chars)")
+            }
+
+            // Show image attachment info
+            for img in inputResult.images {
+                let filename = (img.path as NSString).lastPathComponent
+                let size = (try? FileManager.default.attributesOfItem(atPath: img.path)[.size] as? Int) ?? 0
+                let sizeStr = size > 1_000_000 ? "\(size / 1_000_000)MB" : "\(size / 1_000)KB"
+                printColored("  📎 \(filename) (\(sizeStr), \(img.mediaType))", color: .magenta)
+            }
 
             // --- Slash Commands ---
-            if input.hasPrefix("/") {
+            if input.hasPrefix("/") && !inputResult.hasImages {
                 let result = await handleSlashCommand(input, agent: agent, config: &currentConfig, mcpManager: mcpManager)
                 if result == .quit { return }
                 if result == .handled { continue }
@@ -146,7 +160,11 @@ struct DesktopAgentCLI {
             // Process with agent
             do {
                 print()
-                _ = try await agent.processUserInput(input)
+                if inputResult.hasImages {
+                    _ = try await agent.processUserInputWithImages(input, images: inputResult.images)
+                } else {
+                    _ = try await agent.processUserInput(input)
+                }
                 // Show token usage + cost after response
                 if agent.context.turnCount > 0 {
                     print("  \(agent.context.turnSummary)")

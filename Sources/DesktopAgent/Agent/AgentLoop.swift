@@ -31,12 +31,42 @@ final class AgentLoop {
         self.executor.subAgentConfig = config
     }
 
+    /// Process input with optional images (vision)
+    func processUserInputWithImages(_ userInput: String, images: [InputResult.ImageAttachment] = []) async throws -> String {
+        var content: [ClaudeContent] = []
+
+        // Add images first
+        for img in images {
+            content.append(.image(source: ImageSource(
+                type: "base64", mediaType: img.mediaType, data: img.base64
+            )))
+        }
+
+        // Add text
+        if !userInput.isEmpty {
+            content.append(.text(userInput))
+        } else if !images.isEmpty {
+            content.append(.text("Describe this image."))
+        }
+
+        return try await processUserContent(content)
+    }
+
     func processUserInput(_ userInput: String) async throws -> String {
+        return try await processUserContent([.text(userInput)])
+    }
+
+    private func processUserContent(_ content: [ClaudeContent]) async throws -> String {
         // Add user message
         conversationHistory.append(ClaudeMessage(
             role: "user",
-            content: [.text(userInput)]
+            content: content
         ))
+
+        let userInput = content.compactMap {
+            if case .text(let t) = $0 { return t }
+            return nil
+        }.joined(separator: " ")
 
         var finalResponse = ""
         var iterations = 0

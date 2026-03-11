@@ -1,5 +1,21 @@
 import Foundation
 
+// MARK: - Input Result (text + optional images)
+
+struct InputResult {
+    let text: String
+    let images: [ImageAttachment]
+    let pastedLines: Int  // 0 if not a paste
+
+    struct ImageAttachment {
+        let path: String
+        let base64: String
+        let mediaType: String
+    }
+
+    var hasImages: Bool { !images.isEmpty }
+}
+
 // MARK: - Line Editor with Tab Completion & History
 
 final class LineEditor {
@@ -9,6 +25,8 @@ final class LineEditor {
     private let subCompletions: [String: [String]]
     private var originalTermios = termios()
     private var isRawMode = false
+    /// Threshold: pastes with more than this many lines get collapsed display
+    private let pasteCollapseThreshold = 3
 
     init() {
         self.completions = [
@@ -196,11 +214,33 @@ final class LineEditor {
 
             // Regular character
             default:
-                if char.asciiValue ?? 0 >= 32 {
+                if char.asciiValue ?? 0 >= 32 || !char.isASCII {
                     buffer.insert(char, at: cursorPos)
                     cursorPos += 1
-                    if cursorPos == buffer.count {
-                        // Append at end — just print the char
+
+                    // Detect paste: read all immediately available chars
+                    let pasteChars = drainAvailable()
+                    if !pasteChars.isEmpty {
+                        for pc in pasteChars {
+                            buffer.insert(pc, at: cursorPos)
+                            cursorPos += 1
+                        }
+                        // Check if this is a big paste worth collapsing
+                        let text = String(buffer)
+                        let lineCount = text.components(separatedBy: "\n").count
+                        if lineCount > pasteCollapseThreshold || buffer.count > 500 {
+                            // Collapse display — show summary instead of full text
+                            let charCount = buffer.count
+                            let firstLine = text.components(separatedBy: "\n").first ?? ""
+                            let preview = String(firstLine.prefix(60))
+                            let summary = "\u{001B}[90m📋 Pasted \(lineCount) lines (\(charCount) chars)\u{001B}[0m \u{001B}[90m— \(preview)…\u{001B}[0m"
+                            let out = "\r\u{001B}[2K\(prompt)\(summary)"
+                            write(STDOUT_FILENO, out, out.utf8.count)
+                        } else {
+                            redraw()
+                        }
+                    } else if cursorPos == buffer.count {
+                        // Single char append — just echo it
                         let s = String(char)
                         _ = s.withCString { write(STDOUT_FILENO, $0, s.utf8.count) }
                     } else {
@@ -209,6 +249,66 @@ final class LineEditor {
                 }
             }
         }
+    }
+
+    /// Read an input line and process it into an InputResult with image detection
+    func readInput(prompt: String) -> InputResult? {
+        guard let raw = readLine(prompt: prompt) else { return nil }
+        if raw.isEmpty { return InputResult(text: "", images: [], pastedLines: 0) }
+
+        let lineCount = raw.components(separatedBy: "\n").count
+
+        // Detect image file paths (dragged files into terminal)
+        let imageExtensions = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "tiff", "heic"]
+        var images: [InputResult.ImageAttachment] = []
+        var textParts: [String] = []
+
+        // Split by whitespace and newlines to find paths
+        let tokens = raw.components(separatedBy: .whitespacesAndNewlines)
+        for token in tokens {
+            let cleaned = token.trimmingCharacters(in: CharacterSet(charactersIn: "'\""))
+            let expanded = (cleaned as NSString).expandingTildeInPath
+
+            // Check if it looks like a file path with image extension
+            let ext = (expanded as NSString).pathExtension.lowercased()
+            if imageExtensions.contains(ext) && FileManager.default.fileExists(atPath: expanded) {
+                // Read and base64 encode the image
+                if let data = FileManager.default.contents(atPath: expanded) {
+                    let base64 = data.base64EncodedString()
+                    let mediaType: String
+                    switch ext {
+                    case "png": mediaType = "image/png"
+                    case "jpg", "jpeg": mediaType = "image/jpeg"
+                    case "gif": mediaType = "image/gif"
+                    case "webp": mediaType = "image/webp"
+                    case "bmp": mediaType = "image/bmp"
+                    case "tiff": mediaType = "image/tiff"
+                    case "heic": mediaType = "image/jpeg" // API doesn't support heic, but we try
+                    default: mediaType = "image/jpeg"
+                    }
+
+                    // Check size — limit to ~20MB base64 (roughly 15MB file)
+                    if data.count < 15_000_000 {
+                        images.append(InputResult.ImageAttachment(
+                            path: expanded, base64: base64, mediaType: mediaType
+                        ))
+                    } else {
+                        textParts.append(token)
+                        textParts.append("[image too large: \(data.count / 1_000_000)MB]")
+                    }
+                } else {
+                    textParts.append(token)
+                }
+            } else {
+                textParts.append(token)
+            }
+        }
+
+        // Rebuild text without image paths
+        let text = images.isEmpty ? raw : textParts.joined(separator: " ").trimmingCharacters(in: .whitespaces)
+        let pastedLines = lineCount > pasteCollapseThreshold ? lineCount : 0
+
+        return InputResult(text: text, images: images, pastedLines: pastedLines)
     }
 
     // MARK: - Autocomplete
@@ -294,6 +394,22 @@ final class LineEditor {
         let n = read(STDIN_FILENO, &c, 1)
         guard n == 1 else { return nil }
         return Character(UnicodeScalar(c))
+    }
+
+    /// Read all immediately available characters (paste detection)
+    private func drainAvailable() -> [Character] {
+        var chars: [Character] = []
+        var pfd = pollfd(fd: STDIN_FILENO, events: Int16(POLLIN), revents: 0)
+
+        while true {
+            let ret = poll(&pfd, 1, 0) // 0ms timeout — non-blocking
+            guard ret > 0, pfd.revents & Int16(POLLIN) != 0 else { break }
+            var c: UInt8 = 0
+            let n = read(STDIN_FILENO, &c, 1)
+            guard n == 1 else { break }
+            chars.append(Character(UnicodeScalar(c)))
+        }
+        return chars
     }
 
     private func enableRawMode() {
