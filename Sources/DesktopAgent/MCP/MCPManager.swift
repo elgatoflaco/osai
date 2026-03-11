@@ -30,9 +30,24 @@ final class MCPManager {
             toolInfos.append(tool)
         }
 
-        printColored("  ✓ \(name): \(tools.count) tools loaded", color: .green)
-        for tool in tools {
-            printColored("    • \(tool.qualifiedName): \(tool.description.prefix(80))", color: .gray)
+        // Compact display: animate tool names scrolling, then show summary
+        if !tools.isEmpty {
+            let toolNames = tools.map { $0.name }
+            let maxShow = min(toolNames.count, 12)
+            for i in 0..<maxShow {
+                let preview = toolNames[i...].prefix(4).joined(separator: ", ")
+                let progress = String(repeating: "█", count: (i + 1) * 20 / maxShow)
+                let remaining = String(repeating: "░", count: 20 - progress.count)
+                let out = "\r\u{001B}[2K  \u{001B}[90m[\(progress)\(remaining)] \(preview)…\u{001B}[0m"
+                write(STDOUT_FILENO, out, out.utf8.count)
+                fflush(stdout)
+                Thread.sleep(forTimeInterval: 0.04)
+            }
+            // Final line: clean summary
+            let out = "\r\u{001B}[2K  \u{001B}[32m✓ \(name)\u{001B}[0m \u{001B}[90m— \(tools.count) tools\u{001B}[0m\n"
+            write(STDOUT_FILENO, out, out.utf8.count)
+        } else {
+            printColored("  ✓ \(name): connected (no tools)", color: .green)
         }
     }
 

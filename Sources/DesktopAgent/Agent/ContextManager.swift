@@ -158,14 +158,14 @@ final class ContextManager {
     /// Prompt indicator: colored dot + percentage
     var promptIndicator: String {
         let pct = contextPercentage
-        if pct < 1 { return "" }
 
         let color: String
         if pct < 50 { color = "\u{001B}[32m" }
         else if pct < 75 { color = "\u{001B}[33m" }
         else { color = "\u{001B}[31m" }
 
-        return "\(color)● \(String(format: "%.0f", pct))%\u{001B}[0m "
+        let pctStr = pct < 1 ? "0" : String(format: "%.0f", pct)
+        return "\(color)● \(pctStr)%\u{001B}[0m "
     }
 
     /// One-line cost summary for after each response
