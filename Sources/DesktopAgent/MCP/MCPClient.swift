@@ -31,18 +31,16 @@ final class MCPClient {
         // Resolve command path
         if config.command.hasPrefix("/") {
             proc.executableURL = URL(fileURLWithPath: config.command)
+            proc.arguments = config.args ?? []
         } else {
-            // Search in PATH
+            // Use /usr/bin/env to search PATH for the command
             proc.executableURL = URL(fileURLWithPath: "/usr/bin/env")
             proc.arguments = [config.command] + (config.args ?? [])
         }
 
-        if config.command != "/usr/bin/env" {
-            proc.arguments = config.args
-        }
-
         // Environment
         var env = ProcessInfo.processInfo.environment
+        env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
         if let extraEnv = config.env {
             for (k, v) in extraEnv { env[k] = v }
         }
@@ -186,30 +184,45 @@ final class MCPClient {
             throw MCPError.notRunning
         }
 
+        let fd = stdout.fileDescriptor
         let deadline = Date().addingTimeInterval(30)
 
         while Date() < deadline {
-            let available = stdout.availableData
-            if !available.isEmpty {
-                buffer.append(available)
+            // Use poll() to check if data is available without blocking
+            var pfd = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+            let remaining = deadline.timeIntervalSinceNow
+            let timeoutMs = max(0, Int32(remaining * 1000))
+            let ret = poll(&pfd, 1, min(timeoutMs, 500)) // check every 500ms max
 
-                // Try to parse complete JSON lines
-                while let newlineIndex = buffer.firstIndex(of: 0x0A) {
-                    let lineData = buffer[buffer.startIndex..<newlineIndex]
-                    buffer = Data(buffer[buffer.index(after: newlineIndex)...])
+            if ret > 0 && (pfd.revents & Int16(POLLIN)) != 0 {
+                // Data available — read it
+                var readBuf = [UInt8](repeating: 0, count: 8192)
+                let n = read(fd, &readBuf, readBuf.count)
+                if n > 0 {
+                    buffer.append(contentsOf: readBuf[0..<n])
 
-                    if lineData.isEmpty { continue }
+                    // Try to parse complete JSON lines
+                    while let newlineIndex = buffer.firstIndex(of: 0x0A) {
+                        let lineData = buffer[buffer.startIndex..<newlineIndex]
+                        buffer = Data(buffer[buffer.index(after: newlineIndex)...])
 
-                    if let response = try? JSONDecoder().decode(JSONRPCResponse.self, from: Data(lineData)) {
-                        if response.id == expectedId {
-                            return response
+                        if lineData.isEmpty { continue }
+
+                        if let response = try? JSONDecoder().decode(JSONRPCResponse.self, from: Data(lineData)) {
+                            if response.id == expectedId {
+                                return response
+                            }
+                            // Skip notifications or responses for other IDs
                         }
-                        // Skip notifications or responses for other IDs
                     }
+                } else if n == 0 {
+                    // EOF — server closed
+                    throw MCPError.initFailed("Server process exited unexpectedly")
                 }
-            } else {
-                Thread.sleep(forTimeInterval: 0.01)
+            } else if ret < 0 {
+                throw MCPError.initFailed("poll() error: \(errno)")
             }
+            // ret == 0 means timeout on this poll iteration, loop continues
         }
 
         throw MCPError.timeout
