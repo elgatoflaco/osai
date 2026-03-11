@@ -64,6 +64,15 @@ final class LineEditor {
         return length
     }
 
+    /// Get terminal width
+    private func terminalWidth() -> Int {
+        var ws = winsize()
+        if ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0 {
+            return Int(ws.ws_col)
+        }
+        return 80
+    }
+
     /// Read a line with tab completion and history support
     func readLine(prompt: String) -> String? {
         // Print prompt once
@@ -76,16 +85,59 @@ final class LineEditor {
         var buffer: [Character] = []
         var cursorPos = 0
         var savedBuffer: [Character]? = nil
+        var prevLineCount = 1
 
         func redraw() {
-            // Move to column 0, clear line, reprint prompt + buffer
-            var out = "\r\u{001B}[2K\(prompt)\(String(buffer))"
-            // Move cursor back if not at end
-            let moveBack = buffer.count - cursorPos
-            if moveBack > 0 {
-                out += "\u{001B}[\(moveBack)D"
+            let cols = terminalWidth()
+            let promptLen = visibleLength(prompt)
+            let totalLen = promptLen + buffer.count
+
+            // Move cursor up to the start line if we wrapped before
+            if prevLineCount > 1 {
+                // Calculate which line the cursor is currently on
+                let cursorAbsPos = promptLen + cursorPos
+                let cursorLine = cursorAbsPos / cols
+                let topDist = cursorLine  // lines above the first line
+                // Also account for lines below cursor
+                let totalLines = max(1, (promptLen + buffer.count + cols - 1) / cols)
+                // But we used prevLineCount — move up from wherever cursor was
+                // Safest: move up enough to reach line 0
+                let moveUp = prevLineCount - 1
+                if moveUp > 0 {
+                    let up = "\u{001B}[\(moveUp)A"
+                    write(STDOUT_FILENO, up, up.utf8.count)
+                }
             }
-            write(STDOUT_FILENO, out, out.utf8.count)
+
+            // Move to column 0 and clear from here to end of screen
+            let clear = "\r\u{001B}[J"
+            write(STDOUT_FILENO, clear, clear.utf8.count)
+
+            // Print prompt + buffer
+            let content = "\(prompt)\(String(buffer))"
+            write(STDOUT_FILENO, content, content.utf8.count)
+
+            // Calculate new line count
+            let newLineCount = max(1, (totalLen + cols - 1) / cols)
+            prevLineCount = newLineCount
+
+            // Position cursor correctly
+            let cursorAbsPos = promptLen + cursorPos
+            let cursorLine = cursorAbsPos / cols
+            let cursorCol = cursorAbsPos % cols
+            let lastLine = max(0, (totalLen - 1) / cols)
+            // If totalLen == 0, cursor is at line 0 col 0
+            let endLine = totalLen == 0 ? 0 : lastLine
+
+            // Move up from end to cursor line
+            let linesUp = endLine - cursorLine
+            if linesUp > 0 {
+                let up = "\u{001B}[\(linesUp)A"
+                write(STDOUT_FILENO, up, up.utf8.count)
+            }
+            // Move to correct column
+            let colCmd = "\r" + (cursorCol > 0 ? "\u{001B}[\(cursorCol)C" : "")
+            write(STDOUT_FILENO, colCmd, colCmd.utf8.count)
         }
 
         while true {
@@ -189,12 +241,25 @@ final class LineEditor {
                     case "C": // Right
                         if cursorPos < buffer.count {
                             cursorPos += 1
-                            write(STDOUT_FILENO, "\u{001B}[C", 3)
+                            // Use redraw for correct cursor positioning across line wraps
+                            let cols = terminalWidth()
+                            let absPos = visibleLength(prompt) + cursorPos
+                            if absPos % cols == 0 {
+                                redraw() // crossed a line boundary
+                            } else {
+                                write(STDOUT_FILENO, "\u{001B}[C", 3)
+                            }
                         }
                     case "D": // Left
                         if cursorPos > 0 {
                             cursorPos -= 1
-                            write(STDOUT_FILENO, "\u{001B}[D", 3)
+                            let cols = terminalWidth()
+                            let absPos = visibleLength(prompt) + cursorPos
+                            if (absPos + 1) % cols == 0 {
+                                redraw() // crossed a line boundary
+                            } else {
+                                write(STDOUT_FILENO, "\u{001B}[D", 3)
+                            }
                         }
                     case "H": // Home
                         cursorPos = 0; redraw()
@@ -240,9 +305,13 @@ final class LineEditor {
                             redraw()
                         }
                     } else if cursorPos == buffer.count {
-                        // Single char append — just echo it
+                        // Single char append — just echo it, let terminal wrap
                         let s = String(char)
                         _ = s.withCString { write(STDOUT_FILENO, $0, s.utf8.count) }
+                        // Update line count tracking
+                        let cols = terminalWidth()
+                        let totalLen = visibleLength(prompt) + buffer.count
+                        prevLineCount = max(1, (totalLen + cols - 1) / cols)
                     } else {
                         redraw()
                     }
