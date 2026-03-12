@@ -10,7 +10,7 @@ import Foundation
 final class SlackAdapter: GatewayAdapter {
     let platform = "slack"
     private let config: SlackGatewayConfig
-    private var messageHandler: ((GatewayMessage) async -> String)?
+    private var messageHandler: ((GatewayMessage) async -> Void)?
     private var running = false
     private var task: Task<Void, Never>?
     private var wsTask: URLSessionWebSocketTask?
@@ -21,8 +21,12 @@ final class SlackAdapter: GatewayAdapter {
         self.config = config
     }
 
-    func onMessage(_ handler: @escaping (GatewayMessage) async -> String) {
+    func onMessage(_ handler: @escaping (GatewayMessage) async -> Void) {
         self.messageHandler = handler
+    }
+
+    func sendMessage(chatId: String, text: String) async {
+        _ = try? await postMessage(channel: chatId, text: text)
     }
 
     func start() async throws {
@@ -112,6 +116,12 @@ final class SlackAdapter: GatewayAdapter {
             let channel = event["channel"] as? String ?? ""
             if msgText.isEmpty { return }
 
+            // Check user whitelist
+            if let allowedUsers = config.allowedUsers, !allowedUsers.isEmpty, !allowedUsers.contains(user) {
+                printColored("  ⚠ Slack: blocked message from \(user)", color: .yellow)
+                return
+            }
+
             // Check channel whitelist
             if let allowed = config.allowedChannels, !allowed.isEmpty, !allowed.contains(channel) { return }
 
@@ -127,9 +137,9 @@ final class SlackAdapter: GatewayAdapter {
 
             printColored("  📨 Slack [\(user)]: \(String(msgText.prefix(80)))", color: .cyan)
 
+            // Fire-and-forget: responses are sent via streaming callback + sendMessage
             if let handler = messageHandler {
-                let response = await handler(gwMessage)
-                _ = try? await postMessage(channel: channel, text: response)
+                await handler(gwMessage)
             }
         }
     }

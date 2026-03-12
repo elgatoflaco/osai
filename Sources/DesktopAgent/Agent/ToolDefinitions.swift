@@ -80,9 +80,83 @@ struct ToolDefinitions {
                 required: ["id"]
             )
         ),
+        ClaudeTool(
+            name: "run_task",
+            description: "Trigger an existing scheduled task to run immediately. Results will be delivered to the configured destination.",
+            inputSchema: InputSchema(
+                type: "object",
+                properties: [
+                    "task_id": PropertySchema(type: "string", description: "ID of the task to run", enumValues: nil)
+                ],
+                required: ["task_id"]
+            )
+        ),
     ]
 
-    static let allTools: [ClaudeTool] = SelfModificationTools.tools + mcpManagementTools + schedulerTools + [
+    static let gatewayTools: [ClaudeTool] = [
+        ClaudeTool(
+            name: "configure_gateway",
+            description: """
+            Configure a messaging gateway (Telegram, WhatsApp, Slack, Discord) so the user can talk to osai from those platforms.
+            Use this when the user wants to set up a bot/bridge. After configuring, tell the user to run `osai gateway` to start it.
+            For Telegram: user needs a bot token from @BotFather.
+            For WhatsApp: just enable it (uses wacli, must be authenticated).
+            For Slack: needs bot_token (xoxb-) and app_token (xapp-).
+            For Discord: needs bot token from Discord Developer Portal.
+            """,
+            inputSchema: InputSchema(
+                type: "object",
+                properties: [
+                    "platform": PropertySchema(type: "string", description: "Platform to configure: telegram, whatsapp, slack, discord", enumValues: ["telegram", "whatsapp", "slack", "discord"]),
+                    "enabled": PropertySchema(type: "string", description: "Enable or disable: true/false", enumValues: ["true", "false"]),
+                    "bot_token": PropertySchema(type: "string", description: "Bot token (required for Telegram, Slack, Discord)", enumValues: nil),
+                    "app_token": PropertySchema(type: "string", description: "App-level token (required for Slack Socket Mode)", enumValues: nil),
+                    "allowed_users": PropertySchema(type: "string", description: "Comma-separated list of allowed user IDs (for whitelisting)", enumValues: nil),
+                ],
+                required: ["platform", "enabled"]
+            )
+        ),
+        ClaudeTool(
+            name: "import_gateway_config",
+            description: """
+            Import gateway/channel configuration from OpenClaw (~/.openclaw/openclaw.json).
+            This reads existing Discord, Telegram, Slack, or WhatsApp configs and copies them to osai's gateway config.
+            Use this when the user says they have OpenClaw configured and want to reuse those settings.
+            """,
+            inputSchema: InputSchema(
+                type: "object",
+                properties: [
+                    "platform": PropertySchema(type: "string", description: "Platform to import: discord, telegram, slack, whatsapp, or 'all' to import everything", enumValues: ["discord", "telegram", "slack", "whatsapp", "all"]),
+                ],
+                required: ["platform"]
+            )
+        ),
+    ]
+
+    static let claudeCodeTools: [ClaudeTool] = [
+        ClaudeTool(
+            name: "claude_code",
+            description: """
+            Delegate a programming task to Claude Code (claude CLI). Use this for ALL code changes, file creation, \
+            refactoring, debugging, and software engineering tasks. Claude Code has full access to the codebase, \
+            can read/write files, run tests, and make commits. \
+            You MUST use this tool instead of writing code yourself — Claude Code is the expert programmer. \
+            Write a clear, professional prompt describing exactly what needs to be done. \
+            Include relevant context: file paths, error messages, desired behavior. \
+            Claude Code works in the project directory and has full shell access.
+            """,
+            inputSchema: InputSchema(
+                type: "object",
+                properties: [
+                    "prompt": PropertySchema(type: "string", description: "A clear, detailed prompt for Claude Code describing the programming task. Be specific about what files to change, what behavior is expected, and any constraints.", enumValues: nil),
+                    "workdir": PropertySchema(type: "string", description: "Working directory for Claude Code (default: ~/Sites/osai)", enumValues: nil),
+                ],
+                required: ["prompt"]
+            )
+        ),
+    ]
+
+    static let allTools: [ClaudeTool] = SelfModificationTools.tools + mcpManagementTools + schedulerTools + gatewayTools + claudeCodeTools + [
         // --- AppleScript ---
         ClaudeTool(
             name: "run_applescript",

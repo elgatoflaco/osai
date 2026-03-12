@@ -9,7 +9,7 @@ import Foundation
 final class DiscordAdapter: GatewayAdapter {
     let platform = "discord"
     private let config: DiscordGatewayConfig
-    private var messageHandler: ((GatewayMessage) async -> String)?
+    private var messageHandler: ((GatewayMessage) async -> Void)?
     private var running = false
     private var task: Task<Void, Never>?
     private var wsTask: URLSessionWebSocketTask?
@@ -23,8 +23,16 @@ final class DiscordAdapter: GatewayAdapter {
         self.config = config
     }
 
-    func onMessage(_ handler: @escaping (GatewayMessage) async -> String) {
+    func onMessage(_ handler: @escaping (GatewayMessage) async -> Void) {
         self.messageHandler = handler
+    }
+
+    func sendMessage(chatId: String, text: String) async {
+        let chunks = splitMessage(text, maxLength: 2000)
+        for chunk in chunks {
+            _ = try? await discordAPI("POST", path: "/channels/\(chatId)/messages",
+                                      body: ["content": chunk])
+        }
     }
 
     func start() async throws {
@@ -131,6 +139,15 @@ final class DiscordAdapter: GatewayAdapter {
         let channelId = d["channel_id"] as? String ?? ""
         let guildId = d["guild_id"] as? String
 
+        // Check user whitelist
+        if let allowedUsers = config.allowedUsers, !allowedUsers.isEmpty {
+            if !allowedUsers.contains(authorId) {
+                let name = author["username"] as? String ?? "unknown"
+                printColored("  ⚠ Discord: blocked message from \(name) (id: \(authorId))", color: .yellow)
+                return
+            }
+        }
+
         // Check guild whitelist
         if let allowed = config.allowedGuilds, !allowed.isEmpty {
             if let gid = guildId, !allowed.contains(gid) { return }
@@ -150,15 +167,12 @@ final class DiscordAdapter: GatewayAdapter {
 
         printColored("  📨 Discord [\(userName)]: \(String(content.prefix(80)))", color: .cyan)
 
-        if let handler = messageHandler {
-            let response = await handler(gwMessage)
+        // Send typing indicator
+        _ = try? await discordAPI("POST", path: "/channels/\(channelId)/typing")
 
-            // Split for Discord's 2000 char limit
-            let chunks = splitMessage(response, maxLength: 2000)
-            for chunk in chunks {
-                _ = try? await discordAPI("POST", path: "/channels/\(channelId)/messages",
-                                          body: ["content": chunk])
-            }
+        // Fire-and-forget: responses are sent via streaming callback + sendMessage
+        if let handler = messageHandler {
+            await handler(gwMessage)
         }
     }
 
@@ -187,7 +201,7 @@ final class DiscordAdapter: GatewayAdapter {
             "op": 2,
             "d": [
                 "token": config.botToken,
-                "intents": 33281,  // GUILDS | GUILD_MESSAGES | MESSAGE_CONTENT | DIRECT_MESSAGES
+                "intents": 37377,  // GUILDS(1) | GUILD_MESSAGES(512) | DIRECT_MESSAGES(4096) | MESSAGE_CONTENT(32768)
                 "properties": [
                     "os": "macos",
                     "browser": "osai",

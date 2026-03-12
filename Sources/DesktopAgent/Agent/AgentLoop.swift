@@ -14,6 +14,16 @@ final class AgentLoop {
     private var conversationHistory: [ClaudeMessage] = []
     private let verbose: Bool
 
+    // Gateway support
+    var gatewayContext: GatewayDeliveryContext?
+    var onStreamText: ((String) async -> Void)?
+
+    var currentHistory: [ClaudeMessage] { conversationHistory }
+
+    func restoreHistory(_ history: [ClaudeMessage]) {
+        conversationHistory = history
+    }
+
     init(config: AgentConfig, mcpManager: MCPManager) {
         self.config = config
         self.client = AIClient(config: config)
@@ -126,6 +136,9 @@ final class AgentLoop {
                     if !text.isEmpty {
                         finalResponse += (finalResponse.isEmpty ? "" : "\n") + text
                         printColored(text, color: .cyan)
+                        if let stream = onStreamText {
+                            await stream(text)
+                        }
                     }
 
                 case .toolUse(let id, let name, let input):
@@ -171,6 +184,22 @@ final class AgentLoop {
                     }
                     else if name == "cancel_task" {
                         let result = handleCancelTask(input: input)
+                        toolResults.append(.toolResultText(toolUseId: id, text: result))
+                    }
+                    else if name == "run_task" {
+                        let result = handleRunTask(input: input)
+                        toolResults.append(.toolResultText(toolUseId: id, text: result))
+                    }
+                    else if name == "configure_gateway" {
+                        let result = handleConfigureGateway(input: input)
+                        toolResults.append(.toolResultText(toolUseId: id, text: result))
+                    }
+                    else if name == "import_gateway_config" {
+                        let result = handleImportGatewayConfig(input: input)
+                        toolResults.append(.toolResultText(toolUseId: id, text: result))
+                    }
+                    else if name == "claude_code" {
+                        let result = await handleClaudeCode(input: input)
                         toolResults.append(.toolResultText(toolUseId: id, text: result))
                     }
                     else {
@@ -371,8 +400,14 @@ final class AgentLoop {
 
         printColored("    📅 Scheduling: \(description)", color: .magenta)
 
+        // Attach delivery target from gateway context (so task results go back to the chat)
+        var delivery: ScheduledTask.DeliveryTarget? = nil
+        if let gw = gatewayContext {
+            delivery = ScheduledTask.DeliveryTarget(platform: gw.platform, chatId: gw.chatId)
+        }
+
         do {
-            let task = try TaskScheduler.createTask(id: id, description: description, command: command, schedule: schedule)
+            let task = try TaskScheduler.createTask(id: id, description: description, command: command, schedule: schedule, delivery: delivery)
             return "✓ Task '\(task.id)' scheduled: \(task.schedule.displayString)\n  Command: \(task.command)\n  The task will run automatically via macOS launchd."
         } catch {
             return "Error scheduling task: \(error)"
@@ -409,6 +444,208 @@ final class AgentLoop {
             return "✓ Task '\(id)' cancelled and removed."
         } catch {
             return "Error cancelling task: \(error)"
+        }
+    }
+
+    private func handleRunTask(input: [String: AnyCodable]) -> String {
+        let taskId = input["task_id"]?.stringValue ?? ""
+        guard !taskId.isEmpty else { return "Error: 'task_id' is required." }
+        guard let task = TaskScheduler.getTask(id: taskId) else {
+            return "Error: Task '\(taskId)' not found."
+        }
+
+        // Spawn the task process in background
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: TaskScheduler.osaiPath)
+        var args = ["--task-id", task.id]
+        if let delivery = task.delivery {
+            args += ["--deliver", "\(delivery.platform):\(delivery.chatId)"]
+        }
+        args.append(task.command)
+        process.arguments = args
+        process.environment = [
+            "PATH": "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin",
+            "HOME": NSHomeDirectory()
+        ]
+
+        do {
+            try process.run()
+            return "✓ Task '\(taskId)' triggered. Running in background."
+        } catch {
+            return "Error running task: \(error)"
+        }
+    }
+
+    private func handleConfigureGateway(input: [String: AnyCodable]) -> String {
+        let platform = input["platform"]?.stringValue ?? ""
+        let enabled = input["enabled"]?.stringValue == "true"
+
+        var fileConfig = AgentConfigFile.load()
+        if fileConfig.gateways == nil {
+            fileConfig.gateways = GatewayConfig()
+        }
+
+        switch platform {
+        case "telegram":
+            let token = input["bot_token"]?.stringValue ?? ""
+            var tgConfig = fileConfig.gateways?.telegram ?? TelegramGatewayConfig(enabled: false, botToken: "")
+            tgConfig.enabled = enabled
+            if !token.isEmpty { tgConfig.botToken = token }
+            if let users = input["allowed_users"]?.stringValue {
+                tgConfig.allowedUsers = users.split(separator: ",").compactMap { Int($0.trimmingCharacters(in: .whitespaces)) }
+            }
+            fileConfig.gateways?.telegram = tgConfig
+        case "discord":
+            let token = input["bot_token"]?.stringValue ?? ""
+            var dcConfig = fileConfig.gateways?.discord ?? DiscordGatewayConfig(enabled: false, botToken: "")
+            dcConfig.enabled = enabled
+            if !token.isEmpty { dcConfig.botToken = token }
+            if let users = input["allowed_users"]?.stringValue {
+                dcConfig.allowedUsers = users.split(separator: ",").map { String($0.trimmingCharacters(in: .whitespaces)) }
+            }
+            fileConfig.gateways?.discord = dcConfig
+        case "slack":
+            let token = input["bot_token"]?.stringValue ?? ""
+            let appToken = input["app_token"]?.stringValue ?? ""
+            var slConfig = fileConfig.gateways?.slack ?? SlackGatewayConfig(enabled: false, botToken: "", appToken: "")
+            slConfig.enabled = enabled
+            if !token.isEmpty { slConfig.botToken = token }
+            if !appToken.isEmpty { slConfig.appToken = appToken }
+            fileConfig.gateways?.slack = slConfig
+        case "whatsapp":
+            var waConfig = fileConfig.gateways?.whatsapp ?? WhatsAppGatewayConfig(enabled: false)
+            waConfig.enabled = enabled
+            fileConfig.gateways?.whatsapp = waConfig
+        default:
+            return "Error: Unknown platform '\(platform)'. Use: telegram, discord, slack, whatsapp."
+        }
+
+        try? fileConfig.save()
+        return "✓ Gateway '\(platform)' \(enabled ? "enabled" : "disabled"). Run `osai gateway` to start."
+    }
+
+    private func handleImportGatewayConfig(input: [String: AnyCodable]) -> String {
+        let platform = input["platform"]?.stringValue ?? "all"
+        let openClawPath = NSHomeDirectory() + "/.openclaw/openclaw.json"
+        guard let data = FileManager.default.contents(atPath: openClawPath),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let channels = json["channels"] as? [String: Any] else {
+            return "Error: Could not read OpenClaw config at ~/.openclaw/openclaw.json"
+        }
+
+        var fileConfig = AgentConfigFile.load()
+        if fileConfig.gateways == nil {
+            fileConfig.gateways = GatewayConfig()
+        }
+
+        var imported: [String] = []
+
+        if platform == "all" || platform == "discord" {
+            if let discord = channels["discord"] as? [String: Any],
+               let token = discord["botToken"] as? String ?? discord["bot_token"] as? String {
+                var dcConfig = DiscordGatewayConfig(enabled: true, botToken: token)
+                if let allowFrom = discord["allowFrom"] as? [String] ?? discord["allow_from"] as? [String] {
+                    dcConfig.allowedUsers = allowFrom
+                }
+                fileConfig.gateways?.discord = dcConfig
+                imported.append("discord")
+            }
+        }
+
+        if platform == "all" || platform == "telegram" {
+            if let tg = channels["telegram"] as? [String: Any],
+               let token = tg["botToken"] as? String ?? tg["bot_token"] as? String {
+                var tgConfig = TelegramGatewayConfig(enabled: true, botToken: token)
+                if let allowFrom = tg["allowFrom"] as? [Int] ?? tg["allow_from"] as? [Int] {
+                    tgConfig.allowedUsers = allowFrom
+                }
+                fileConfig.gateways?.telegram = tgConfig
+                imported.append("telegram")
+            }
+        }
+
+        if imported.isEmpty {
+            return "No matching gateway configs found in OpenClaw for '\(platform)'."
+        }
+
+        try? fileConfig.save()
+        return "✓ Imported from OpenClaw: \(imported.joined(separator: ", ")). Run `osai gateway` to start."
+    }
+
+    // MARK: - Claude Code Integration
+
+    private func handleClaudeCode(input: [String: AnyCodable]) async -> String {
+        let prompt = input["prompt"]?.stringValue ?? ""
+        guard !prompt.isEmpty else { return "Error: 'prompt' is required." }
+
+        let workdir = input["workdir"]?.stringValue ?? NSHomeDirectory() + "/Sites/osai"
+        let claudePath = NSHomeDirectory() + "/.local/bin/claude"
+
+        guard FileManager.default.fileExists(atPath: claudePath) else {
+            return "Error: Claude Code CLI not found at \(claudePath). Install from https://claude.ai/claude-code"
+        }
+
+        printColored("  🧠 Delegating to Claude Code...", color: .magenta)
+        printColored("    Prompt: \(String(prompt.prefix(120)))...", color: .gray)
+
+        // Stream progress to gateway if connected
+        if let stream = onStreamText {
+            await stream("🧠 Delegando tarea a Claude Code...")
+        }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: claudePath)
+        process.arguments = ["-p", "--output-format", "text", prompt]
+        process.currentDirectoryURL = URL(fileURLWithPath: workdir)
+        process.environment = ProcessInfo.processInfo.environment
+
+        let stdout = Pipe()
+        let stderr = Pipe()
+        process.standardOutput = stdout
+        process.standardError = stderr
+
+        do {
+            try process.run()
+
+            // Read output asynchronously with a timeout
+            return await withCheckedContinuation { continuation in
+                let timeoutSeconds = 300.0 // 5 min max
+                let timer = DispatchSource.makeTimerSource()
+                timer.schedule(deadline: .now() + timeoutSeconds)
+                timer.setEventHandler {
+                    process.terminate()
+                }
+                timer.resume()
+
+                process.terminationHandler = { _ in
+                    timer.cancel()
+                    let outData = stdout.fileHandleForReading.readDataToEndOfFile()
+                    let errData = stderr.fileHandleForReading.readDataToEndOfFile()
+                    let output = String(data: outData, encoding: .utf8) ?? ""
+                    let errors = String(data: errData, encoding: .utf8) ?? ""
+
+                    var result = ""
+                    if !output.isEmpty {
+                        result += output
+                    }
+                    if !errors.isEmpty && process.terminationStatus != 0 {
+                        result += "\n[stderr]: \(errors)"
+                    }
+                    if result.isEmpty {
+                        result = "Claude Code completed with no output (exit code: \(process.terminationStatus))"
+                    }
+
+                    // Truncate very long responses
+                    if result.count > 15000 {
+                        result = String(result.prefix(15000)) + "\n\n... [truncated — full output was \(result.count) chars]"
+                    }
+
+                    printColored("  ✓ Claude Code finished (\(result.count) chars)", color: .green)
+                    continuation.resume(returning: result)
+                }
+            }
+        } catch {
+            return "Error running Claude Code: \(error)"
         }
     }
 

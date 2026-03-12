@@ -106,6 +106,21 @@ final class ApprovalSystem {
         case "cancel_task":
             let id = input["task_id"]?.stringValue ?? ""
             return ActionClassification(level: .moderate, reason: "Cancelling scheduled task", summary: "Cancel task: \(id)")
+        case "run_task":
+            let id = input["task_id"]?.stringValue ?? ""
+            return ActionClassification(level: .moderate, reason: "Triggering scheduled task", summary: "Run task: \(id)")
+
+        // --- Gateway ---
+        case "configure_gateway":
+            let platform = input["platform"]?.stringValue ?? ""
+            return ActionClassification(level: .dangerous, reason: "Configuring gateway connection", summary: "Configure \(platform) gateway")
+        case "import_gateway_config":
+            return ActionClassification(level: .moderate, reason: "Importing gateway config", summary: "Import from OpenClaw")
+
+        // --- Claude Code (dangerous — full code access) ---
+        case "claude_code":
+            let prompt = input["prompt"]?.stringValue ?? ""
+            return ActionClassification(level: .dangerous, reason: "Delegating to Claude Code", summary: "Claude Code: \(String(prompt.prefix(80)))")
 
         // --- MCP tools (moderate by default) ---
         default:

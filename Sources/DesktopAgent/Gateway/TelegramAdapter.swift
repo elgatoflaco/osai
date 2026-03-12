@@ -7,7 +7,7 @@ final class TelegramAdapter: GatewayAdapter {
     private let config: TelegramGatewayConfig
     private let baseURL: String
     private var offset: Int = 0
-    private var messageHandler: ((GatewayMessage) async -> String)?
+    private var messageHandler: ((GatewayMessage) async -> Void)?
     private var running = false
     private var task: Task<Void, Never>?
 
@@ -18,8 +18,16 @@ final class TelegramAdapter: GatewayAdapter {
         self.baseURL = "https://api.telegram.org/bot\(config.botToken)"
     }
 
-    func onMessage(_ handler: @escaping (GatewayMessage) async -> String) {
+    func onMessage(_ handler: @escaping (GatewayMessage) async -> Void) {
         self.messageHandler = handler
+    }
+
+    func sendMessage(chatId: String, text: String) async {
+        guard let chatIdInt = Int(chatId) else { return }
+        let chunks = splitMessage(text, maxLength: 4096)
+        for chunk in chunks {
+            _ = try? await sendMessage(chatId: chatIdInt, text: chunk)
+        }
     }
 
     func start() async throws {
@@ -117,19 +125,9 @@ final class TelegramAdapter: GatewayAdapter {
         // Send typing indicator
         _ = try? await apiCall("sendChatAction", params: ["chat_id": chatId, "action": "typing"])
 
-        // Process and respond
+        // Fire-and-forget: responses are sent via streaming callback + sendMessage
         if let handler = messageHandler {
-            let response = await handler(gwMessage)
-
-            // Split long messages (Telegram limit: 4096 chars)
-            let chunks = splitMessage(response, maxLength: 4096)
-            for chunk in chunks {
-                do {
-                    _ = try await sendMessage(chatId: chatId, text: chunk)
-                } catch {
-                    printColored("  ✗ Telegram send error: \(error)", color: .red)
-                }
-            }
+            await handler(gwMessage)
         }
     }
 

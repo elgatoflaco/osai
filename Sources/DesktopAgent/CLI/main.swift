@@ -23,6 +23,12 @@ struct DesktopAgentCLI {
         PluginManager.installBuiltins()
         SkillManager.installBuiltins()
 
+        // Retry any pending deliveries from previous runs
+        let retried = await DeliveryQueue.retryPending()
+        if retried > 0 {
+            printColored("  \u{1F4EC} Retried \(retried) pending deliveries", color: .green)
+        }
+
         // Start MCP servers from config
         let mcpManager = MCPManager()
         let fileConfig = AgentConfigFile.load()
@@ -40,8 +46,11 @@ struct DesktopAgentCLI {
 
         // --- Single command mode (no banner, no status) ---
         // osai "do something"
+        // osai --deliver discord:channelId "do something"
         // echo "do something" | osai
         var commandArgs: [String] = []
+        var deliverTarget: String? = nil
+        var taskId: String? = nil
         var skipNext = false
         for (i, arg) in args.enumerated() {
             if i == 0 { continue }
@@ -49,6 +58,8 @@ struct DesktopAgentCLI {
             if arg == "--model" { skipNext = true; continue }
             if arg == "--verbose" || arg == "-v" { continue }
             if arg == "gateway" { continue }
+            if arg == "--deliver" { skipNext = true; deliverTarget = args.count > i + 1 ? args[i + 1] : nil; continue }
+            if arg == "--task-id" { skipNext = true; taskId = args.count > i + 1 ? args[i + 1] : nil; continue }
             commandArgs.append(arg)
         }
 
@@ -66,10 +77,30 @@ struct DesktopAgentCLI {
 
         if let command = singleCommand, !command.isEmpty {
             let agent = AgentLoop(config: config, mcpManager: mcpManager)
+            agent.approval.autoApprove = true  // One-shot/task mode: no prompts
             do {
-                _ = try await agent.processUserInput(command)
+                let response = try await agent.processUserInput(command)
+
+                // Deliver result to gateway if --deliver specified
+                if let target = deliverTarget {
+                    let msg = response.isEmpty
+                        ? "⚠️ Task completed but produced no output.\nCommand: \(String(command.prefix(100)))"
+                        : response
+                    await deliverToGateway(target: target, message: msg)
+                }
+
+                // Mark task as run
+                if let tid = taskId {
+                    TaskScheduler.markRun(id: tid)
+                }
             } catch {
                 printColored("Error: \(error)", color: .red)
+                if let target = deliverTarget {
+                    await deliverToGateway(target: target, message: "❌ Task error: \(error.localizedDescription)\nCommand: \(String(command.prefix(100)))")
+                }
+                if let tid = taskId {
+                    TaskScheduler.markRun(id: tid)
+                }
             }
             mcpManager.stopAll()
             return
@@ -210,7 +241,7 @@ struct DesktopAgentCLI {
     static func suggestCommand(_ input: String) -> String? {
         let cmd = input.split(separator: " ").first.map(String.init)?.lowercased() ?? ""
         let commands = ["/help", "/quit", "/exit", "/clear", "/config", "/model",
-                       "/mcp", "/plugin", "/memory", "/skill", "/task",
+                       "/mcp", "/plugin", "/memory", "/skill", "/task", "/gateway",
                        "/apps", "/windows", "/screen", "/perms",
                        "/verbose", "/yolo", "/context", "/compact"]
 
@@ -377,8 +408,356 @@ struct DesktopAgentCLI {
             }
             return .handled
 
+        case "/gateway":
+            handleGateway(args: args)
+            return .handled
+
         default:
             return .passthrough
+        }
+    }
+
+    // MARK: - /gateway command
+
+    static func handleGateway(args: [String]) {
+        let sub = args.first ?? "status"
+        switch sub {
+        case "status":
+            let configFile = AgentConfigFile.load()
+            let gw = configFile.gateways
+            printColored("\n  Gateway Configuration:", color: .bold)
+            let platforms: [(String, Bool, String?)] = [
+                ("Telegram", gw?.telegram?.enabled ?? false,
+                 gw?.telegram != nil ? "users: \(gw?.telegram?.allowedUsers?.count ?? 0)" : nil),
+                ("WhatsApp", gw?.whatsapp?.enabled ?? false,
+                 gw?.whatsapp != nil ? "jids: \(gw?.whatsapp?.allowedJIDs?.count ?? 0)" : nil),
+                ("Slack", gw?.slack?.enabled ?? false,
+                 gw?.slack != nil ? "users: \(gw?.slack?.allowedUsers?.count ?? 0)" : nil),
+                ("Discord", gw?.discord?.enabled ?? false,
+                 gw?.discord != nil ? "users: \(gw?.discord?.allowedUsers?.count ?? 0)" : nil),
+            ]
+            for (name, enabled, detail) in platforms {
+                let icon = enabled ? "🟢" : "⚫"
+                let extra = detail.map { " (\($0))" } ?? ""
+                printColored("  \(icon) \(name): \(enabled ? "configured" : "not configured")\(extra)", color: enabled ? .green : .gray)
+            }
+            print()
+
+            // Check if OpenClaw has gateways we could import
+            let noneConfigured = (gw == nil) ||
+                (gw?.telegram == nil && gw?.whatsapp == nil && gw?.slack == nil && gw?.discord == nil)
+            if noneConfigured {
+                let openclawPath = NSHomeDirectory() + "/.openclaw/openclaw.json"
+                if let data = FileManager.default.contents(atPath: openclawPath),
+                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let channels = json["channels"] as? [String: Any], !channels.isEmpty {
+                    let available = channels.keys.sorted().joined(separator: ", ")
+                    printColored("  💡 Found OpenClaw config with: \(available)", color: .cyan)
+                    printColored("  Run: /gateway import  to import them\n", color: .cyan)
+                } else {
+                    printDim("  To configure: ask the agent or use /config import-openclaw")
+                }
+            }
+            printDim("  To start: osai gateway")
+            print()
+
+        case "import":
+            importFromOpenClaw()
+
+        default:
+            printColored("  Usage: /gateway [status|import]", color: .yellow)
+        }
+    }
+
+    // MARK: - Gateway Delivery (for scheduled tasks)
+
+    static func deliverToGateway(target: String, message: String) async {
+        // Enqueue before attempting delivery (for retry on failure)
+        let pending = DeliveryQueue.enqueue(target: target, message: message)
+
+        // Parse target: "discord:channelId" or "telegram:chatId"
+        let parts = target.split(separator: ":", maxSplits: 1)
+        guard parts.count == 2 else {
+            printColored("  ✗ Invalid delivery target: \(target)", color: .red)
+            DeliveryQueue.fail(id: pending.id)
+            return
+        }
+        let platform = String(parts[0])
+        let chatId = String(parts[1])
+
+        let fileConfig = AgentConfigFile.load()
+        var deliveryFailed = false
+
+        switch platform {
+        case "discord":
+            guard let discord = fileConfig.gateways?.discord else {
+                printColored("  ✗ Discord not configured for delivery", color: .red)
+                DeliveryQueue.fail(id: pending.id)
+                return
+            }
+            // Short messages: plain content. Long messages (>500): embed with teal color.
+            // Embed description max 4096 chars; split into multiple embeds if needed.
+            if message.count <= 500 {
+                let chunks = splitForDelivery(message, maxLength: 2000)
+                for chunk in chunks {
+                    do {
+                        let url = URL(string: "https://discord.com/api/v10/channels/\(chatId)/messages")!
+                        var request = URLRequest(url: url)
+                        request.httpMethod = "POST"
+                        request.setValue("Bot \(discord.botToken)", forHTTPHeaderField: "Authorization")
+                        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                        request.httpBody = try JSONSerialization.data(withJSONObject: ["content": chunk])
+                        let (_, response) = try await URLSession.shared.data(for: request)
+                        if let http = response as? HTTPURLResponse, http.statusCode >= 300 {
+                            printColored("  ✗ Discord delivery failed: HTTP \(http.statusCode)", color: .red)
+                            deliveryFailed = true
+                        }
+                    } catch {
+                        printColored("  ✗ Discord delivery error: \(error)", color: .red)
+                        deliveryFailed = true
+                    }
+                }
+            } else {
+                // Split into embed-sized chunks (max 4096 per embed description)
+                let embedChunks = splitForDelivery(message, maxLength: 4096)
+                let iso8601 = ISO8601DateFormatter()
+                let timestamp = iso8601.string(from: Date())
+                for chunk in embedChunks {
+                    do {
+                        let embed: [String: Any] = [
+                            "description": chunk,
+                            "color": 0x00D4AA,
+                            "footer": ["text": "osai"],
+                            "timestamp": timestamp
+                        ]
+                        let payload: [String: Any] = ["embeds": [embed]]
+                        let url = URL(string: "https://discord.com/api/v10/channels/\(chatId)/messages")!
+                        var request = URLRequest(url: url)
+                        request.httpMethod = "POST"
+                        request.setValue("Bot \(discord.botToken)", forHTTPHeaderField: "Authorization")
+                        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                        request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+                        let (_, response) = try await URLSession.shared.data(for: request)
+                        if let http = response as? HTTPURLResponse, http.statusCode >= 300 {
+                            printColored("  ✗ Discord embed delivery failed: HTTP \(http.statusCode)", color: .red)
+                            deliveryFailed = true
+                        }
+                    } catch {
+                        printColored("  ✗ Discord delivery error: \(error)", color: .red)
+                        deliveryFailed = true
+                    }
+                }
+            }
+            if !deliveryFailed {
+                printColored("  📬 Delivered to Discord channel \(chatId)", color: .green)
+            }
+
+        case "telegram":
+            guard let tg = fileConfig.gateways?.telegram else {
+                printColored("  ✗ Telegram not configured for delivery", color: .red)
+                DeliveryQueue.fail(id: pending.id)
+                return
+            }
+            let chunks = splitForDelivery(message, maxLength: 4096)
+            for chunk in chunks {
+                do {
+                    let url = URL(string: "https://api.telegram.org/bot\(tg.botToken)/sendMessage")!
+                    var request = URLRequest(url: url)
+                    request.httpMethod = "POST"
+                    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                    request.httpBody = try JSONSerialization.data(withJSONObject: [
+                        "chat_id": chatId, "text": chunk, "parse_mode": "Markdown"
+                    ] as [String: Any])
+                    let _ = try await URLSession.shared.data(for: request)
+                } catch {
+                    printColored("  ✗ Telegram delivery error: \(error)", color: .red)
+                    deliveryFailed = true
+                }
+            }
+            if !deliveryFailed {
+                printColored("  📬 Delivered to Telegram chat \(chatId)", color: .green)
+            }
+
+        case "slack":
+            guard let slack = fileConfig.gateways?.slack else {
+                printColored("  ✗ Slack not configured for delivery", color: .red)
+                DeliveryQueue.fail(id: pending.id)
+                return
+            }
+            do {
+                let url = URL(string: "https://slack.com/api/chat.postMessage")!
+                var request = URLRequest(url: url)
+                request.httpMethod = "POST"
+                request.setValue("Bearer \(slack.botToken)", forHTTPHeaderField: "Authorization")
+                request.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type")
+                request.httpBody = try JSONSerialization.data(withJSONObject: [
+                    "channel": chatId, "text": message
+                ])
+                let _ = try await URLSession.shared.data(for: request)
+            } catch {
+                printColored("  ✗ Slack delivery error: \(error)", color: .red)
+                deliveryFailed = true
+            }
+            if !deliveryFailed {
+                printColored("  📬 Delivered to Slack channel \(chatId)", color: .green)
+            }
+
+        case "whatsapp":
+            // Send via wacli
+            let wacliPath = "/opt/homebrew/bin/wacli"
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: wacliPath)
+            process.arguments = ["send", "text", "--to", chatId, "--message", message, "--json"]
+            try? process.run()
+            process.waitUntilExit()
+            if process.terminationStatus == 0 {
+                printColored("  📬 Delivered to WhatsApp \(chatId)", color: .green)
+            } else {
+                printColored("  ✗ WhatsApp delivery failed", color: .red)
+                deliveryFailed = true
+            }
+
+        default:
+            printColored("  ✗ Unknown delivery platform: \(platform)", color: .red)
+            deliveryFailed = true
+        }
+
+        // Update delivery queue based on result
+        if deliveryFailed {
+            DeliveryQueue.fail(id: pending.id)
+        } else {
+            DeliveryQueue.complete(id: pending.id)
+        }
+    }
+
+    private static func splitForDelivery(_ text: String, maxLength: Int) -> [String] {
+        if text.count <= maxLength { return [text] }
+        var chunks: [String] = []
+        var remaining = text
+        while !remaining.isEmpty {
+            let end = remaining.index(remaining.startIndex, offsetBy: min(maxLength, remaining.count))
+            let chunk = String(remaining[..<end])
+            if let lastNewline = chunk.lastIndex(of: "\n"), remaining.count > maxLength {
+                let splitAt = remaining.index(after: lastNewline)
+                chunks.append(String(remaining[..<splitAt]))
+                remaining = String(remaining[splitAt...])
+            } else {
+                chunks.append(chunk)
+                remaining = String(remaining[end...])
+            }
+        }
+        return chunks
+    }
+
+    static func deliverImageToDiscord(channelId: String, imageData: Data, filename: String, caption: String?) async {
+        let fileConfig = AgentConfigFile.load()
+        guard let discord = fileConfig.gateways?.discord else {
+            printColored("  ✗ Discord not configured for image delivery", color: .red)
+            return
+        }
+
+        let boundary = "Boundary-\(UUID().uuidString)"
+        let url = URL(string: "https://discord.com/api/v10/channels/\(channelId)/messages")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bot \(discord.botToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+
+        var body = Data()
+
+        // Add JSON payload with optional caption
+        if let caption = caption {
+            body.append("--\(boundary)\r\n".data(using: .utf8)!)
+            body.append("Content-Disposition: form-data; name=\"payload_json\"\r\n".data(using: .utf8)!)
+            body.append("Content-Type: application/json\r\n\r\n".data(using: .utf8)!)
+            let payloadJSON = try? JSONSerialization.data(withJSONObject: ["content": caption])
+            body.append(payloadJSON ?? Data())
+            body.append("\r\n".data(using: .utf8)!)
+        }
+
+        // Add file attachment
+        body.append("--\(boundary)\r\n".data(using: .utf8)!)
+        body.append("Content-Disposition: form-data; name=\"files[0]\"; filename=\"\(filename)\"\r\n".data(using: .utf8)!)
+        body.append("Content-Type: application/octet-stream\r\n\r\n".data(using: .utf8)!)
+        body.append(imageData)
+        body.append("\r\n".data(using: .utf8)!)
+        body.append("--\(boundary)--\r\n".data(using: .utf8)!)
+
+        request.httpBody = body
+
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            if let http = response as? HTTPURLResponse, http.statusCode >= 300 {
+                printColored("  ✗ Discord image delivery failed: HTTP \(http.statusCode)", color: .red)
+            } else {
+                printColored("  📬 Delivered image to Discord channel \(channelId)", color: .green)
+            }
+        } catch {
+            printColored("  ✗ Discord image delivery error: \(error)", color: .red)
+        }
+    }
+
+    static func importFromOpenClaw() {
+        let openclawPath = NSHomeDirectory() + "/.openclaw/openclaw.json"
+        guard let data = FileManager.default.contents(atPath: openclawPath),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let channels = json["channels"] as? [String: Any] else {
+            printColored("  ✗ Could not read ~/.openclaw/openclaw.json or no channels found.", color: .red)
+            return
+        }
+
+        var fileConfig = AgentConfigFile.load()
+        if fileConfig.gateways == nil { fileConfig.gateways = GatewayConfig() }
+        var imported: [String] = []
+
+        if let discord = channels["discord"] as? [String: Any],
+           let token = discord["token"] as? String {
+            let enabled = discord["enabled"] as? Bool ?? true
+            let allowFrom = discord["allowFrom"] as? [String]
+            fileConfig.gateways?.discord = DiscordGatewayConfig(
+                enabled: enabled, botToken: token, allowedGuilds: nil,
+                allowedUsers: allowFrom, systemPrompt: nil
+            )
+            imported.append("Discord")
+            let userCount = allowFrom?.count ?? 0
+            printColored("  ✓ Discord: token imported, \(userCount) allowed user\(userCount == 1 ? "" : "s")", color: .green)
+        }
+
+        if let telegram = channels["telegram"] as? [String: Any],
+           let token = telegram["botToken"] as? String ?? telegram["token"] as? String {
+            let enabled = telegram["enabled"] as? Bool ?? true
+            fileConfig.gateways?.telegram = TelegramGatewayConfig(
+                enabled: enabled, botToken: token, allowedUsers: nil, systemPrompt: nil
+            )
+            imported.append("Telegram")
+            printColored("  ✓ Telegram: token imported", color: .green)
+        }
+
+        if let slack = channels["slack"] as? [String: Any],
+           let botToken = slack["botToken"] as? String,
+           let appToken = slack["appToken"] as? String {
+            let enabled = slack["enabled"] as? Bool ?? true
+            fileConfig.gateways?.slack = SlackGatewayConfig(
+                enabled: enabled, botToken: botToken, appToken: appToken,
+                allowedChannels: nil, allowedUsers: nil, systemPrompt: nil
+            )
+            imported.append("Slack")
+            printColored("  ✓ Slack: tokens imported", color: .green)
+        }
+
+        if imported.isEmpty {
+            printDim("  No gateway channels found in OpenClaw config.")
+            return
+        }
+
+        do {
+            try fileConfig.save()
+            print()
+            printColored("  Imported \(imported.joined(separator: ", ")) from OpenClaw.", color: .green)
+            printDim("  Run `osai gateway` to start the gateway server.")
+            print()
+        } catch {
+            printColored("  ✗ Error saving: \(error)", color: .red)
         }
     }
 
@@ -481,17 +860,51 @@ struct DesktopAgentCLI {
                 }
             }
 
-            if imported > 0 {
+            // Also import gateway/channel configs
+            var gatewayImported: [String] = []
+            if let channels = json["channels"] as? [String: Any] {
+                if fileConfig.gateways == nil { fileConfig.gateways = GatewayConfig() }
+
+                if let discord = channels["discord"] as? [String: Any],
+                   let token = discord["token"] as? String {
+                    let enabled = discord["enabled"] as? Bool ?? true
+                    let allowFrom = discord["allowFrom"] as? [String]
+                    fileConfig.gateways?.discord = DiscordGatewayConfig(
+                        enabled: enabled, botToken: token, allowedGuilds: nil,
+                        allowedUsers: allowFrom, systemPrompt: nil
+                    )
+                    gatewayImported.append("Discord")
+                    printColored("  ✓ Discord gateway: \(maskKey(token))", color: .green)
+                }
+
+                if let telegram = channels["telegram"] as? [String: Any],
+                   let token = telegram["botToken"] as? String ?? telegram["token"] as? String {
+                    let enabled = telegram["enabled"] as? Bool ?? true
+                    fileConfig.gateways?.telegram = TelegramGatewayConfig(
+                        enabled: enabled, botToken: token, allowedUsers: nil, systemPrompt: nil
+                    )
+                    gatewayImported.append("Telegram")
+                    printColored("  ✓ Telegram gateway: \(maskKey(token))", color: .green)
+                }
+            }
+
+            if imported > 0 || !gatewayImported.isEmpty {
                 do {
                     try fileConfig.save()
-                    printColored("\n  Imported \(imported) API key\(imported == 1 ? "" : "s") from OpenClaw.", color: .green)
+                    var summary: [String] = []
+                    if imported > 0 { summary.append("\(imported) API key\(imported == 1 ? "" : "s")") }
+                    if !gatewayImported.isEmpty { summary.append("gateways: \(gatewayImported.joined(separator: ", "))") }
+                    printColored("\n  Imported \(summary.joined(separator: " + ")) from OpenClaw.", color: .green)
+                    if !gatewayImported.isEmpty {
+                        printDim("  Run `osai gateway` to start gateway server.")
+                    }
                     config = AgentConfig.load()
                     return .reload
                 } catch {
                     printColored("  ✗ Error saving: \(error)", color: .red)
                 }
             } else {
-                printDim("  No API keys found in openclaw config.")
+                printDim("  No API keys or gateways found in openclaw config.")
             }
             return .handled
 

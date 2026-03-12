@@ -21,6 +21,12 @@ struct ScheduledTask: Codable {
     let created: Date
     var lastRun: Date?
     var runCount: Int
+    var delivery: DeliveryTarget?  // Where to send results (Discord, Telegram, etc.)
+
+    struct DeliveryTarget: Codable {
+        let platform: String   // "discord", "telegram", "whatsapp", "slack"
+        let chatId: String     // Channel/chat ID to send to
+    }
 
     enum TaskSchedule: Codable {
         case once(at: Date)                           // Run once at specific time
@@ -129,7 +135,7 @@ final class TaskScheduler {
         return try? decoder.decode(ScheduledTask.self, from: data)
     }
 
-    static func createTask(id: String, description: String, command: String, schedule: ScheduledTask.TaskSchedule) throws -> ScheduledTask {
+    static func createTask(id: String, description: String, command: String, schedule: ScheduledTask.TaskSchedule, delivery: ScheduledTask.DeliveryTarget? = nil) throws -> ScheduledTask {
         ensureDir()
 
         let task = ScheduledTask(
@@ -140,7 +146,8 @@ final class TaskScheduler {
             enabled: true,
             created: Date(),
             lastRun: nil,
-            runCount: 0
+            runCount: 0,
+            delivery: delivery
         )
 
         try saveTask(task)
@@ -186,9 +193,18 @@ final class TaskScheduler {
         let plistPath = launchAgentPath(id: task.id)
 
         // Build the plist
+        var programArgs: [String] = [osaiPath]
+        programArgs.append("--task-id")
+        programArgs.append(task.id)
+        if let delivery = task.delivery {
+            programArgs.append("--deliver")
+            programArgs.append("\(delivery.platform):\(delivery.chatId)")
+        }
+        programArgs.append("[Task mode: Be direct and concise. Use simple shell commands (w3m -dump, curl). Do NOT write elaborate scripts. Do NOT save to temp files. Just execute commands and present results directly.] " + task.command)
+
         var plist: [String: Any] = [
             "Label": plistPrefix + task.id,
-            "ProgramArguments": [osaiPath, task.command],
+            "ProgramArguments": programArgs,
             "StandardOutPath": tasksDir + "/\(task.id).log",
             "StandardErrorPath": tasksDir + "/\(task.id).log",
             "EnvironmentVariables": [
@@ -199,15 +215,30 @@ final class TaskScheduler {
 
         switch task.schedule {
         case .once(let at):
-            let cal = Calendar.current
-            let comps = cal.dateComponents([.year, .month, .day, .hour, .minute, .second], from: at)
-            var calendarInterval: [String: Int] = [:]
-            if let y = comps.year { calendarInterval["Year"] = y }
-            if let m = comps.month { calendarInterval["Month"] = m }
-            if let d = comps.day { calendarInterval["Day"] = d }
-            if let h = comps.hour { calendarInterval["Hour"] = h }
-            if let min = comps.minute { calendarInterval["Minute"] = min }
-            plist["StartCalendarInterval"] = calendarInterval
+            let delay = at.timeIntervalSinceNow
+            if delay > 0 && delay < 1800 {
+                // Short delay (< 30 min): use RunAtLoad with a wrapper script that sleeps
+                // This is more reliable than StartCalendarInterval for near-future times
+                let sleepSeconds = max(1, Int(delay))
+                let scriptPath = tasksDir + "/\(task.id).sh"
+                let cmdEscaped = programArgs.map { "'\($0.replacingOccurrences(of: "'", with: "'\\''"))'" }.joined(separator: " ")
+                let script = "#!/bin/bash\nsleep \(sleepSeconds)\n\(cmdEscaped)\n"
+                try script.write(toFile: scriptPath, atomically: true, encoding: .utf8)
+                try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptPath)
+                plist["ProgramArguments"] = ["/bin/bash", scriptPath]
+                plist["RunAtLoad"] = true
+            } else {
+                // Future time: use StartCalendarInterval
+                let cal = Calendar.current
+                let comps = cal.dateComponents([.year, .month, .day, .hour, .minute], from: at)
+                var calendarInterval: [String: Int] = [:]
+                if let y = comps.year { calendarInterval["Year"] = y }
+                if let m = comps.month { calendarInterval["Month"] = m }
+                if let d = comps.day { calendarInterval["Day"] = d }
+                if let h = comps.hour { calendarInterval["Hour"] = h }
+                if let min = comps.minute { calendarInterval["Minute"] = min }
+                plist["StartCalendarInterval"] = calendarInterval
+            }
 
         case .recurring(let hour, let minute):
             plist["StartCalendarInterval"] = [

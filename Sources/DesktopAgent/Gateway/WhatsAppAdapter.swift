@@ -5,7 +5,7 @@ import Foundation
 final class WhatsAppAdapter: GatewayAdapter {
     let platform = "whatsapp"
     private let config: WhatsAppGatewayConfig
-    private var messageHandler: ((GatewayMessage) async -> String)?
+    private var messageHandler: ((GatewayMessage) async -> Void)?
     private var running = false
     private var task: Task<Void, Never>?
     private var lastSeen: [String: Date] = [:]  // chatJID → last message timestamp
@@ -17,8 +17,17 @@ final class WhatsAppAdapter: GatewayAdapter {
         self.config = config
     }
 
-    func onMessage(_ handler: @escaping (GatewayMessage) async -> String) {
+    func onMessage(_ handler: @escaping (GatewayMessage) async -> Void) {
         self.messageHandler = handler
+    }
+
+    func sendMessage(chatId: String, text: String) async {
+        let sendResult = runWacli(["send", "text", "--to", chatId, "--message", text, "--json"])
+        if sendResult.success {
+            printColored("  ✓ WhatsApp → \(chatId): sent (\(text.count) chars)", color: .green)
+        } else {
+            printColored("  ✗ WhatsApp send failed: \(sendResult.output)", color: .red)
+        }
     }
 
     func start() async throws {
@@ -136,6 +145,14 @@ final class WhatsAppAdapter: GatewayAdapter {
             let senderJID = msg["SenderJID"] as? String ?? chatJID
             let senderName = msg["SenderName"] as? String ?? msg["PushName"] as? String ?? chatName
 
+            // Check sender against whitelist (important for group chats)
+            if let allowed = config.allowedJIDs, !allowed.isEmpty {
+                if !allowed.contains(senderJID) && !allowed.contains(chatJID) {
+                    printColored("  ⚠ WhatsApp: blocked message from \(senderName) (\(senderJID))", color: .yellow)
+                    continue
+                }
+            }
+
             let gwMessage = GatewayMessage(
                 platform: "whatsapp",
                 chatId: chatJID,
@@ -148,16 +165,9 @@ final class WhatsAppAdapter: GatewayAdapter {
 
             printColored("  📨 WhatsApp [\(senderName)]: \(String(text.prefix(80)))", color: .cyan)
 
+            // Fire-and-forget: responses are sent via streaming callback + sendMessage
             if let handler = messageHandler {
-                let response = await handler(gwMessage)
-
-                // Send reply via wacli
-                let sendResult = runWacli(["send", "text", "--to", chatJID, "--message", response, "--json"])
-                if sendResult.success {
-                    printColored("  ✓ WhatsApp → \(chatName): sent (\(response.count) chars)", color: .green)
-                } else {
-                    printColored("  ✗ WhatsApp send failed: \(sendResult.output)", color: .red)
-                }
+                await handler(gwMessage)
             }
         }
     }

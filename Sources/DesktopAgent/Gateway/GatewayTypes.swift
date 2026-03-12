@@ -36,11 +36,13 @@ struct SlackGatewayConfig: Codable {
     var botToken: String
     var appToken: String           // For Socket Mode
     var allowedChannels: [String]?
+    var allowedUsers: [String]?    // Slack user ID whitelist (nil = allow all)
     var systemPrompt: String?
 
     enum CodingKeys: String, CodingKey {
         case enabled, botToken = "bot_token", appToken = "app_token"
-        case allowedChannels = "allowed_channels", systemPrompt = "system_prompt"
+        case allowedChannels = "allowed_channels", allowedUsers = "allowed_users"
+        case systemPrompt = "system_prompt"
     }
 }
 
@@ -48,10 +50,12 @@ struct DiscordGatewayConfig: Codable {
     var enabled: Bool
     var botToken: String
     var allowedGuilds: [String]?
+    var allowedUsers: [String]?    // Discord user ID whitelist (nil = allow all)
     var systemPrompt: String?
 
     enum CodingKeys: String, CodingKey {
-        case enabled, botToken = "bot_token", allowedGuilds = "allowed_guilds", systemPrompt = "system_prompt"
+        case enabled, botToken = "bot_token", allowedGuilds = "allowed_guilds"
+        case allowedUsers = "allowed_users", systemPrompt = "system_prompt"
     }
 }
 
@@ -67,6 +71,14 @@ struct GatewayMessage {
     let replyToMessageId: String?  // For threading
 }
 
+// MARK: - Gateway Delivery Context (for tasks scheduled from gateway)
+
+struct GatewayDeliveryContext {
+    let platform: String
+    let chatId: String
+    let userId: String
+}
+
 // MARK: - Gateway Adapter Protocol
 
 protocol GatewayAdapter: AnyObject {
@@ -79,6 +91,9 @@ protocol GatewayAdapter: AnyObject {
     /// Stop the adapter
     func stop()
 
-    /// Set the message handler callback
-    func onMessage(_ handler: @escaping (GatewayMessage) async -> String)
+    /// Set the message handler callback (fire-and-forget: responses sent via sendMessage)
+    func onMessage(_ handler: @escaping (GatewayMessage) async -> Void)
+
+    /// Send a message to a specific chat (for streaming responses)
+    func sendMessage(chatId: String, text: String) async
 }
