@@ -18,6 +18,7 @@ final class AgentLoop {
     let responseOptimizer: ResponseOptimizer
     let performanceAnalyzer: PerformanceAnalyzer
     let subAgentManager: SubAgentManager
+    let spendingGuard: SpendingGuard
     private var conversationHistory: [ClaudeMessage] = []
     private let verbose: Bool
 
@@ -47,6 +48,7 @@ final class AgentLoop {
         self.responseOptimizer = ResponseOptimizer()
         self.performanceAnalyzer = PerformanceAnalyzer()
         self.subAgentManager = SubAgentManager(config: config, mcpManager: mcpManager)
+        self.spendingGuard = SpendingGuard(limits: AgentConfigFile.load().spendingLimits)
         self.verbose = config.verbose
 
         // Wire up MCP and sub-agent config
@@ -138,6 +140,14 @@ final class AgentLoop {
                 printColored("  ✓ Compacted to \(conversationHistory.count) messages", color: .green)
             }
 
+            // Check spending limits before API call
+            if let limitError = spendingGuard.checkLimits() {
+                throw AgentError.permissionDenied(limitError)
+            }
+            if let warning = spendingGuard.checkWarnings() {
+                printColored("  \(warning)", color: .yellow)
+            }
+
             // API call with automatic retry for transient errors
             let apiStartTime = DispatchTime.now()
             let response: ClaudeResponse
@@ -165,8 +175,12 @@ final class AgentLoop {
                 }
             }
 
-            // Track token usage
+            // Track token usage and spending
             context.recordUsage(response.usage)
+            if let usage = response.usage {
+                let cost = context.pricing.costForTokens(input: usage.inputTokens, output: usage.outputTokens)
+                spendingGuard.recordSpend(cost: cost)
+            }
 
             if verbose, let usage = response.usage {
                 printColored("  [Tokens] ↑\(usage.inputTokens) ↓\(usage.outputTokens) | Context: \(context.shortStatus)", color: .gray)

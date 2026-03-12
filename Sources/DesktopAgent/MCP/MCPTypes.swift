@@ -199,6 +199,12 @@ struct AgentConfigFile: Codable {
     var gateways: GatewayConfig?
     var maxTokens: Int?
     var maxScreenshotWidth: Int?
+    var spendingLimits: SpendingLimits?
+
+    enum CodingKeys: String, CodingKey {
+        case apiKeys, activeModel, mcpServers, gateways, maxTokens, maxScreenshotWidth
+        case spendingLimits = "spending_limits"
+    }
 
     static let configDir = NSHomeDirectory() + "/.desktop-agent"
     static let configPath = configDir + "/config.json"
