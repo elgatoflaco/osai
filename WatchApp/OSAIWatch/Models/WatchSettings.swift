@@ -65,10 +65,8 @@ final class WatchSettings: ObservableObject {
 
     init() {
         self.serverHost = defaults.string(forKey: Keys.serverHost) ?? ""
-        self.serverPort = defaults.integer(forKey: Keys.serverPort)
-        if self.serverPort == 0 {
-            self.serverPort = 8375
-        }
+        let storedPort = defaults.integer(forKey: Keys.serverPort)
+        self.serverPort = storedPort != 0 ? storedPort : 8375
 
         if let storedId = defaults.string(forKey: Keys.deviceId), !storedId.isEmpty {
             self.deviceId = storedId

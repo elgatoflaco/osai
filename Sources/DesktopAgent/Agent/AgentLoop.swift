@@ -96,8 +96,10 @@ final class AgentLoop {
         var iterations = 0
         let maxIterations = 30
 
-        // Start aside monitor so user can type while we work
-        aside.start()
+        // Start aside monitor so user can type while we work (skip in gateway mode)
+        if gatewayContext == nil {
+            aside.start()
+        }
 
         // Build system prompt with memory context + matched skills + adaptive context
         let memoryContext = memory.getMemoryContext()

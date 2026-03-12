@@ -1,0 +1,43 @@
+name: OSAIWatch
+options:
+  bundleIdPrefix: com.osai
+  deploymentTarget:
+    watchOS: "11.0"
+  generateEmptyDirectories: true
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    DEVELOPMENT_TEAM: ""
+    CODE_SIGN_IDENTITY: "Apple Development"
+    CODE_SIGN_STYLE: Automatic
+    SWIFT_STRICT_CONCURRENCY: minimal
+
+targets:
+  OSAIWatch:
+    type: application
+    platform: watchOS
+    deploymentTarget: "11.0"
+    sources:
+      - path: OSAIWatch
+        excludes:
+          - "Complications/**"
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.osai.watchapp
+        INFOPLIST_FILE: OSAIWatch/Info.plist
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        GENERATE_INFOPLIST_FILE: false
+        SUPPORTS_MACCATALYST: false
+        PRODUCT_NAME: OSAI
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        ENABLE_PREVIEWS: true
+        CODE_SIGN_ENTITLEMENTS: OSAIWatch/OSAIWatch.entitlements
+        SUPPORTED_PLATFORMS: "watchsimulator watchos"
+        WATCHOS_DEPLOYMENT_TARGET: "11.0"
+        LD_RUNPATH_SEARCH_PATHS:
+          - "$(inherited)"
+          - "@executable_path/Frameworks"
+    entitlements:
+      path: OSAIWatch/OSAIWatch.entitlements

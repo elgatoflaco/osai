@@ -158,7 +158,15 @@ final class ErrorRecovery {
                     originalError: error
                 )
             case .apiError(let code, _):
-                return classify(error: error, toolName: toolName, httpStatus: code)
+                // Avoid infinite recursion: only recurse if httpStatus wasn't already set
+                if httpStatus == nil {
+                    return classify(error: error, toolName: toolName, httpStatus: code)
+                }
+                return ClassifiedError(
+                    category: .transientNetwork, message: msg, isRetryable: true,
+                    suggestedAction: .retry(delayMs: 1000, maxAttempts: 2),
+                    originalError: error
+                )
             case .noAPIKey:
                 return ClassifiedError(
                     category: .authFailure, message: msg, isRetryable: false,

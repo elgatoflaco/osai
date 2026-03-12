@@ -1,8 +1,10 @@
 import Foundation
 import SwiftUI
 import Combine
+import Network
+import WatchKit
 
-final class AgentConnection: NSObject, ObservableObject {
+final class AgentConnection: ObservableObject, @unchecked Sendable {
     // MARK: - Published State
 
     @Published var connectionState: ConnectionState = .disconnected
@@ -17,8 +19,7 @@ final class AgentConnection: NSObject, ObservableObject {
     // MARK: - Private
 
     private var settings: WatchSettings?
-    private var browser: NetServiceBrowser?
-    private var resolvedService: NetService?
+    private var nwBrowser: NWBrowser?
     private var discoveredHost: String?
     private var discoveredPort: Int?
     private var pollTimer: Timer?
@@ -29,13 +30,12 @@ final class AgentConnection: NSObject, ObservableObject {
 
     // MARK: - Init
 
-    override init() {
+    init() {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 15
         config.timeoutIntervalForResource = 30
         config.waitsForConnectivity = false
         self.session = URLSession(configuration: config)
-        super.init()
     }
 
     // MARK: - Configuration
@@ -53,25 +53,84 @@ final class AgentConnection: NSObject, ObservableObject {
 
         // If we have a manual host, try direct connection first
         if let settings = settings, !settings.serverHost.isEmpty {
-            discoveredHost = settings.serverHost
+            var host = settings.serverHost
+            // Strip interface scope ID if present (e.g. "%en8")
+            if let percentIndex = host.firstIndex(of: "%") {
+                host = String(host[host.startIndex..<percentIndex])
+                settings.serverHost = host
+            }
+            discoveredHost = host
             discoveredPort = settings.serverPort
             Task { await verifyConnection() }
             return
         }
 
-        // Otherwise use Bonjour discovery
-        browser = NetServiceBrowser()
-        browser?.delegate = self
-        browser?.searchForServices(ofType: "_osai._tcp.", inDomain: "local.")
+        // Use NWBrowser for Bonjour discovery (watchOS compatible)
+        let params = NWParameters()
+        params.includePeerToPeer = true
+        nwBrowser = NWBrowser(for: .bonjour(type: "_osai._tcp", domain: "local."), using: params)
+
+        nwBrowser?.stateUpdateHandler = { [weak self] state in
+            switch state {
+            case .failed(let error):
+                Task { @MainActor in
+                    self?.connectionState = .error
+                    self?.lastError = "Bonjour search failed: \(error)"
+                    self?.scheduleReconnect()
+                }
+            default:
+                break
+            }
+        }
+
+        nwBrowser?.browseResultsChangedHandler = { [weak self] results, changes in
+            guard let self = self else { return }
+            for result in results {
+                if case .service(let name, let type, let domain, _) = result.endpoint {
+                    // Resolve the endpoint by connecting to it
+                    let connection = NWConnection(to: result.endpoint, using: .tcp)
+                    connection.stateUpdateHandler = { @Sendable [weak self] state in
+                        if case .ready = state {
+                            if let path = connection.currentPath,
+                               let endpoint = path.remoteEndpoint,
+                               case .hostPort(let host, let port) = endpoint {
+                                var hostStr: String
+                                switch host {
+                                case .ipv4(let addr): hostStr = "\(addr)"
+                                case .ipv6(let addr): hostStr = "\(addr)"
+                                case .name(let name, _): hostStr = name
+                                @unknown default: hostStr = "localhost"
+                                }
+                                // Strip interface scope ID (e.g. "%en8") from resolved address
+                                if let percentIndex = hostStr.firstIndex(of: "%") {
+                                    hostStr = String(hostStr[hostStr.startIndex..<percentIndex])
+                                }
+                                let portValue = Int(port.rawValue)
+                                Task { @MainActor [weak self] in
+                                    self?.discoveredHost = hostStr
+                                    self?.discoveredPort = portValue
+                                    self?.settings?.serverHost = hostStr
+                                    self?.settings?.serverPort = portValue
+                                }
+                                Task { [weak self] in await self?.verifyConnection() }
+                            }
+                            connection.cancel()
+                        }
+                    }
+                    connection.start(queue: .global())
+                    break // Take first found service
+                }
+            }
+        }
+
+        nwBrowser?.start(queue: .global())
     }
 
     func disconnect() {
         stopPolling()
         stopStatusUpdates()
-        browser?.stop()
-        browser = nil
-        resolvedService?.stop()
-        resolvedService = nil
+        nwBrowser?.cancel()
+        nwBrowser = nil
         reconnectTimer?.invalidate()
         reconnectTimer = nil
         discoveredHost = nil
@@ -81,12 +140,10 @@ final class AgentConnection: NSObject, ObservableObject {
     }
 
     private func verifyConnection() async {
-        guard let host = discoveredHost, let port = discoveredPort else {
+        guard let url = makeURL(path: "/ping") else {
             await MainActor.run { connectionState = .error; lastError = "No host configured" }
             return
         }
-
-        let url = URL(string: "http://\(host):\(port)/ping")!
         do {
             let (data, response) = try await session.data(from: url)
             guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
@@ -114,18 +171,22 @@ final class AgentConnection: NSObject, ObservableObject {
     }
 
     private func scheduleReconnect() {
-        reconnectTimer?.invalidate()
-        reconnectTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: false) { [weak self] _ in
-            self?.startDiscovery()
+        Task { @MainActor in
+            reconnectTimer?.invalidate()
+            reconnectTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: false) { [weak self] _ in
+                self?.startDiscovery()
+            }
         }
     }
 
     // MARK: - Polling
 
     private func startPolling() {
-        pollTimer?.invalidate()
-        pollTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
-            Task { await self?.pollResponses() }
+        Task { @MainActor in
+            pollTimer?.invalidate()
+            pollTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
+                Task { await self?.pollResponses() }
+            }
         }
     }
 
@@ -135,9 +196,11 @@ final class AgentConnection: NSObject, ObservableObject {
     }
 
     private func startStatusUpdates() {
-        statusTimer?.invalidate()
-        statusTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
-            Task { await self?.fetchStatus() }
+        Task { @MainActor in
+            statusTimer?.invalidate()
+            statusTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
+                Task { await self?.fetchStatus() }
+            }
         }
         Task { await fetchStatus() }
     }
@@ -162,8 +225,7 @@ final class AgentConnection: NSObject, ObservableObject {
             trimMessages()
         }
 
-        guard let host = discoveredHost, let port = discoveredPort else { return }
-        let url = URL(string: "http://\(host):\(port)/message")!
+        guard let url = makeURL(path: "/message") else { return }
 
         let payload: [String: Any] = [
             "device_id": settings.deviceId,
@@ -177,7 +239,7 @@ final class AgentConnection: NSObject, ObservableObject {
         request.httpBody = try? JSONSerialization.data(withJSONObject: payload)
 
         do {
-            let (data, response) = try await session.data(for: request)
+            let (_, response) = try await session.data(for: request)
             guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
                 let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
                 await MainActor.run { lastError = "Server error: \(statusCode)" }
@@ -192,11 +254,8 @@ final class AgentConnection: NSObject, ObservableObject {
 
     func pollResponses() async {
         guard let settings = settings,
-              let host = discoveredHost,
-              let port = discoveredPort,
+              let url = makeURL(path: "/poll"),
               connectionState == .connected else { return }
-
-        let url = URL(string: "http://\(host):\(port)/poll")!
         let payload: [String: Any] = ["device_id": settings.deviceId]
 
         var request = URLRequest(url: url)
@@ -228,10 +287,8 @@ final class AgentConnection: NSObject, ObservableObject {
     }
 
     func fetchStatus() async {
-        guard let host = discoveredHost, let port = discoveredPort,
+        guard let url = makeURL(path: "/ping"),
               connectionState == .connected else { return }
-
-        let url = URL(string: "http://\(host):\(port)/ping")!
 
         do {
             let (data, response) = try await session.data(from: url)
@@ -264,6 +321,18 @@ final class AgentConnection: NSObject, ObservableObject {
         await sendMessage(text: "[Location Update] Lat: \(latitude), Lon: \(longitude)")
     }
 
+    // MARK: - URL Helpers
+
+    /// Sanitize host by stripping interface scope ID (e.g. "%en8") and build URL
+    private func makeURL(path: String) -> URL? {
+        guard var host = discoveredHost, let port = discoveredPort else { return nil }
+        // Strip interface scope ID from resolved addresses
+        if let percentIndex = host.firstIndex(of: "%") {
+            host = String(host[host.startIndex..<percentIndex])
+        }
+        return URL(string: "http://\(host):\(port)\(path)")
+    }
+
     // MARK: - Helpers
 
     private func trimMessages() {
@@ -287,58 +356,5 @@ final class AgentConnection: NSObject, ObservableObject {
 
     func clearMessages() {
         messages.removeAll()
-    }
-}
-
-// MARK: - NetServiceBrowserDelegate
-
-extension AgentConnection: NetServiceBrowserDelegate {
-    func netServiceBrowser(_ browser: NetServiceBrowser, didFind service: NetService, moreComing: Bool) {
-        resolvedService = service
-        service.delegate = self
-        service.resolve(withTimeout: 10)
-    }
-
-    func netServiceBrowser(_ browser: NetServiceBrowser, didNotSearch errorDict: [String: NSNumber]) {
-        Task { @MainActor in
-            connectionState = .error
-            lastError = "Bonjour search failed"
-            scheduleReconnect()
-        }
-    }
-
-    func netServiceBrowser(_ browser: NetServiceBrowser, didRemove service: NetService, moreComing: Bool) {
-        if service == resolvedService {
-            handleConnectionLoss()
-        }
-    }
-}
-
-// MARK: - NetServiceDelegate
-
-extension AgentConnection: NetServiceDelegate {
-    func netServiceDidResolveAddress(_ sender: NetService) {
-        guard let hostName = sender.hostName else {
-            Task { @MainActor in
-                connectionState = .error
-                lastError = "Could not resolve host"
-            }
-            return
-        }
-
-        discoveredHost = hostName
-        discoveredPort = sender.port
-        settings?.serverHost = hostName
-        settings?.serverPort = sender.port
-
-        Task { await verifyConnection() }
-    }
-
-    func netService(_ sender: NetService, didNotResolve errorDict: [String: NSNumber]) {
-        Task { @MainActor in
-            connectionState = .error
-            lastError = "Service resolution failed"
-            scheduleReconnect()
-        }
     }
 }

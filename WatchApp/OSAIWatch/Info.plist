@@ -24,10 +24,8 @@
 	<string>10.0</string>
 	<key>WKApplication</key>
 	<true/>
-	<key>UIRequiredDeviceCapabilities</key>
-	<array>
-		<string>watch-companion</string>
-	</array>
+	<key>WKWatchOnly</key>
+	<true/>
 	<key>NSHealthShareUsageDescription</key>
 	<string>OSAI needs access to your health data to provide personalized insights and summaries.</string>
 	<key>NSHealthUpdateUsageDescription</key>
