@@ -90,6 +90,15 @@ final class ToolExecutor {
         handlers["run_shell"] = { exe, input in
             let command = input["command"]?.stringValue ?? ""
             let timeout = input["timeout"]?.intValue ?? 30
+            // Protect osai source code from direct modification via shell
+            let sourcePatterns = ["/Sites/osai/Sources/", "/Sites/osai/Package.swift"]
+            let writeCommands = ["sed -i", "tee ", "> ", ">> ", "cat >", "echo >", "cp ", "mv ", "rm ", "git checkout", "git reset"]
+            let isSourceWrite = sourcePatterns.contains { srcP in
+                writeCommands.contains { wc in command.contains(srcP) && command.contains(wc) }
+            }
+            if isSourceWrite {
+                return (ToolResult(success: false, output: "⛔ Cannot modify osai source code via shell. Use the `claude_code` tool to delegate programming tasks to Claude Code.", screenshot: nil), nil)
+            }
             return (exe.shell.execute(command: command, timeout: timeout), nil)
         }
 
@@ -292,6 +301,11 @@ final class ToolExecutor {
         handlers["write_file"] = { exe, input in
             let path = input["path"]?.stringValue ?? ""
             let content = input["content"]?.stringValue ?? ""
+            // Protect osai source code — must use claude_code tool for programming
+            let resolved = (path as NSString).expandingTildeInPath
+            if resolved.contains("/Sites/osai/Sources/") || resolved.contains("/Sites/osai/Package.swift") {
+                return (ToolResult(success: false, output: "⛔ Cannot modify osai source code directly. Use the `claude_code` tool to delegate programming tasks to Claude Code.", screenshot: nil), nil)
+            }
             return (exe.file.writeFile(path: path, content: content), nil)
         }
 

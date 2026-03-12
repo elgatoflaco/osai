@@ -588,7 +588,7 @@ final class AgentLoop {
         printColored("  🧠 Delegating to Claude Code...", color: .magenta)
         printColored("    Prompt: \(String(prompt.prefix(120)))...", color: .gray)
 
-        // Stream progress to gateway if connected
+        // Notify gateway user
         if let stream = onStreamText {
             await stream("🧠 Delegando tarea a Claude Code...")
         }
@@ -599,54 +599,110 @@ final class AgentLoop {
         process.currentDirectoryURL = URL(fileURLWithPath: workdir)
         process.environment = ProcessInfo.processInfo.environment
 
-        let stdout = Pipe()
-        let stderr = Pipe()
-        process.standardOutput = stdout
-        process.standardError = stderr
+        let stdoutPipe = Pipe()
+        let stderrPipe = Pipe()
+        process.standardOutput = stdoutPipe
+        process.standardError = stderrPipe
 
         do {
             try process.run()
-
-            // Read output asynchronously with a timeout
-            return await withCheckedContinuation { continuation in
-                let timeoutSeconds = 300.0 // 5 min max
-                let timer = DispatchSource.makeTimerSource()
-                timer.schedule(deadline: .now() + timeoutSeconds)
-                timer.setEventHandler {
-                    process.terminate()
-                }
-                timer.resume()
-
-                process.terminationHandler = { _ in
-                    timer.cancel()
-                    let outData = stdout.fileHandleForReading.readDataToEndOfFile()
-                    let errData = stderr.fileHandleForReading.readDataToEndOfFile()
-                    let output = String(data: outData, encoding: .utf8) ?? ""
-                    let errors = String(data: errData, encoding: .utf8) ?? ""
-
-                    var result = ""
-                    if !output.isEmpty {
-                        result += output
-                    }
-                    if !errors.isEmpty && process.terminationStatus != 0 {
-                        result += "\n[stderr]: \(errors)"
-                    }
-                    if result.isEmpty {
-                        result = "Claude Code completed with no output (exit code: \(process.terminationStatus))"
-                    }
-
-                    // Truncate very long responses
-                    if result.count > 15000 {
-                        result = String(result.prefix(15000)) + "\n\n... [truncated — full output was \(result.count) chars]"
-                    }
-
-                    printColored("  ✓ Claude Code finished (\(result.count) chars)", color: .green)
-                    continuation.resume(returning: result)
-                }
-            }
         } catch {
             return "Error running Claude Code: \(error)"
         }
+
+        // Stream stdout in real-time — read chunks and forward to gateway
+        // Zero extra tokens: just reading process output from the pipe
+        let streamCallback = onStreamText
+        var fullOutput = ""
+        let bufferLock = NSLock()
+        var pendingBuffer = ""
+        let flushInterval: TimeInterval = 3.0  // Send to gateway every 3s
+
+        // Background task: flush buffer to gateway periodically
+        let flusher = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: UInt64(flushInterval * 1_000_000_000))
+                bufferLock.lock()
+                let chunk = pendingBuffer
+                pendingBuffer = ""
+                bufferLock.unlock()
+
+                if !chunk.isEmpty, let stream = self?.onStreamText {
+                    await stream(chunk)
+                }
+            }
+        }
+
+        // Read stdout incrementally on a background queue
+        let readQueue = DispatchQueue(label: "claude-code-reader")
+        let readDone = DispatchSemaphore(value: 0)
+
+        readQueue.async {
+            let handle = stdoutPipe.fileHandleForReading
+            while true {
+                let data = handle.availableData
+                if data.isEmpty { break }  // EOF
+                if let text = String(data: data, encoding: .utf8) {
+                    bufferLock.lock()
+                    fullOutput += text
+                    pendingBuffer += text
+                    bufferLock.unlock()
+
+                    // Also print to terminal
+                    print(text, terminator: "")
+                }
+            }
+            readDone.signal()
+        }
+
+        // Wait for process (with 10 min timeout)
+        let timeout = DispatchTime.now() + .seconds(600)
+        let processTask = Task {
+            process.waitUntilExit()
+        }
+        let _ = await processTask.value
+
+        // If process didn't finish in time, kill it
+        if process.isRunning {
+            process.terminate()
+        }
+
+        // Wait for reader to finish
+        readDone.wait()
+
+        // Cancel flusher and flush remaining buffer
+        flusher.cancel()
+
+        bufferLock.lock()
+        let remaining = pendingBuffer
+        pendingBuffer = ""
+        bufferLock.unlock()
+
+        if !remaining.isEmpty {
+            if let stream = streamCallback {
+                await stream(remaining)
+            }
+        }
+
+        // Read stderr
+        let errData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+        let errors = String(data: errData, encoding: .utf8) ?? ""
+
+        var result = fullOutput
+        if !errors.isEmpty && process.terminationStatus != 0 {
+            result += "\n[stderr]: \(errors)"
+        }
+        if result.isEmpty {
+            result = "Claude Code completed with no output (exit code: \(process.terminationStatus))"
+        }
+
+        // Truncate very long responses for the tool result (gateway already got the full stream)
+        if result.count > 15000 {
+            result = String(result.prefix(15000)) + "\n\n... [truncated — full output was \(result.count) chars]"
+        }
+
+        printColored("\n  ✓ Claude Code finished (\(fullOutput.count) chars)", color: .green)
+        return result
     }
 
     func clearHistory() {
