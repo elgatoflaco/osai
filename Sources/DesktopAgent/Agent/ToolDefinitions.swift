@@ -156,7 +156,25 @@ struct ToolDefinitions {
         ),
     ]
 
-    static let allTools: [ClaudeTool] = SelfModificationTools.tools + mcpManagementTools + schedulerTools + gatewayTools + claudeCodeTools + [
+    static let orchestratorTools: [ClaudeTool] = [
+        ClaudeTool(
+            name: "orchestrator_stats",
+            description: "View tool orchestrator statistics: cache hit rates, prediction accuracy, common tool sequences, batching efficiency. Use this to understand your own performance patterns and identify optimization opportunities.",
+            inputSchema: InputSchema(type: "object", properties: [:], required: nil)
+        ),
+        ClaudeTool(
+            name: "orchestrator_insights",
+            description: "Get detailed insights about tool usage patterns: most common sequences, slowest tools, batching opportunities. Use this for self-reflection on efficiency.",
+            inputSchema: InputSchema(type: "object", properties: [:], required: nil)
+        ),
+        ClaudeTool(
+            name: "clear_tool_cache",
+            description: "Clear the tool result cache. Use when you suspect cached data is stale or after significant system state changes.",
+            inputSchema: InputSchema(type: "object", properties: [:], required: nil)
+        ),
+    ]
+
+    static let allTools: [ClaudeTool] = SelfModificationTools.tools + mcpManagementTools + schedulerTools + gatewayTools + claudeCodeTools + orchestratorTools + [
         // --- AppleScript ---
         ClaudeTool(
             name: "run_applescript",

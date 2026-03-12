@@ -307,6 +307,8 @@ struct DesktopAgentCLI {
             printDim("  Model: \(config.model)")
             printDim("  Messages: \(agent.historyCount)")
             print()
+            print("  \(agent.orchestrator.stats)")
+            print()
             return .handled
 
         case "/compact":

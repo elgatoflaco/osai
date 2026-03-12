@@ -11,6 +11,8 @@ final class AgentLoop {
     let approval: ApprovalSystem
     let context: ContextManager
     let aside: AsideMonitor
+    let orchestrator: ToolOrchestrator
+    let errorRecovery: ErrorRecovery
     private var conversationHistory: [ClaudeMessage] = []
     private let verbose: Bool
 
@@ -33,6 +35,8 @@ final class AgentLoop {
         self.approval = ApprovalSystem()
         self.context = ContextManager(model: config.model)
         self.aside = AsideMonitor()
+        self.orchestrator = ToolOrchestrator()
+        self.errorRecovery = ErrorRecovery()
         self.verbose = config.verbose
 
         // Wire up MCP and sub-agent config
@@ -117,11 +121,29 @@ final class AgentLoop {
                 printColored("  ✓ Compacted to \(conversationHistory.count) messages", color: .green)
             }
 
-            let response = try await client.sendMessage(
-                messages: conversationHistory,
-                system: fullSystemPrompt,
-                tools: allTools
-            )
+            // API call with automatic retry for transient errors
+            let response: ClaudeResponse
+            do {
+                response = try await client.sendMessage(
+                    messages: conversationHistory,
+                    system: fullSystemPrompt,
+                    tools: allTools
+                )
+            } catch {
+                let classified = errorRecovery.classify(error: error)
+                errorRecovery.recordError(classified)
+                if classified.isRetryable, case .retry(let delayMs, _) = classified.suggestedAction {
+                    printColored("  🔄 \(classified.category) — retrying in \(delayMs)ms...", color: .yellow)
+                    try await Task.sleep(nanoseconds: UInt64(delayMs) * 1_000_000)
+                    response = try await client.sendMessage(
+                        messages: conversationHistory,
+                        system: fullSystemPrompt,
+                        tools: allTools
+                    )
+                } else {
+                    throw error
+                }
+            }
 
             // Track token usage
             context.recordUsage(response.usage)
@@ -222,9 +244,76 @@ final class AgentLoop {
                         let result = await handleClaudeCode(input: input)
                         toolResults.append(.toolResultText(toolUseId: id, text: result))
                     }
+                    // Orchestrator tools
+                    else if name == "orchestrator_stats" {
+                        toolResults.append(.toolResultText(toolUseId: id, text: orchestrator.stats))
+                    }
+                    else if name == "orchestrator_insights" {
+                        toolResults.append(.toolResultText(toolUseId: id, text: orchestrator.getPatternInsights()))
+                    }
+                    else if name == "clear_tool_cache" {
+                        orchestrator.clearCache()
+                        toolResults.append(.toolResultText(toolUseId: id, text: "Tool result cache cleared."))
+                    }
                     else {
-                        // Execute the tool
-                        let (result, screenshotBase64) = executor.execute(toolName: name, input: input)
+                        // Preflight check — catch obvious errors before execution
+                        if let warning = errorRecovery.preflightCheck(toolName: name, input: input) {
+                            if verbose { printColored("    ⚡ Preflight: \(warning)", color: .yellow) }
+                        }
+
+                        // Check orchestrator cache first
+                        let startTime = DispatchTime.now()
+                        var result: ToolResult
+                        var screenshotBase64: String?
+
+                        if let cached = orchestrator.getCachedResult(toolName: name, input: input) {
+                            result = cached.0
+                            screenshotBase64 = cached.1
+                            if verbose { printColored("    ⚡ Cache hit", color: .green) }
+                        } else {
+                            // Execute the tool
+                            let execResult = executor.execute(toolName: name, input: input)
+                            result = execResult.result
+                            screenshotBase64 = execResult.screenshotBase64
+
+                            // Error recovery: if tool failed, attempt automatic recovery
+                            if !result.success {
+                                if let classified = errorRecovery.classifyToolFailure(toolName: name, result: result) {
+                                    errorRecovery.recordError(classified)
+                                    if classified.isRetryable {
+                                        if verbose { printColored("    🔄 Attempting recovery (\(classified.category))...", color: .yellow) }
+                                        if let recovered = errorRecovery.attemptRecovery(
+                                            toolName: name, input: input, error: classified, executor: executor
+                                        ) {
+                                            result = recovered.0
+                                            screenshotBase64 = recovered.1
+                                            if verbose { printColored("    ✓ Recovered via retry", color: .green) }
+                                        }
+                                    }
+                                    // Try fallback chain if still failed
+                                    if !result.success {
+                                        if let fallback = errorRecovery.executeFallback(
+                                            toolName: name, input: input, executor: executor
+                                        ) {
+                                            result = fallback.0
+                                            screenshotBase64 = fallback.1
+                                            if verbose { printColored("    ✓ Recovered via fallback", color: .green) }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Cache successful results
+                            orchestrator.cacheResult(toolName: name, input: input, result: result, screenshotBase64: screenshotBase64)
+                        }
+
+                        // Record timing and patterns
+                        let elapsed = DispatchTime.now().uptimeNanoseconds - startTime.uptimeNanoseconds
+                        let durationMs = Int(elapsed / 1_000_000)
+                        orchestrator.recordToolCall(
+                            name: name, input: input, durationMs: durationMs,
+                            success: result.success, hadScreenshot: screenshotBase64 != nil
+                        )
 
                         let statusIcon = result.success ? "✓" : "✗"
                         let statusColor: ANSIColor = result.success ? .green : .red
@@ -249,6 +338,21 @@ final class AgentLoop {
             conversationHistory.append(ClaudeMessage(role: "assistant", content: assistantContent))
 
             if hasToolUse {
+                // Collect tool names from this iteration for batching analysis
+                let toolsThisTurn = assistantContent.compactMap { c -> String? in
+                    if case .toolUse(_, let n, _) = c { return n }
+                    return nil
+                }
+
+                // Inject batching hint if the AI is making suboptimal single calls
+                if let hint = orchestrator.checkBatchingOpportunity(currentTools: toolsThisTurn) {
+                    if verbose {
+                        printColored("  ⚡ Batch hint: \(hint.reason)", color: .cyan)
+                    }
+                    let hintText = "[ORCHESTRATOR HINT] \(hint.reason). Consider calling these together: \(hint.tools.joined(separator: ", "))"
+                    toolResults.append(.text(hintText))
+                }
+
                 // Check for user asides (messages typed while agent was working)
                 let asides = aside.drain()
                 if !asides.isEmpty {
@@ -268,8 +372,15 @@ final class AgentLoop {
         // Stop aside monitor
         aside.stop()
 
+        // Save orchestrator patterns for cross-session learning
+        orchestrator.savePatterns()
+
         if iterations >= maxIterations {
             printColored("  ⚠ Reached maximum iterations (\(maxIterations)).", color: .yellow)
+        }
+
+        if verbose {
+            printColored("  [Orchestrator] Cache: \(orchestrator.cacheHits)h/\(orchestrator.cacheHits + orchestrator.cacheMisses)t, Predictions: \(orchestrator.predictionsCorrect)/\(orchestrator.predictionsMade)", color: .gray)
         }
 
         return finalResponse
