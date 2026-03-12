@@ -1580,6 +1580,22 @@ struct DesktopAgentCLI {
           \(d)Bridges Telegram, WhatsApp, Slack, Discord to osai.\(r)
           \(d)Configure in ~/.desktop-agent/config.json under "gateways".\(r)
           \(d)Each platform gets its own agent session per chat.\(r)
+          \(d)Messages are serialized per chat (no race conditions).\(r)
+          \(d)Auto typing indicator while processing. Session persistence.\(r)
+
+        \(b)CLAUDE CODE DELEGATION\(r) \(d)(programming proxy)\(r)
+          \(d)The agent delegates all programming tasks to Claude Code CLI.\(r)
+          \(d)Requires: claude CLI installed (~/.local/bin/claude)\(r)
+          \(d)Real-time streaming of Claude Code output to gateway.\(r)
+          \(d)10-minute timeout with automatic process cleanup.\(r)
+          \(d)Source code protection: osai cannot modify its own sources directly.\(r)
+
+        \(b)INTELLIGENCE\(r) \(d)(adaptive systems)\(r)
+          \(d)Tool Orchestrator: predicts next tools, caches results, batching hints.\(r)
+          \(d)Error Recovery: auto-retry with backoff, fallback chains.\(r)
+          \(d)UI Intelligence: caches app layouts, learns workflows.\(r)
+          \(d)Context Detector: adapts output for terminal/gateway/pipe.\(r)
+          \(d)Intent Analyzer: routes to optimal tools based on input.\(r)
 
         \(b)SYSTEM\(r)
           \(c)/apps\(r) \(c)/windows\(r) \(c)/screen\(r) \(c)/perms\(r) \(c)/verbose\(r)
@@ -1678,6 +1694,7 @@ struct DesktopAgentCLI {
           osai --model openai/gpt-4o "translate this"
           echo "list my files" | osai    Pipe input
           osai gateway                   Start multi-platform gateway
+          osai --deliver <platform> <chatId> "task output"
 
         OPTIONS:
           --model <provider/model>   Model to use (default: anthropic/claude-sonnet-4-20250514)
@@ -1690,6 +1707,13 @@ struct DesktopAgentCLI {
         SKILLS:   ~/.desktop-agent/skills/
         TASKS:    ~/.desktop-agent/tasks/
         MEMORY:   ~/.desktop-agent/memory/
+        SESSIONS: ~/.desktop-agent/sessions/
+
+        GATEWAY PLATFORMS:
+          Telegram    Bot API long polling       (bot_token required)
+          Discord     WebSocket Gateway v10      (bot_token required)
+          Slack       Socket Mode WebSocket      (bot_token + app_token required)
+          WhatsApp    wacli CLI polling           (wacli auth required)
 
         FIRST RUN:
           osai
@@ -1700,6 +1724,8 @@ struct DesktopAgentCLI {
           osai "take a screenshot and describe what you see"
           osai "open Finder and organize my Desktop"
           osai "create an SVG logo for my startup"
+          osai "every day at 9am check my email and summarize"
+          osai gateway    # Start Telegram/Discord/Slack/WhatsApp bridge
         """)
     }
 }
