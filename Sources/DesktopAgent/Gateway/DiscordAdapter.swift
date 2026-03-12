@@ -38,6 +38,10 @@ final class DiscordAdapter: GatewayAdapter {
         }
     }
 
+    func sendTypingIndicator(chatId: String) async {
+        _ = try? await discordAPI("POST", path: "/channels/\(chatId)/typing")
+    }
+
     func start() async throws {
         running = true
 
@@ -174,10 +178,8 @@ final class DiscordAdapter: GatewayAdapter {
 
         printColored("  📨 Discord [\(userName)]: \(String(content.prefix(80)))", color: .cyan)
 
-        // Send typing indicator
-        _ = try? await discordAPI("POST", path: "/channels/\(channelId)/typing")
-
         // Fire-and-forget: responses are sent via streaming callback + sendMessage
+        // Typing indicator is now handled by GatewayServer's periodic typing task
         if let handler = messageHandler {
             await handler(gwMessage)
         }

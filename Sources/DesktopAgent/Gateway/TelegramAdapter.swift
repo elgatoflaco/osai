@@ -30,6 +30,11 @@ final class TelegramAdapter: GatewayAdapter {
         }
     }
 
+    func sendTypingIndicator(chatId: String) async {
+        guard let chatIdInt = Int(chatId) else { return }
+        _ = try? await apiCall("sendChatAction", params: ["chat_id": chatIdInt, "action": "typing"])
+    }
+
     func start() async throws {
         running = true
 
@@ -122,10 +127,8 @@ final class TelegramAdapter: GatewayAdapter {
 
         printColored("  📨 Telegram [\(userName)]: \(String(text.prefix(80)))", color: .cyan)
 
-        // Send typing indicator
-        _ = try? await apiCall("sendChatAction", params: ["chat_id": chatId, "action": "typing"])
-
         // Fire-and-forget: responses are sent via streaming callback + sendMessage
+        // Typing indicator is now handled by GatewayServer's periodic typing task
         if let handler = messageHandler {
             await handler(gwMessage)
         }

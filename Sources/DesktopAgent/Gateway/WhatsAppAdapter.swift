@@ -30,6 +30,10 @@ final class WhatsAppAdapter: GatewayAdapter {
         }
     }
 
+    func sendTypingIndicator(chatId: String) async {
+        // WhatsApp via wacli doesn't support typing indicators
+    }
+
     func start() async throws {
         // Check wacli exists
         guard FileManager.default.fileExists(atPath: wacliPath) else {

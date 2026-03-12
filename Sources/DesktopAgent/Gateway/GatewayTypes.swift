@@ -96,4 +96,7 @@ protocol GatewayAdapter: AnyObject {
 
     /// Send a message to a specific chat (for streaming responses)
     func sendMessage(chatId: String, text: String) async
+
+    /// Send a typing indicator to a chat (platforms auto-expire after ~5-10s)
+    func sendTypingIndicator(chatId: String) async
 }

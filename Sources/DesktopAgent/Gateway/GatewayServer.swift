@@ -18,6 +18,32 @@ enum GatewayError: Error, CustomStringConvertible {
     }
 }
 
+// MARK: - Per-Session Message Queue
+// Serializes messages per chat to prevent concurrent processUserInput on the same AgentLoop.
+// Each session gets its own actor so messages from different chats run concurrently,
+// but messages within the same chat are strictly serialized.
+
+private actor SessionQueue {
+    private var processing = false
+    private var pending: [() async -> Void] = []
+
+    func enqueue(_ work: @escaping () async -> Void) {
+        pending.append(work)
+        if !processing {
+            processing = true
+            Task { await drain() }
+        }
+    }
+
+    private func drain() async {
+        while !pending.isEmpty {
+            let next = pending.removeFirst()
+            await next()
+        }
+        processing = false
+    }
+}
+
 // MARK: - Gateway Server
 
 final class GatewayServer {
@@ -26,6 +52,7 @@ final class GatewayServer {
     private let gatewayConfig: GatewayConfig
     private var adapters: [GatewayAdapter] = []
     private var sessions: [String: SessionEntry] = [:]  // chatId → session entry with last-active timestamp
+    private var sessionQueues: [String: SessionQueue] = [:]  // chatId → message serializer
     private let sessionsLock = NSLock()
 
     // Session idle timeout: evict sessions unused for this duration to prevent unbounded memory growth
@@ -149,10 +176,14 @@ final class GatewayServer {
                 let now = Date()
                 sessionsLock.lock()
                 let before = sessions.count
-                sessions = sessions.filter { _, entry in
-                    now.timeIntervalSince(entry.lastActive) < Self.sessionIdleTimeout
+                let evictedKeys = sessions.filter { _, entry in
+                    now.timeIntervalSince(entry.lastActive) >= Self.sessionIdleTimeout
+                }.map { $0.key }
+                for key in evictedKeys {
+                    sessions.removeValue(forKey: key)
+                    sessionQueues.removeValue(forKey: key)
                 }
-                let evicted = before - sessions.count
+                let evicted = evictedKeys.count
                 sessionsLock.unlock()
                 if evicted > 0 {
                     printColored("  🧹 Evicted \(evicted) idle session(s) (\(sessions.count) active)", color: .gray)
@@ -169,6 +200,7 @@ final class GatewayServer {
 
         sessionsLock.lock()
         sessions.removeAll()
+        sessionQueues.removeAll()
         sessionsLock.unlock()
     }
 
@@ -177,6 +209,20 @@ final class GatewayServer {
     private func handleMessage(_ message: GatewayMessage, adapter: GatewayAdapter) async {
         let sessionKey = "\(message.platform):\(message.chatId)"
 
+        // Get or create the per-session message queue to serialize messages
+        sessionsLock.lock()
+        let queue = sessionQueues[sessionKey] ?? SessionQueue()
+        sessionQueues[sessionKey] = queue
+        sessionsLock.unlock()
+
+        // Enqueue the message — only one message per chat processes at a time
+        await queue.enqueue { [weak self] in
+            guard let self = self else { return }
+            await self.processMessage(message, adapter: adapter, sessionKey: sessionKey)
+        }
+    }
+
+    private func processMessage(_ message: GatewayMessage, adapter: GatewayAdapter, sessionKey: String) async {
         // Get or create session (one AgentLoop per chat for conversation continuity)
         let agent: AgentLoop
         sessionsLock.lock()
@@ -203,6 +249,14 @@ final class GatewayServer {
             sessionsLock.unlock()
         }
 
+        // Start periodic typing indicator (Discord resets after 5s, Telegram after 5s)
+        let typingTask = Task {
+            while !Task.isCancelled {
+                await adapter.sendTypingIndicator(chatId: message.chatId)
+                try? await Task.sleep(nanoseconds: 8_000_000_000) // every 8s
+            }
+        }
+
         // Wire streaming callback — send each text block to the chat as it arrives
         var didStream = false
         agent.onStreamText = { [weak adapter] text in
@@ -210,7 +264,7 @@ final class GatewayServer {
             await adapter?.sendMessage(chatId: message.chatId, text: text)
         }
 
-        // Process message (runs in the adapter's fire-and-forget task)
+        // Process message
         do {
             let contextPrefix = "[Gateway: \(message.platform.uppercased()), user: \(message.userName)] "
             var gatewayHint = ""
@@ -243,7 +297,8 @@ final class GatewayServer {
             await adapter.sendMessage(chatId: message.chatId, text: "Sorry, I encountered an error: \(error.localizedDescription)")
         }
 
-        // Clear streaming callback
+        // Stop typing indicator and clear streaming callback
+        typingTask.cancel()
         agent.onStreamText = nil
     }
 

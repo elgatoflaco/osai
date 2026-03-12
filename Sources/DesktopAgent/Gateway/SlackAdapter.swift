@@ -29,6 +29,11 @@ final class SlackAdapter: GatewayAdapter {
         _ = try? await postMessage(channel: chatId, text: text)
     }
 
+    func sendTypingIndicator(chatId: String) async {
+        // Slack doesn't have a typing indicator API for bots in Socket Mode
+        // No-op implementation for protocol conformance
+    }
+
     func start() async throws {
         running = true
 

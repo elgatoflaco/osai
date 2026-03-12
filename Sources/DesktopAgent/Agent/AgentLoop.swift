@@ -952,6 +952,9 @@ final class AgentLoop {
             return "Error running Claude Code: \(error)"
         }
 
+        // Put process in its own group so we can kill the entire tree on timeout
+        setpgid(process.processIdentifier, process.processIdentifier)
+
         // Stream stdout in real-time — read chunks and forward to gateway
         // Zero extra tokens: just reading process output from the pipe
         let streamCallback = onStreamText
@@ -997,20 +1000,33 @@ final class AgentLoop {
             readDone.signal()
         }
 
-        // Wait for process (with 10 min timeout)
-        let timeout = DispatchTime.now() + .seconds(600)
-        let processTask = Task {
+        // Wait for process with real 10 min timeout
+        let timeoutSeconds = 600
+        let processFinished = DispatchSemaphore(value: 0)
+        let processWaiter = DispatchQueue(label: "claude-code-waiter")
+        processWaiter.async {
             process.waitUntilExit()
-        }
-        let _ = await processTask.value
-
-        // If process didn't finish in time, kill it
-        if process.isRunning {
-            process.terminate()
+            processFinished.signal()
         }
 
-        // Wait for reader to finish
-        readDone.wait()
+        let waitResult = processFinished.wait(timeout: .now() + .seconds(timeoutSeconds))
+        if waitResult == .timedOut {
+            printColored("  ⚠ Claude Code timed out after \(timeoutSeconds)s — killing process", color: .yellow)
+            // Kill the entire process group to clean up child processes
+            let pid = process.processIdentifier
+            kill(-pid, SIGKILL)  // Kill process group
+            process.terminate()  // Belt and suspenders
+            if let stream = onStreamText {
+                await stream("\n⚠️ Claude Code timed out after \(timeoutSeconds/60) minutes.")
+            }
+        }
+
+        // Wait for reader to finish (with 5s grace period)
+        let readerResult = readDone.wait(timeout: .now() + .seconds(5))
+        if readerResult == .timedOut {
+            // Reader stuck — close the pipe to unblock it
+            stdoutPipe.fileHandleForReading.closeFile()
+        }
 
         // Cancel flusher and flush remaining buffer
         flusher.cancel()
