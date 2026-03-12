@@ -13,6 +13,7 @@ final class AgentLoop {
     let aside: AsideMonitor
     let orchestrator: ToolOrchestrator
     let errorRecovery: ErrorRecovery
+    let adaptive: AdaptiveResponseSystem
     private var conversationHistory: [ClaudeMessage] = []
     private let verbose: Bool
 
@@ -37,6 +38,7 @@ final class AgentLoop {
         self.aside = AsideMonitor()
         self.orchestrator = ToolOrchestrator()
         self.errorRecovery = ErrorRecovery()
+        self.adaptive = AdaptiveResponseSystem()
         self.verbose = config.verbose
 
         // Wire up MCP and sub-agent config
@@ -89,10 +91,15 @@ final class AgentLoop {
         // Start aside monitor so user can type while we work
         aside.start()
 
-        // Build system prompt with memory context + matched skills
+        // Build system prompt with memory context + matched skills + adaptive context
         let memoryContext = memory.getMemoryContext()
         let skillContext = SkillManager.buildSkillContext(for: userInput)
-        let fullSystemPrompt = config.systemPrompt + memoryContext + skillContext
+        let adaptiveContext = adaptive.buildAdaptiveContext(
+            userInput: userInput,
+            gatewayContext: gatewayContext,
+            isSubAgent: false
+        )
+        let fullSystemPrompt = config.systemPrompt + memoryContext + skillContext + adaptiveContext
 
         // Combine built-in tools + MCP tools
         let allTools = ToolDefinitions.allTools + mcpManager.getClaudeTools()
@@ -255,6 +262,26 @@ final class AgentLoop {
                         orchestrator.clearCache()
                         toolResults.append(.toolResultText(toolUseId: id, text: "Tool result cache cleared."))
                     }
+                    // Adaptive response tools
+                    else if name == "adaptive_stats" {
+                        toolResults.append(.toolResultText(toolUseId: id, text: adaptive.stats))
+                    }
+                    else if name == "ui_cache_lookup" {
+                        let appName = input["app_name"]?.stringValue ?? ""
+                        let result = handleUICacheLookup(appName: appName)
+                        toolResults.append(.toolResultText(toolUseId: id, text: result))
+                    }
+                    else if name == "clear_ui_cache" {
+                        let appName = input["app_name"]?.stringValue
+                        if let app = appName {
+                            // Clear specific app — reload will get fresh data
+                            adaptive.uiIntelligence.clearCache()
+                            toolResults.append(.toolResultText(toolUseId: id, text: "UI cache cleared for \(app)."))
+                        } else {
+                            adaptive.clearAll()
+                            toolResults.append(.toolResultText(toolUseId: id, text: "All UI caches cleared."))
+                        }
+                    }
                     else {
                         // Preflight check — catch obvious errors before execution
                         if let warning = errorRecovery.preflightCheck(toolName: name, input: input) {
@@ -372,8 +399,9 @@ final class AgentLoop {
         // Stop aside monitor
         aside.stop()
 
-        // Save orchestrator patterns for cross-session learning
+        // Save orchestrator patterns and adaptive learning data
         orchestrator.savePatterns()
+        adaptive.saveSession()
 
         if iterations >= maxIterations {
             printColored("  ⚠ Reached maximum iterations (\(maxIterations)).", color: .yellow)
@@ -605,6 +633,48 @@ final class AgentLoop {
         } catch {
             return "Error running task: \(error)"
         }
+    }
+
+    // MARK: - Adaptive Response Handlers
+
+    private func handleUICacheLookup(appName: String) -> String {
+        guard !appName.isEmpty else { return "Error: 'app_name' is required." }
+
+        // Try memory cache first, then disk
+        let layout = adaptive.uiIntelligence.getCachedLayout(appName: appName)
+            ?? adaptive.uiIntelligence.loadCachedLayout(appName: appName)
+
+        guard let layout = layout else {
+            return "No cached UI data for '\(appName)'. Use get_ui_elements to inspect the app first."
+        }
+
+        var output = "Cached UI data for \(layout.appName):\n"
+        output += "  Last updated: \(layout.lastUpdated)\n"
+        output += "  Cached elements: \(layout.elements.count)\n"
+
+        // Show top elements by interaction count
+        let topElements = layout.elements.values
+            .sorted { $0.hitCount > $1.hitCount }
+            .prefix(15)
+
+        if !topElements.isEmpty {
+            output += "\nTop elements:\n"
+            for elem in topElements {
+                let title = elem.title ?? elem.role
+                let lastSuccess = elem.lastSuccess.map { " (last success: \($0))" } ?? ""
+                output += "  • [\(elem.role)] \(title) at (\(elem.centerX),\(elem.centerY)) size \(elem.width)x\(elem.height) — \(elem.hitCount) interactions\(lastSuccess)\n"
+            }
+        }
+
+        // Show workflows
+        if !layout.workflows.isEmpty {
+            output += "\nLearned workflows:\n"
+            for wf in layout.workflows {
+                output += "  • \(wf.name): \(wf.steps.count) steps, \(Int(wf.reliability * 100))% reliable, ~\(wf.avgDurationMs)ms, used \(wf.successCount + wf.failCount)x\n"
+            }
+        }
+
+        return output
     }
 
     private func handleConfigureGateway(input: [String: AnyCodable]) -> String {

@@ -174,7 +174,37 @@ struct ToolDefinitions {
         ),
     ]
 
-    static let allTools: [ClaudeTool] = SelfModificationTools.tools + mcpManagementTools + schedulerTools + gatewayTools + claudeCodeTools + orchestratorTools + [
+    static let adaptiveTools: [ClaudeTool] = [
+        ClaudeTool(
+            name: "adaptive_stats",
+            description: "View adaptive response system statistics: detected context, UI intelligence cache, intent analysis. Useful for understanding how the system adapts to your current environment.",
+            inputSchema: InputSchema(type: "object", properties: [:], required: nil)
+        ),
+        ClaudeTool(
+            name: "ui_cache_lookup",
+            description: "Look up cached UI element positions and workflows for an app. Avoids the need to call get_ui_elements if the layout is cached. Returns frequently used elements and known workflows.",
+            inputSchema: InputSchema(
+                type: "object",
+                properties: [
+                    "app_name": PropertySchema(type: "string", description: "Application name to look up cached UI data for", enumValues: nil)
+                ],
+                required: ["app_name"]
+            )
+        ),
+        ClaudeTool(
+            name: "clear_ui_cache",
+            description: "Clear the UI intelligence cache for all apps or a specific app. Use when cached positions seem stale or after app updates.",
+            inputSchema: InputSchema(
+                type: "object",
+                properties: [
+                    "app_name": PropertySchema(type: "string", description: "App name to clear cache for (omit to clear all)", enumValues: nil)
+                ],
+                required: nil
+            )
+        ),
+    ]
+
+    static let allTools: [ClaudeTool] = SelfModificationTools.tools + mcpManagementTools + schedulerTools + gatewayTools + claudeCodeTools + orchestratorTools + adaptiveTools + [
         // --- AppleScript ---
         ClaudeTool(
             name: "run_applescript",
