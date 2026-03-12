@@ -25,8 +25,27 @@ final class GatewayServer {
     private let mcpManager: MCPManager
     private let gatewayConfig: GatewayConfig
     private var adapters: [GatewayAdapter] = []
-    private var sessions: [String: AgentLoop] = [:]  // chatId → agent session
+    private var sessions: [String: SessionEntry] = [:]  // chatId → session entry with last-active timestamp
     private let sessionsLock = NSLock()
+
+    // Session idle timeout: evict sessions unused for this duration to prevent unbounded memory growth
+    private static let sessionIdleTimeout: TimeInterval = 4 * 60 * 60  // 4 hours
+    private static let evictionInterval: TimeInterval = 10 * 60         // check every 10 minutes
+
+    /// Wraps an AgentLoop with a last-active timestamp for idle eviction
+    private struct SessionEntry {
+        let agent: AgentLoop
+        var lastActive: Date
+
+        init(agent: AgentLoop) {
+            self.agent = agent
+            self.lastActive = Date()
+        }
+
+        mutating func touch() {
+            lastActive = Date()
+        }
+    }
 
     init(config: AgentConfig, mcpManager: MCPManager, gatewayConfig: GatewayConfig) {
         self.config = config
@@ -115,8 +134,31 @@ final class GatewayServer {
             printColored("  Listening for messages... (Ctrl+C to stop)\n", color: .gray)
         }
 
+        // Start background session eviction to prevent unbounded memory growth
+        startSessionEviction()
+
         // Keep running until interrupted
         await waitForever()
+    }
+
+    /// Periodically evicts idle sessions to prevent unbounded memory growth
+    private func startSessionEviction() {
+        Task {
+            while true {
+                try? await Task.sleep(nanoseconds: UInt64(Self.evictionInterval * 1_000_000_000))
+                let now = Date()
+                sessionsLock.lock()
+                let before = sessions.count
+                sessions = sessions.filter { _, entry in
+                    now.timeIntervalSince(entry.lastActive) < Self.sessionIdleTimeout
+                }
+                let evicted = before - sessions.count
+                sessionsLock.unlock()
+                if evicted > 0 {
+                    printColored("  🧹 Evicted \(evicted) idle session(s) (\(sessions.count) active)", color: .gray)
+                }
+            }
+        }
     }
 
     func stop() {
@@ -138,8 +180,10 @@ final class GatewayServer {
         // Get or create session (one AgentLoop per chat for conversation continuity)
         let agent: AgentLoop
         sessionsLock.lock()
-        if let existing = sessions[sessionKey] {
-            agent = existing
+        if var existing = sessions[sessionKey] {
+            existing.touch()
+            sessions[sessionKey] = existing
+            agent = existing.agent
             sessionsLock.unlock()
         } else {
             let newAgent = AgentLoop(config: config, mcpManager: mcpManager)
@@ -154,7 +198,7 @@ final class GatewayServer {
             if !history.isEmpty {
                 newAgent.restoreHistory(history)
             }
-            sessions[sessionKey] = newAgent
+            sessions[sessionKey] = SessionEntry(agent: newAgent)
             agent = newAgent
             sessionsLock.unlock()
         }

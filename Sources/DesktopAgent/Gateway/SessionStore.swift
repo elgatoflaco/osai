@@ -9,20 +9,15 @@ final class SessionStore {
     /// Ensures saved history starts with a user message (not a tool_result)
     static func save(sessionKey: String, messages: [ClaudeMessage]) {
         ensureDir()
-        var trimmed = Array(messages.suffix(20))
+        let recent = messages.suffix(20)
 
-        // Ensure we start on a user message that isn't a tool_result
-        // (tool_results reference tool_use IDs from the prior assistant message)
-        while let first = trimmed.first {
-            if first.role == "user", hasToolResult(first) {
-                trimmed.removeFirst()
-            } else if first.role == "assistant" {
-                // Can't start with assistant
-                trimmed.removeFirst()
-            } else {
-                break
-            }
-        }
+        // Find the first valid starting index: a user message that isn't a tool_result.
+        // Uses drop(while:) for O(n) instead of repeated removeFirst() which is O(n²).
+        let trimmed = Array(recent.drop(while: { msg in
+            if msg.role == "assistant" { return true }
+            if msg.role == "user" && hasToolResult(msg) { return true }
+            return false
+        }))
 
         let path = filePath(for: sessionKey)
         do {

@@ -83,6 +83,7 @@ final class ToolExecutor {
         // --- AppleScript ---
         handlers["run_applescript"] = { exe, input in
             let script = input["script"]?.stringValue ?? ""
+            exe.vision.invalidateCache()  // AppleScript may change screen state
             return (exe.applescript.execute(script), nil)
         }
 
@@ -181,6 +182,7 @@ final class ToolExecutor {
             let y = input["y"]?.intValue ?? 0
             let button = input["button"]?.stringValue ?? "left"
             let doubleClick = input["double_click"]?.boolValue ?? false
+            exe.vision.invalidateCache()  // Screen will change after click
             return (exe.keyboard.mouseClick(x: x, y: y, button: button, clickCount: doubleClick ? 2 : 1), nil)
         }
 
@@ -195,6 +197,7 @@ final class ToolExecutor {
             let y = input["y"]?.intValue ?? 0
             let direction = input["direction"]?.stringValue ?? "down"
             let amount = input["amount"]?.intValue ?? 3
+            exe.vision.invalidateCache()  // Screen will change after scroll
             return (exe.keyboard.scroll(x: x, y: y, direction: direction, amount: amount), nil)
         }
 
@@ -204,6 +207,7 @@ final class ToolExecutor {
             let toX = input["to_x"]?.intValue ?? 0
             let toY = input["to_y"]?.intValue ?? 0
             let duration = input["duration"]?.doubleValue ?? 0.5
+            exe.vision.invalidateCache()  // Screen will change after drag
             return (exe.keyboard.drag(fromX: fromX, fromY: fromY, toX: toX, toY: toY, duration: duration), nil)
         }
 
@@ -211,12 +215,14 @@ final class ToolExecutor {
         handlers["type_text"] = { exe, input in
             let text = input["text"]?.stringValue ?? ""
             exe.ensureAppFocus()
+            exe.vision.invalidateCache()  // Screen will change after typing
             return (exe.keyboard.typeText(text), nil)
         }
 
         handlers["press_key"] = { exe, input in
             let key = input["key"]?.stringValue ?? ""
             exe.ensureAppFocus()
+            exe.vision.invalidateCache()  // Screen will change after key press
             return (exe.keyboard.pressKey(key), nil)
         }
 

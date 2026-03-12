@@ -63,6 +63,7 @@ final class ContextManager {
     private(set) var lastInputTokens: Int = 0
     private(set) var lastOutputTokens: Int = 0
     private(set) var compactionCount: Int = 0
+    private(set) var imagesStripped: Int = 0
 
     let model: String
     let pricing: ModelPricing
@@ -83,6 +84,7 @@ final class ContextManager {
         lastInputTokens = 0
         lastOutputTokens = 0
         compactionCount = 0
+        imagesStripped = 0
     }
 
     // MARK: - Track Usage
@@ -131,6 +133,151 @@ final class ContextManager {
 
     var sessionDuration: TimeInterval {
         Date().timeIntervalSince(sessionStart)
+    }
+
+    // MARK: - Image Stripping (Pre-compaction Optimization)
+
+    /// Strip old screenshot/image blocks from conversation history.
+    /// Images are by far the most expensive content blocks (~85K tokens each).
+    /// Once the AI has processed a screenshot, the raw image data is no longer needed —
+    /// the AI's text response already captured what it observed.
+    /// This replaces image blocks with a lightweight text placeholder.
+    func stripOldImages(from messages: [ClaudeMessage], keepLast: Int = 2) -> [ClaudeMessage] {
+        // Find indices of messages that contain images
+        var imageMessageIndices: [Int] = []
+        for (i, msg) in messages.enumerated() {
+            if msg.content.contains(where: { content in
+                if case .image = content { return true }
+                if case .toolResult(_, let blocks) = content {
+                    return blocks.contains { $0.source != nil }
+                }
+                return false
+            }) {
+                imageMessageIndices.append(i)
+            }
+        }
+
+        // Keep the last N image-containing messages intact
+        let indicesToStrip = imageMessageIndices.dropLast(keepLast)
+        if indicesToStrip.isEmpty { return messages }
+
+        var stripped = messages
+        var strippedCount = 0
+
+        for i in indicesToStrip {
+            let msg = stripped[i]
+            let newContent: [ClaudeContent] = msg.content.map { content in
+                switch content {
+                case .image:
+                    strippedCount += 1
+                    return .text("[image previously sent — already processed]")
+                case .toolResult(let id, let blocks):
+                    let hadImage = blocks.contains { $0.source != nil }
+                    if hadImage {
+                        strippedCount += 1
+                        // Keep text blocks, replace image blocks with placeholder
+                        let textOnly = blocks.compactMap { $0.text }.joined(separator: "\n")
+                        let placeholder = textOnly.isEmpty
+                            ? "[screenshot previously sent — already analyzed]"
+                            : textOnly + "\n[screenshot previously sent — already analyzed]"
+                        return .toolResultText(toolUseId: id, text: placeholder)
+                    }
+                    return content
+                default:
+                    return content
+                }
+            }
+            stripped[i] = ClaudeMessage(role: msg.role, content: newContent)
+        }
+
+        imagesStripped += strippedCount
+        return stripped
+    }
+
+    // MARK: - Compaction
+
+    func compactHistory(
+        messages: [ClaudeMessage],
+        client: AIClient,
+        systemPrompt: String
+    ) async throws -> [ClaudeMessage] {
+        compactionCount += 1
+
+        // Step 1: Strip old images first (biggest win — can free 100K+ tokens instantly)
+        let imageStripped = stripOldImages(from: messages, keepLast: 2)
+
+        let keepLastTurns = 4
+        let keepMessages = keepLastTurns * 3
+
+        if imageStripped.count <= keepMessages {
+            return imageStripped
+        }
+
+        let oldMessages = Array(imageStripped.prefix(imageStripped.count - keepMessages))
+        let recentMessages = Array(imageStripped.suffix(keepMessages))
+
+        // Step 2: Build summary of old messages (text only, images already stripped)
+        var summaryParts: [String] = []
+        for msg in oldMessages {
+            for content in msg.content {
+                switch content {
+                case .text(let text):
+                    if !text.isEmpty {
+                        let role = msg.role == "user" ? "User" : "Assistant"
+                        let truncated = text.count > 500 ? String(text.prefix(500)) + "..." : text
+                        summaryParts.append("[\(role)] \(truncated)")
+                    }
+                case .toolUse(_, let name, let input):
+                    let args = input.map { "\($0.key)" }.joined(separator: ", ")
+                    summaryParts.append("[Tool] \(name)(\(args))")
+                case .toolResult(_, let blocks):
+                    let text = blocks.compactMap { $0.text }.joined(separator: " ")
+                    if !text.isEmpty {
+                        let truncated = text.count > 200 ? String(text.prefix(200)) + "..." : text
+                        summaryParts.append("[Result] \(truncated)")
+                    }
+                default:
+                    break
+                }
+            }
+        }
+
+        let rawSummary = summaryParts.joined(separator: "\n")
+
+        let summaryRequest = """
+        Summarize this conversation concisely. Focus on: key decisions, outcomes, current task state, user's goal.
+        Under 500 words. Factual and specific.
+
+        CONVERSATION:
+        \(String(rawSummary.prefix(8000)))
+        """
+
+        let summaryMessages = [ClaudeMessage(role: "user", content: [.text(summaryRequest)])]
+
+        do {
+            let response = try await client.sendMessage(
+                messages: summaryMessages,
+                system: "You are a conversation summarizer. Output only the summary.",
+                tools: nil
+            )
+            if let usage = response.usage { recordUsage(usage) }
+
+            let summaryText = response.content.compactMap { c -> String? in
+                if case .text(let t) = c { return t }; return nil
+            }.joined(separator: "\n")
+
+            var compacted: [ClaudeMessage] = []
+            compacted.append(ClaudeMessage(role: "user", content: [.text("[CONVERSATION SUMMARY]\n\(summaryText)\n[END SUMMARY]")]))
+            compacted.append(ClaudeMessage(role: "assistant", content: [.text("Understood. Continuing from where we left off.")]))
+            compacted.append(contentsOf: recentMessages)
+            return compacted
+        } catch {
+            var compacted: [ClaudeMessage] = []
+            compacted.append(ClaudeMessage(role: "user", content: [.text("[Earlier conversation compacted. \(oldMessages.count) messages summarized.]")]))
+            compacted.append(ClaudeMessage(role: "assistant", content: [.text("Understood. Continuing with recent context.")]))
+            compacted.append(contentsOf: recentMessages)
+            return compacted
+        }
     }
 
     // MARK: - Format Display
@@ -218,6 +365,9 @@ final class ContextManager {
         if compactionCount > 0 {
             lines.append("  \(y)  Compacted \(compactionCount)x\(r)")
         }
+        if imagesStripped > 0 {
+            lines.append("  \(d)  Images stripped: \(imagesStripped)\(r)")
+        }
 
         // Projection
         if turnCount >= 2 {
@@ -230,88 +380,6 @@ final class ContextManager {
         }
 
         return lines.joined(separator: "\n")
-    }
-
-    // MARK: - Compaction
-
-    func compactHistory(
-        messages: [ClaudeMessage],
-        client: AIClient,
-        systemPrompt: String
-    ) async throws -> [ClaudeMessage] {
-        compactionCount += 1
-
-        let keepLastTurns = 4
-        let keepMessages = keepLastTurns * 3
-
-        if messages.count <= keepMessages {
-            return messages
-        }
-
-        let oldMessages = Array(messages.prefix(messages.count - keepMessages))
-        let recentMessages = Array(messages.suffix(keepMessages))
-
-        var summaryParts: [String] = []
-        for msg in oldMessages {
-            for content in msg.content {
-                switch content {
-                case .text(let text):
-                    if !text.isEmpty {
-                        let role = msg.role == "user" ? "User" : "Assistant"
-                        let truncated = text.count > 500 ? String(text.prefix(500)) + "..." : text
-                        summaryParts.append("[\(role)] \(truncated)")
-                    }
-                case .toolUse(_, let name, let input):
-                    let args = input.map { "\($0.key)" }.joined(separator: ", ")
-                    summaryParts.append("[Tool] \(name)(\(args))")
-                case .toolResult(_, let blocks):
-                    let text = blocks.compactMap { $0.text }.joined(separator: " ")
-                    if !text.isEmpty {
-                        let truncated = text.count > 200 ? String(text.prefix(200)) + "..." : text
-                        summaryParts.append("[Result] \(truncated)")
-                    }
-                default:
-                    break
-                }
-            }
-        }
-
-        let rawSummary = summaryParts.joined(separator: "\n")
-
-        let summaryRequest = """
-        Summarize this conversation concisely. Focus on: key decisions, outcomes, current task state, user's goal.
-        Under 500 words. Factual and specific.
-
-        CONVERSATION:
-        \(String(rawSummary.prefix(8000)))
-        """
-
-        let summaryMessages = [ClaudeMessage(role: "user", content: [.text(summaryRequest)])]
-
-        do {
-            let response = try await client.sendMessage(
-                messages: summaryMessages,
-                system: "You are a conversation summarizer. Output only the summary.",
-                tools: nil
-            )
-            if let usage = response.usage { recordUsage(usage) }
-
-            let summaryText = response.content.compactMap { c -> String? in
-                if case .text(let t) = c { return t }; return nil
-            }.joined(separator: "\n")
-
-            var compacted: [ClaudeMessage] = []
-            compacted.append(ClaudeMessage(role: "user", content: [.text("[CONVERSATION SUMMARY]\n\(summaryText)\n[END SUMMARY]")]))
-            compacted.append(ClaudeMessage(role: "assistant", content: [.text("Understood. Continuing from where we left off.")]))
-            compacted.append(contentsOf: recentMessages)
-            return compacted
-        } catch {
-            var compacted: [ClaudeMessage] = []
-            compacted.append(ClaudeMessage(role: "user", content: [.text("[Earlier conversation compacted. \(oldMessages.count) messages summarized.]")]))
-            compacted.append(ClaudeMessage(role: "assistant", content: [.text("Understood. Continuing with recent context.")]))
-            compacted.append(contentsOf: recentMessages)
-            return compacted
-        }
     }
 
     // MARK: - Formatters

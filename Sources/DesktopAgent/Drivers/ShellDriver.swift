@@ -1,9 +1,18 @@
 import Foundation
 
-// MARK: - Shell Driver
+// MARK: - Shell Driver (Async I/O)
 
 final class ShellDriver {
 
+    /// Optional streaming callback — receives output chunks as they arrive.
+    /// Set this before calling executeAsync() to get real-time output streaming.
+    var onOutputStream: ((String) -> Void)?
+
+    // MARK: - Async Execution (Non-blocking I/O)
+
+    /// Execute a shell command with non-blocking I/O.
+    /// Output is read incrementally via `availableData` on background queues,
+    /// preventing pipe buffer deadlocks and enabling real-time streaming.
     func execute(command: String, timeout: Int = 30) -> ToolResult {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
@@ -33,14 +42,58 @@ final class ShellDriver {
         }
         timer.resume()
 
+        // Read stdout and stderr incrementally on background queues.
+        // This prevents pipe buffer deadlocks that occur when a process writes
+        // more than 64KB to a pipe before the reader drains it (the process blocks
+        // on write, but we're waiting for exit before reading → deadlock).
+        var stdoutChunks: [String] = []
+        var stderrChunks: [String] = []
+        let stdoutLock = NSLock()
+        let stderrLock = NSLock()
+        let readGroup = DispatchGroup()
+
+        // Background stdout reader — streams chunks via callback
+        readGroup.enter()
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let handle = outputPipe.fileHandleForReading
+            while true {
+                let data = handle.availableData
+                if data.isEmpty { break }  // EOF
+                if let text = String(data: data, encoding: .utf8) {
+                    stdoutLock.lock()
+                    stdoutChunks.append(text)
+                    stdoutLock.unlock()
+                    self?.onOutputStream?(text)
+                }
+            }
+            readGroup.leave()
+        }
+
+        // Background stderr reader
+        readGroup.enter()
+        DispatchQueue.global(qos: .userInitiated).async {
+            let handle = errorPipe.fileHandleForReading
+            while true {
+                let data = handle.availableData
+                if data.isEmpty { break }  // EOF
+                if let text = String(data: data, encoding: .utf8) {
+                    stderrLock.lock()
+                    stderrChunks.append(text)
+                    stderrLock.unlock()
+                }
+            }
+            readGroup.leave()
+        }
+
+        // Wait for process to exit (readers continue draining in parallel)
         process.waitUntilExit()
         timer.cancel()
 
-        let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
-        let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+        // Wait for readers to finish draining any remaining buffered output
+        readGroup.wait()
 
-        let stdout = String(data: outputData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let stderr = String(data: errorData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let stdout = stdoutChunks.joined().trimmingCharacters(in: .whitespacesAndNewlines)
+        let stderr = stderrChunks.joined().trimmingCharacters(in: .whitespacesAndNewlines)
 
         if timedOut {
             let partial = truncateOutput(stdout + "\n" + stderr)

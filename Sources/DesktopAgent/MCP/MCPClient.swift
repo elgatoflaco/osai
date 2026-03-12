@@ -12,11 +12,17 @@ final class MCPClient {
     private let lock = NSLock()
     private var buffer = Data()
 
+    // Buffer safety: prevent OOM from malicious/runaway MCP servers
+    private static let maxBufferSize = 10 * 1024 * 1024  // 10 MB
+    // Per-request timeout (overridable for slow tools)
+    private let requestTimeout: TimeInterval
+
     var isRunning: Bool { process?.isRunning ?? false }
 
-    init(serverName: String, config: MCPServerConfig) {
+    init(serverName: String, config: MCPServerConfig, requestTimeout: TimeInterval = 30) {
         self.serverName = serverName
         self.config = config
+        self.requestTimeout = requestTimeout
     }
 
     deinit {
@@ -58,6 +64,15 @@ final class MCPClient {
         self.process = proc
         self.stdin = stdinPipe.fileHandleForWriting
         self.stdout = stdoutPipe.fileHandleForReading
+
+        // Drain stderr on background thread to prevent pipe buffer deadlocks
+        let stderrHandle = stderrPipe.fileHandleForReading
+        DispatchQueue.global(qos: .utility).async {
+            while true {
+                let data = stderrHandle.availableData
+                if data.isEmpty { break }  // EOF — process exited
+            }
+        }
 
         // Initialize MCP handshake
         let initParams: [String: Any] = [
@@ -185,7 +200,7 @@ final class MCPClient {
         }
 
         let fd = stdout.fileDescriptor
-        let deadline = Date().addingTimeInterval(30)
+        let deadline = Date().addingTimeInterval(requestTimeout)
 
         while Date() < deadline {
             // Use poll() to check if data is available without blocking
@@ -200,6 +215,12 @@ final class MCPClient {
                 let n = read(fd, &readBuf, readBuf.count)
                 if n > 0 {
                     buffer.append(contentsOf: readBuf[0..<n])
+
+                    // Guard against unbounded buffer growth (malicious/runaway server)
+                    if buffer.count > Self.maxBufferSize {
+                        buffer.removeAll()
+                        throw MCPError.initFailed("Server exceeded \(Self.maxBufferSize / 1024 / 1024)MB buffer limit")
+                    }
 
                     // Try to parse complete JSON lines
                     while let newlineIndex = buffer.firstIndex(of: 0x0A) {
@@ -242,7 +263,7 @@ enum MCPError: Error, CustomStringConvertible {
         switch self {
         case .initFailed(let msg): return "MCP init failed: \(msg)"
         case .notRunning: return "MCP server not running"
-        case .timeout: return "MCP request timed out (30s)"
+        case .timeout: return "MCP request timed out"
         case .serverNotFound(let name): return "MCP server '\(name)' not found in config"
         case .toolNotFound(let name): return "MCP tool '\(name)' not found"
         }

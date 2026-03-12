@@ -17,6 +17,9 @@ final class DiscordAdapter: GatewayAdapter {
     private var sequenceNumber: Int?
     private var botUserId: String = ""
 
+    // Reuse a single URLSession across reconnections to prevent resource leaks
+    private let wsSession = URLSession(configuration: .default)
+
     var isRunning: Bool { running }
 
     init(config: DiscordGatewayConfig) {
@@ -50,16 +53,20 @@ final class DiscordAdapter: GatewayAdapter {
     func stop() {
         running = false
         heartbeatTask?.cancel()
+        heartbeatTask = nil
         wsTask?.cancel(with: .goingAway, reason: nil)
+        wsTask = nil
         task?.cancel()
+        task = nil
     }
 
     // MARK: - WebSocket
 
     private func wsLoop(url: URL) async {
         while running && !Task.isCancelled {
-            let session = URLSession(configuration: .default)
-            let ws = session.webSocketTask(with: url)
+            // Cancel previous WebSocket before creating a new one to prevent leaks
+            wsTask?.cancel(with: .goingAway, reason: nil)
+            let ws = wsSession.webSocketTask(with: url)
             wsTask = ws
             ws.resume()
 
@@ -182,9 +189,10 @@ final class DiscordAdapter: GatewayAdapter {
         heartbeatTask?.cancel()
         heartbeatTask = Task { [weak self] in
             let ns = UInt64(interval) * 1_000_000
-            while !(Task.isCancelled) {
+            while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: ns)
-                await self?.sendHeartbeat(ws: ws)
+                guard let self = self, self.running else { return }
+                await self.sendHeartbeat(ws: ws)
             }
         }
     }

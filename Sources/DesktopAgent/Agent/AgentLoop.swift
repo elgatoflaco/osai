@@ -100,6 +100,12 @@ final class AgentLoop {
                 printColored("  [Agent] Iteration \(iterations)/\(maxIterations)", color: .gray)
             }
 
+            // Strip old images from history to save tokens (images are ~85K tokens each)
+            // Keep only the 2 most recent screenshots; older ones are replaced with text placeholders
+            if conversationHistory.count > 6 {
+                conversationHistory = context.stripOldImages(from: conversationHistory, keepLast: 2)
+            }
+
             // Check if compaction needed before sending
             if context.needsCompaction && conversationHistory.count > 10 {
                 printColored("  📦 Compacting conversation history...", color: .magenta)
@@ -156,6 +162,20 @@ final class AgentLoop {
                     if !approval.requestApproval(toolName: name, classification: classification, input: input) {
                         toolResults.append(.toolResultText(toolUseId: id, text: "Action denied by user."))
                         continue
+                    }
+
+                    // Wire shell streaming for long-running commands in gateway mode
+                    if name == "run_shell", onStreamText != nil {
+                        let command = input["command"]?.stringValue ?? ""
+                        let timeout = input["timeout"]?.intValue ?? 30
+                        // For commands with timeout > 5s, stream output in real-time
+                        if timeout > 5 {
+                            let result = await executeShellWithStreaming(command: command, timeout: timeout)
+                            let statusIcon = result.success ? "✓" : "✗"
+                            printColored("    \(statusIcon) \(String(result.output.prefix(300)))", color: result.success ? .green : .red)
+                            toolResults.append(.toolResultText(toolUseId: id, text: result.output))
+                            continue
+                        }
                     }
 
                     // Handle sub-agents
@@ -570,6 +590,143 @@ final class AgentLoop {
 
         try? fileConfig.save()
         return "✓ Imported from OpenClaw: \(imported.joined(separator: ", ")). Run `osai gateway` to start."
+    }
+
+    // MARK: - Streamed Shell Execution (Gateway)
+
+    /// Execute a shell command with real-time output streaming to gateway.
+    /// Uses the same buffered streaming pattern as handleClaudeCode.
+    private func executeShellWithStreaming(command: String, timeout: Int) async -> ToolResult {
+        // Protect osai source code
+        let sourcePatterns = ["/Sites/osai/Sources/", "/Sites/osai/Package.swift"]
+        let writeCommands = ["sed -i", "tee ", "> ", ">> ", "cat >", "echo >", "cp ", "mv ", "rm ", "git checkout", "git reset"]
+        let isSourceWrite = sourcePatterns.contains { srcP in
+            writeCommands.contains { wc in command.contains(srcP) && command.contains(wc) }
+        }
+        if isSourceWrite {
+            return ToolResult(success: false, output: "⛔ Cannot modify osai source code via shell. Use the `claude_code` tool.", screenshot: nil)
+        }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        process.arguments = ["-c", command]
+        process.environment = ProcessInfo.processInfo.environment
+
+        let stdoutPipe = Pipe()
+        let stderrPipe = Pipe()
+        process.standardOutput = stdoutPipe
+        process.standardError = stderrPipe
+
+        do {
+            try process.run()
+        } catch {
+            return ToolResult(success: false, output: "Failed to run command: \(error.localizedDescription)", screenshot: nil)
+        }
+
+        // Timeout
+        let timeoutSeconds = min(max(timeout, 1), 120)
+        var timedOut = false
+        let timer = DispatchSource.makeTimerSource()
+        timer.schedule(deadline: .now() + .seconds(timeoutSeconds))
+        timer.setEventHandler { timedOut = true; process.terminate() }
+        timer.resume()
+
+        // Stream stdout to gateway with periodic buffer flush
+        let streamCallback = onStreamText
+        var fullOutput = ""
+        let bufferLock = NSLock()
+        var pendingBuffer = ""
+
+        let flusher = Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 3_000_000_000) // 3s
+                bufferLock.lock()
+                let chunk = pendingBuffer
+                pendingBuffer = ""
+                bufferLock.unlock()
+                if !chunk.isEmpty, let stream = streamCallback {
+                    await stream(chunk)
+                }
+            }
+        }
+
+        // Read stdout incrementally
+        let readGroup = DispatchGroup()
+        var stderrText = ""
+
+        readGroup.enter()
+        DispatchQueue.global(qos: .userInitiated).async {
+            let handle = stdoutPipe.fileHandleForReading
+            while true {
+                let data = handle.availableData
+                if data.isEmpty { break }
+                if let text = String(data: data, encoding: .utf8) {
+                    bufferLock.lock()
+                    fullOutput += text
+                    pendingBuffer += text
+                    bufferLock.unlock()
+                }
+            }
+            readGroup.leave()
+        }
+
+        readGroup.enter()
+        DispatchQueue.global(qos: .userInitiated).async {
+            let handle = stderrPipe.fileHandleForReading
+            while true {
+                let data = handle.availableData
+                if data.isEmpty { break }
+                if let text = String(data: data, encoding: .utf8) {
+                    bufferLock.lock()
+                    stderrText += text
+                    bufferLock.unlock()
+                }
+            }
+            readGroup.leave()
+        }
+
+        process.waitUntilExit()
+        timer.cancel()
+        readGroup.wait()
+        flusher.cancel()
+
+        // Flush remaining
+        bufferLock.lock()
+        let remaining = pendingBuffer
+        pendingBuffer = ""
+        bufferLock.unlock()
+        if !remaining.isEmpty, let stream = streamCallback {
+            await stream(remaining)
+        }
+
+        let stdout = fullOutput.trimmingCharacters(in: .whitespacesAndNewlines)
+        let stderr = stderrText.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if timedOut {
+            let partial = (stdout + "\n" + stderr)
+            let truncated = partial.count > 10000 ? String(partial.prefix(5000)) + "\n...[truncated]...\n" + String(partial.suffix(5000)) : partial
+            return ToolResult(success: false, output: "Command timed out after \(timeoutSeconds)s.\nPartial output:\n\(truncated)", screenshot: nil)
+        }
+
+        var output = ""
+        if !stdout.isEmpty { output += stdout }
+        if !stderr.isEmpty {
+            if !output.isEmpty { output += "\n--- stderr ---\n" }
+            output += stderr
+        }
+        if output.isEmpty { output = "(no output)" }
+
+        // Truncate for tool result
+        if output.count > 10000 {
+            let half = 5000
+            output = String(output.prefix(half)) + "\n\n... [truncated \(output.count - 10000) chars] ...\n\n" + String(output.suffix(half))
+        }
+
+        let exitCode = process.terminationStatus
+        let success = exitCode == 0
+        if !success { output = "Exit code: \(exitCode)\n\(output)" }
+
+        return ToolResult(success: success, output: output, screenshot: nil)
     }
 
     // MARK: - Claude Code Integration
