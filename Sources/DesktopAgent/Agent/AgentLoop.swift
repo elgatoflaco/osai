@@ -595,9 +595,13 @@ final class AgentLoop {
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: claudePath)
-        process.arguments = ["-p", "--output-format", "text", prompt]
+        process.arguments = ["--dangerously-skip-permissions", "-p", "--output-format", "text", prompt]
         process.currentDirectoryURL = URL(fileURLWithPath: workdir)
         process.environment = ProcessInfo.processInfo.environment
+
+        // /dev/null stdin so the process doesn't get suspended (SIGTSTP)
+        let devNull = FileHandle(forReadingAtPath: "/dev/null")!
+        process.standardInput = devNull
 
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
