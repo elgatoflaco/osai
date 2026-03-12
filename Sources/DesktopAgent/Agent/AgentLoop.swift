@@ -14,6 +14,10 @@ final class AgentLoop {
     let orchestrator: ToolOrchestrator
     let errorRecovery: ErrorRecovery
     let adaptive: AdaptiveResponseSystem
+    let cacheManager: CacheManager
+    let responseOptimizer: ResponseOptimizer
+    let performanceAnalyzer: PerformanceAnalyzer
+    let subAgentManager: SubAgentManager
     private var conversationHistory: [ClaudeMessage] = []
     private let verbose: Bool
 
@@ -39,6 +43,10 @@ final class AgentLoop {
         self.orchestrator = ToolOrchestrator()
         self.errorRecovery = ErrorRecovery()
         self.adaptive = AdaptiveResponseSystem()
+        self.cacheManager = CacheManager()
+        self.responseOptimizer = ResponseOptimizer()
+        self.performanceAnalyzer = PerformanceAnalyzer()
+        self.subAgentManager = SubAgentManager(config: config, mcpManager: mcpManager)
         self.verbose = config.verbose
 
         // Wire up MCP and sub-agent config
@@ -129,6 +137,7 @@ final class AgentLoop {
             }
 
             // API call with automatic retry for transient errors
+            let apiStartTime = DispatchTime.now()
             let response: ClaudeResponse
             do {
                 response = try await client.sendMessage(
@@ -136,6 +145,8 @@ final class AgentLoop {
                     system: fullSystemPrompt,
                     tools: allTools
                 )
+                let apiElapsed = Int((DispatchTime.now().uptimeNanoseconds - apiStartTime.uptimeNanoseconds) / 1_000_000)
+                performanceAnalyzer.recordApiCall(durationMs: apiElapsed)
             } catch {
                 let classified = errorRecovery.classify(error: error)
                 errorRecovery.recordError(classified)
@@ -163,6 +174,9 @@ final class AgentLoop {
             var assistantContent: [ClaudeContent] = []
             var toolResults: [ClaudeContent] = []
 
+            // === PHASE 1: Collect all content and identify tool calls ===
+            var pendingToolCalls: [(id: String, name: String, input: [String: AnyCodable])] = []
+
             for content in response.content {
                 assistantContent.append(content)
 
@@ -186,179 +200,242 @@ final class AgentLoop {
                         printColored("    Input: \(inputDesc)", color: .gray)
                     }
 
-                    // --- Approval check ---
-                    let classification = approval.classify(toolName: name, input: input)
-                    if !approval.requestApproval(toolName: name, classification: classification, input: input) {
-                        toolResults.append(.toolResultText(toolUseId: id, text: "Action denied by user."))
-                        continue
-                    }
-
-                    // Wire shell streaming for long-running commands in gateway mode
-                    if name == "run_shell", onStreamText != nil {
-                        let command = input["command"]?.stringValue ?? ""
-                        let timeout = input["timeout"]?.intValue ?? 30
-                        // For commands with timeout > 5s, stream output in real-time
-                        if timeout > 5 {
-                            let result = await executeShellWithStreaming(command: command, timeout: timeout)
-                            let statusIcon = result.success ? "✓" : "✗"
-                            printColored("    \(statusIcon) \(String(result.output.prefix(300)))", color: result.success ? .green : .red)
-                            toolResults.append(.toolResultText(toolUseId: id, text: result.output))
-                            continue
-                        }
-                    }
-
-                    // Handle sub-agents
-                    if name == "run_subagents" {
-                        let subResult = await handleSubAgents(input: input, allTools: allTools)
-                        toolResults.append(.toolResultText(toolUseId: id, text: subResult))
-                    }
-                    // Handle MCP install
-                    else if name == "mcp_install" {
-                        let installResult = handleMCPInstall(input: input)
-                        toolResults.append(.toolResultText(toolUseId: id, text: installResult))
-                    }
-                    // Handle MCP search
-                    else if name == "mcp_search" {
-                        let searchResult = handleMCPSearch(input: input)
-                        toolResults.append(.toolResultText(toolUseId: id, text: searchResult))
-                    }
-                    // Handle task scheduler
-                    else if name == "schedule_task" {
-                        let result = handleScheduleTask(input: input)
-                        toolResults.append(.toolResultText(toolUseId: id, text: result))
-                    }
-                    else if name == "list_tasks" {
-                        let result = handleListTasks()
-                        toolResults.append(.toolResultText(toolUseId: id, text: result))
-                    }
-                    else if name == "cancel_task" {
-                        let result = handleCancelTask(input: input)
-                        toolResults.append(.toolResultText(toolUseId: id, text: result))
-                    }
-                    else if name == "run_task" {
-                        let result = handleRunTask(input: input)
-                        toolResults.append(.toolResultText(toolUseId: id, text: result))
-                    }
-                    else if name == "configure_gateway" {
-                        let result = handleConfigureGateway(input: input)
-                        toolResults.append(.toolResultText(toolUseId: id, text: result))
-                    }
-                    else if name == "import_gateway_config" {
-                        let result = handleImportGatewayConfig(input: input)
-                        toolResults.append(.toolResultText(toolUseId: id, text: result))
-                    }
-                    else if name == "claude_code" {
-                        let result = await handleClaudeCode(input: input)
-                        toolResults.append(.toolResultText(toolUseId: id, text: result))
-                    }
-                    // Orchestrator tools
-                    else if name == "orchestrator_stats" {
-                        toolResults.append(.toolResultText(toolUseId: id, text: orchestrator.stats))
-                    }
-                    else if name == "orchestrator_insights" {
-                        toolResults.append(.toolResultText(toolUseId: id, text: orchestrator.getPatternInsights()))
-                    }
-                    else if name == "clear_tool_cache" {
-                        orchestrator.clearCache()
-                        toolResults.append(.toolResultText(toolUseId: id, text: "Tool result cache cleared."))
-                    }
-                    // Adaptive response tools
-                    else if name == "adaptive_stats" {
-                        toolResults.append(.toolResultText(toolUseId: id, text: adaptive.stats))
-                    }
-                    else if name == "ui_cache_lookup" {
-                        let appName = input["app_name"]?.stringValue ?? ""
-                        let result = handleUICacheLookup(appName: appName)
-                        toolResults.append(.toolResultText(toolUseId: id, text: result))
-                    }
-                    else if name == "clear_ui_cache" {
-                        let appName = input["app_name"]?.stringValue
-                        if let app = appName {
-                            // Clear specific app — reload will get fresh data
-                            adaptive.uiIntelligence.clearCache()
-                            toolResults.append(.toolResultText(toolUseId: id, text: "UI cache cleared for \(app)."))
-                        } else {
-                            adaptive.clearAll()
-                            toolResults.append(.toolResultText(toolUseId: id, text: "All UI caches cleared."))
-                        }
-                    }
-                    else {
-                        // Preflight check — catch obvious errors before execution
-                        if let warning = errorRecovery.preflightCheck(toolName: name, input: input) {
-                            if verbose { printColored("    ⚡ Preflight: \(warning)", color: .yellow) }
-                        }
-
-                        // Check orchestrator cache first
-                        let startTime = DispatchTime.now()
-                        var result: ToolResult
-                        var screenshotBase64: String?
-
-                        if let cached = orchestrator.getCachedResult(toolName: name, input: input) {
-                            result = cached.0
-                            screenshotBase64 = cached.1
-                            if verbose { printColored("    ⚡ Cache hit", color: .green) }
-                        } else {
-                            // Execute the tool
-                            let execResult = executor.execute(toolName: name, input: input)
-                            result = execResult.result
-                            screenshotBase64 = execResult.screenshotBase64
-
-                            // Error recovery: if tool failed, attempt automatic recovery
-                            if !result.success {
-                                if let classified = errorRecovery.classifyToolFailure(toolName: name, result: result) {
-                                    errorRecovery.recordError(classified)
-                                    if classified.isRetryable {
-                                        if verbose { printColored("    🔄 Attempting recovery (\(classified.category))...", color: .yellow) }
-                                        if let recovered = errorRecovery.attemptRecovery(
-                                            toolName: name, input: input, error: classified, executor: executor
-                                        ) {
-                                            result = recovered.0
-                                            screenshotBase64 = recovered.1
-                                            if verbose { printColored("    ✓ Recovered via retry", color: .green) }
-                                        }
-                                    }
-                                    // Try fallback chain if still failed
-                                    if !result.success {
-                                        if let fallback = errorRecovery.executeFallback(
-                                            toolName: name, input: input, executor: executor
-                                        ) {
-                                            result = fallback.0
-                                            screenshotBase64 = fallback.1
-                                            if verbose { printColored("    ✓ Recovered via fallback", color: .green) }
-                                        }
-                                    }
-                                }
-                            }
-
-                            // Cache successful results
-                            orchestrator.cacheResult(toolName: name, input: input, result: result, screenshotBase64: screenshotBase64)
-                        }
-
-                        // Record timing and patterns
-                        let elapsed = DispatchTime.now().uptimeNanoseconds - startTime.uptimeNanoseconds
-                        let durationMs = Int(elapsed / 1_000_000)
-                        orchestrator.recordToolCall(
-                            name: name, input: input, durationMs: durationMs,
-                            success: result.success, hadScreenshot: screenshotBase64 != nil
-                        )
-
-                        let statusIcon = result.success ? "✓" : "✗"
-                        let statusColor: ANSIColor = result.success ? .green : .red
-                        printColored("    \(statusIcon) \(String(result.output.prefix(300)))", color: statusColor)
-
-                        if let base64 = screenshotBase64 {
-                            toolResults.append(.toolResultWithImage(
-                                toolUseId: id, text: result.output,
-                                imageBase64: base64, mediaType: "image/jpeg"
-                            ))
-                            printColored("    📸 Screenshot sent to AI", color: .magenta)
-                        } else {
-                            toolResults.append(.toolResultText(toolUseId: id, text: result.output))
-                        }
-                    }
+                    pendingToolCalls.append((id: id, name: name, input: input))
 
                 default:
                     break
+                }
+            }
+
+            // === PHASE 2: Execute tool calls with async pipeline ===
+            let toolExecStart = DispatchTime.now()
+            var pipelineToolCalls: [AsyncToolPipeline.ToolCall] = []
+
+            for tc in pendingToolCalls {
+                // --- Approval check ---
+                let classification = approval.classify(toolName: tc.name, input: tc.input)
+                if !approval.requestApproval(toolName: tc.name, classification: classification, input: tc.input) {
+                    toolResults.append(.toolResultText(toolUseId: tc.id, text: "Action denied by user."))
+                    continue
+                }
+
+                // Wire shell streaming for long-running commands in gateway mode
+                if tc.name == "run_shell", onStreamText != nil {
+                    let command = tc.input["command"]?.stringValue ?? ""
+                    let timeout = tc.input["timeout"]?.intValue ?? 30
+                    if timeout > 5 {
+                        let result = await executeShellWithStreaming(command: command, timeout: timeout)
+                        let statusIcon = result.success ? "✓" : "✗"
+                        printColored("    \(statusIcon) \(String(result.output.prefix(300)))", color: result.success ? .green : .red)
+                        toolResults.append(.toolResultText(toolUseId: tc.id, text: result.output))
+                        continue
+                    }
+                }
+
+                // Handle delegated tools (sub-agents, MCP, schedulers, etc.)
+                if tc.name == "run_subagents" {
+                    let subResult = await handleSubAgents(input: tc.input, allTools: allTools)
+                    toolResults.append(.toolResultText(toolUseId: tc.id, text: subResult))
+                }
+                else if tc.name == "mcp_install" {
+                    let installResult = handleMCPInstall(input: tc.input)
+                    toolResults.append(.toolResultText(toolUseId: tc.id, text: installResult))
+                }
+                else if tc.name == "mcp_search" {
+                    let searchResult = handleMCPSearch(input: tc.input)
+                    toolResults.append(.toolResultText(toolUseId: tc.id, text: searchResult))
+                }
+                else if tc.name == "schedule_task" {
+                    toolResults.append(.toolResultText(toolUseId: tc.id, text: handleScheduleTask(input: tc.input)))
+                }
+                else if tc.name == "list_tasks" {
+                    toolResults.append(.toolResultText(toolUseId: tc.id, text: handleListTasks()))
+                }
+                else if tc.name == "cancel_task" {
+                    toolResults.append(.toolResultText(toolUseId: tc.id, text: handleCancelTask(input: tc.input)))
+                }
+                else if tc.name == "run_task" {
+                    toolResults.append(.toolResultText(toolUseId: tc.id, text: handleRunTask(input: tc.input)))
+                }
+                else if tc.name == "configure_gateway" {
+                    toolResults.append(.toolResultText(toolUseId: tc.id, text: handleConfigureGateway(input: tc.input)))
+                }
+                else if tc.name == "import_gateway_config" {
+                    toolResults.append(.toolResultText(toolUseId: tc.id, text: handleImportGatewayConfig(input: tc.input)))
+                }
+                else if tc.name == "claude_code" {
+                    let result = await handleClaudeCode(input: tc.input)
+                    toolResults.append(.toolResultText(toolUseId: tc.id, text: result))
+                }
+                else if tc.name == "orchestrator_stats" {
+                    toolResults.append(.toolResultText(toolUseId: tc.id, text: orchestrator.stats))
+                }
+                else if tc.name == "orchestrator_insights" {
+                    toolResults.append(.toolResultText(toolUseId: tc.id, text: orchestrator.getPatternInsights()))
+                }
+                else if tc.name == "clear_tool_cache" {
+                    orchestrator.clearCache()
+                    cacheManager.clearAll()
+                    toolResults.append(.toolResultText(toolUseId: tc.id, text: "Tool result cache cleared."))
+                }
+                else if tc.name == "adaptive_stats" {
+                    toolResults.append(.toolResultText(toolUseId: tc.id, text: adaptive.stats))
+                }
+                else if tc.name == "performance_stats" {
+                    toolResults.append(.toolResultText(toolUseId: tc.id, text: performanceAnalyzer.detailedStats))
+                }
+                else if tc.name == "ui_cache_lookup" {
+                    let appName = tc.input["app_name"]?.stringValue ?? ""
+                    toolResults.append(.toolResultText(toolUseId: tc.id, text: handleUICacheLookup(appName: appName)))
+                }
+                else if tc.name == "clear_ui_cache" {
+                    let appName = tc.input["app_name"]?.stringValue
+                    if let app = appName {
+                        adaptive.uiIntelligence.clearCache()
+                        toolResults.append(.toolResultText(toolUseId: tc.id, text: "UI cache cleared for \(app)."))
+                    } else {
+                        adaptive.clearAll()
+                        toolResults.append(.toolResultText(toolUseId: tc.id, text: "All UI caches cleared."))
+                    }
+                }
+                else {
+                    // Collect for async pipeline execution
+                    pipelineToolCalls.append(AsyncToolPipeline.ToolCall(
+                        id: tc.id, name: tc.name, input: tc.input
+                    ))
+                }
+            }
+
+            // === PHASE 3: Execute pipeline tools (parallel where safe) ===
+            if !pipelineToolCalls.isEmpty {
+                let strategy = AsyncToolPipeline.analyzeStrategy(tools: pipelineToolCalls)
+
+                if verbose && pipelineToolCalls.count > 1 {
+                    printColored("    ⚡ Pipeline: \(pipelineToolCalls.count) tools, strategy=\(strategy)", color: .cyan)
+                }
+
+                let pipelineResults: [AsyncToolPipeline.PipelineResult]
+                switch strategy {
+                case .parallel:
+                    pipelineResults = await AsyncToolPipeline.executeParallel(
+                        tools: pipelineToolCalls, executor: executor,
+                        orchestrator: orchestrator, verbose: verbose
+                    )
+                case .mixed:
+                    pipelineResults = await AsyncToolPipeline.executeMixed(
+                        tools: pipelineToolCalls, executor: executor,
+                        orchestrator: orchestrator, verbose: verbose
+                    )
+                case .sequential:
+                    // Fall back to sequential but still use pipeline infrastructure
+                    var seqResults: [AsyncToolPipeline.PipelineResult] = []
+                    for tool in pipelineToolCalls {
+                        let results = await AsyncToolPipeline.executeParallel(
+                            tools: [tool], executor: executor,
+                            orchestrator: orchestrator, verbose: verbose
+                        )
+                        seqResults.append(contentsOf: results)
+                    }
+                    pipelineResults = seqResults
+                }
+
+                // Process pipeline results with error recovery and response optimization
+                for pr in pipelineResults {
+                    var result = pr.result
+                    var screenshotBase64 = pr.screenshotBase64
+
+                    // Error recovery for failed tools
+                    if !result.success {
+                        if let classified = errorRecovery.classifyToolFailure(toolName: pr.name, result: result) {
+                            errorRecovery.recordError(classified)
+                            if classified.isRetryable {
+                                if verbose { printColored("    🔄 Attempting recovery (\(classified.category))...", color: .yellow) }
+                                if let recovered = errorRecovery.attemptRecovery(
+                                    toolName: pr.name, input: pipelineToolCalls.first(where: { $0.id == pr.id })?.input ?? [:],
+                                    error: classified, executor: executor
+                                ) {
+                                    result = recovered.0
+                                    screenshotBase64 = recovered.1
+                                    if verbose { printColored("    ✓ Recovered via retry", color: .green) }
+                                }
+                            }
+                            if !result.success {
+                                let input = pipelineToolCalls.first(where: { $0.id == pr.id })?.input ?? [:]
+                                if let fallback = errorRecovery.executeFallback(
+                                    toolName: pr.name, input: input, executor: executor
+                                ) {
+                                    result = fallback.0
+                                    screenshotBase64 = fallback.1
+                                    if verbose { printColored("    ✓ Recovered via fallback", color: .green) }
+                                }
+                            }
+                        }
+                    }
+
+                    // Optimize result output to save tokens
+                    result = responseOptimizer.optimize(toolName: pr.name, result: result)
+
+                    // Also cache in CacheManager for predictive warming
+                    let input = pipelineToolCalls.first(where: { $0.id == pr.id })?.input ?? [:]
+                    cacheManager.put(toolName: pr.name, input: input, result: result, screenshotBase64: screenshotBase64)
+                    cacheManager.invalidate(forTool: pr.name)
+
+                    // Record in performance analyzer
+                    performanceAnalyzer.recordToolTiming(
+                        name: pr.name, durationMs: pr.durationMs,
+                        wasCached: pr.wasCached, wasParallel: strategy == .parallel
+                    )
+
+                    let statusIcon = result.success ? "✓" : "✗"
+                    let statusColor: ANSIColor = result.success ? .green : .red
+                    let cacheTag = pr.wasCached ? " ⚡cache" : ""
+                    printColored("    \(statusIcon) \(String(result.output.prefix(300)))\(cacheTag)", color: statusColor)
+
+                    if let base64 = screenshotBase64 {
+                        toolResults.append(.toolResultWithImage(
+                            toolUseId: pr.id, text: result.output,
+                            imageBase64: base64, mediaType: "image/jpeg"
+                        ))
+                        printColored("    📸 Screenshot sent to AI", color: .magenta)
+                    } else {
+                        toolResults.append(.toolResultText(toolUseId: pr.id, text: result.output))
+                    }
+                }
+
+                // Record pipeline stats
+                let pipelineStats = AsyncToolPipeline.computeStats(results: pipelineResults, tools: pipelineToolCalls)
+                if pipelineStats.savedMs > 0 {
+                    performanceAnalyzer.recordTimeSaved(ms: pipelineStats.savedMs)
+                    if verbose {
+                        printColored("    ⚡ Pipeline: \(pipelineStats.description)", color: .cyan)
+                    }
+                }
+            }
+
+            // Record iteration timing
+            let toolExecElapsed = Int((DispatchTime.now().uptimeNanoseconds - toolExecStart.uptimeNanoseconds) / 1_000_000)
+            let apiElapsedForIter = Int((toolExecStart.uptimeNanoseconds - apiStartTime.uptimeNanoseconds) / 1_000_000)
+            performanceAnalyzer.recordIteration(
+                iteration: iterations,
+                apiCallMs: apiElapsedForIter,
+                toolExecutionMs: toolExecElapsed,
+                toolCount: pendingToolCalls.count,
+                parallelCount: pipelineToolCalls.count,
+                cacheHits: pipelineToolCalls.isEmpty ? 0 : pipelineToolCalls.filter { tc in
+                    cacheManager.get(toolName: tc.name, input: tc.input) != nil
+                }.count
+            )
+
+            // Predictive cache warming (async, non-blocking)
+            if hasToolUse {
+                let predictions = orchestrator.predictNextTools(maxResults: 3)
+                if !predictions.isEmpty {
+                    Task {
+                        await self.cacheManager.warmCache(
+                            predictions: predictions, executor: self.executor,
+                            orchestrator: self.orchestrator
+                        )
+                    }
                 }
             }
 
@@ -409,6 +486,9 @@ final class AgentLoop {
 
         if verbose {
             printColored("  [Orchestrator] Cache: \(orchestrator.cacheHits)h/\(orchestrator.cacheHits + orchestrator.cacheMisses)t, Predictions: \(orchestrator.predictionsCorrect)/\(orchestrator.predictionsMade)", color: .gray)
+            printColored("  [Pipeline] \(cacheManager.statsDescription)", color: .gray)
+            printColored("  [Optimizer] \(responseOptimizer.statsDescription)", color: .gray)
+            printColored("  [Perf] \(performanceAnalyzer.shortStats)", color: .gray)
         }
 
         return finalResponse

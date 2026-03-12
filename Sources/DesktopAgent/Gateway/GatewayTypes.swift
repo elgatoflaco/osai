@@ -7,6 +7,7 @@ struct GatewayConfig: Codable {
     var whatsapp: WhatsAppGatewayConfig?
     var slack: SlackGatewayConfig?
     var discord: DiscordGatewayConfig?
+    var watch: WatchGatewayConfig?
 }
 
 struct TelegramGatewayConfig: Codable {
@@ -56,6 +57,31 @@ struct DiscordGatewayConfig: Codable {
     enum CodingKeys: String, CodingKey {
         case enabled, botToken = "bot_token", allowedGuilds = "allowed_guilds"
         case allowedUsers = "allowed_users", systemPrompt = "system_prompt"
+    }
+}
+
+struct WatchGatewayConfig: Codable {
+    var enabled: Bool
+    var port: Int?                     // HTTP server port (default: 8375)
+    var serviceName: String?           // Bonjour service name (default: "osai")
+    var allowedDevices: [String]?      // Device ID whitelist (nil = allow all)
+    var maxResponseLength: Int?        // Truncate responses for watch (default: 500)
+    var systemPrompt: String?
+    var healthTrackingEnabled: Bool?    // Allow watch to send health data (default: true)
+    var locationTrackingEnabled: Bool?  // Allow watch to send location data (default: true)
+    var complicationsEnabled: Bool?     // Serve complication data (default: true)
+    var shortcutsEnabled: Bool?         // Allow Siri shortcut triggers (default: true)
+
+    enum CodingKeys: String, CodingKey {
+        case enabled, port
+        case serviceName = "service_name"
+        case allowedDevices = "allowed_devices"
+        case maxResponseLength = "max_response_length"
+        case systemPrompt = "system_prompt"
+        case healthTrackingEnabled = "health_tracking_enabled"
+        case locationTrackingEnabled = "location_tracking_enabled"
+        case complicationsEnabled = "complications_enabled"
+        case shortcutsEnabled = "shortcuts_enabled"
     }
 }
 

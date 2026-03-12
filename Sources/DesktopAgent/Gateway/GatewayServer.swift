@@ -118,6 +118,14 @@ final class GatewayServer {
             adapters.append(adapter)
         }
 
+        if let watch = gatewayConfig.watch, watch.enabled {
+            let adapter = WatchGatewayAdapter(config: watch)
+            adapter.onMessage { [weak self] msg in
+                await self?.handleMessage(msg, adapter: adapter)
+            }
+            adapters.append(adapter)
+        }
+
         // Security: warn about missing whitelists
         checkSecurityWhitelists()
 
@@ -327,6 +335,11 @@ final class GatewayServer {
             if (discord.allowedUsers == nil || discord.allowedUsers?.isEmpty == true) &&
                (discord.allowedGuilds == nil || discord.allowedGuilds?.isEmpty == true) {
                 warnings.append("Discord: no allowed_users or allowed_guilds — ANYONE can talk to your bot")
+            }
+        }
+        if let watch = gatewayConfig.watch, watch.enabled {
+            if watch.allowedDevices == nil || watch.allowedDevices?.isEmpty == true {
+                warnings.append("Watch: no allowed_devices — ANY device on local network can send messages")
             }
         }
 

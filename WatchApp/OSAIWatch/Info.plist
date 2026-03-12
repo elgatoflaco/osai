@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleDisplayName</key>
+	<string>OSAI</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.osai.watchapp</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>MinimumOSVersion</key>
+	<string>10.0</string>
+	<key>WKApplication</key>
+	<true/>
+	<key>UIRequiredDeviceCapabilities</key>
+	<array>
+		<string>watch-companion</string>
+	</array>
+	<key>NSHealthShareUsageDescription</key>
+	<string>OSAI needs access to your health data to provide personalized insights and summaries.</string>
+	<key>NSHealthUpdateUsageDescription</key>
+	<string>OSAI can write workout and health data on your behalf.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>OSAI uses your location for geofenced actions and location-aware task suggestions.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>OSAI uses your location in the background to trigger geofenced agent actions.</string>
+	<key>NSSiriUsageDescription</key>
+	<string>OSAI uses Siri to let you control your agent with voice commands.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_osai._tcp</string>
+	</array>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>health-monitoring</string>
+		<string>location</string>
+		<string>remote-notification</string>
+	</array>
+</dict>
+</plist>

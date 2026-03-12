@@ -21,3 +21,4 @@ DerivedData/
 # Secrets
 .env
 *.key
+test-config/

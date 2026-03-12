@@ -437,6 +437,8 @@ struct DesktopAgentCLI {
                  gw?.slack != nil ? "users: \(gw?.slack?.allowedUsers?.count ?? 0)" : nil),
                 ("Discord", gw?.discord?.enabled ?? false,
                  gw?.discord != nil ? "users: \(gw?.discord?.allowedUsers?.count ?? 0)" : nil),
+                ("Watch", gw?.watch?.enabled ?? false,
+                 gw?.watch != nil ? "port: \(gw?.watch?.port ?? 8375), devices: \(gw?.watch?.allowedDevices?.count ?? 0)" : nil),
             ]
             for (name, enabled, detail) in platforms {
                 let icon = enabled ? "🟢" : "⚫"
@@ -447,7 +449,7 @@ struct DesktopAgentCLI {
 
             // Check if OpenClaw has gateways we could import
             let noneConfigured = (gw == nil) ||
-                (gw?.telegram == nil && gw?.whatsapp == nil && gw?.slack == nil && gw?.discord == nil)
+                (gw?.telegram == nil && gw?.whatsapp == nil && gw?.slack == nil && gw?.discord == nil && gw?.watch == nil)
             if noneConfigured {
                 let openclawPath = NSHomeDirectory() + "/.openclaw/openclaw.json"
                 if let data = FileManager.default.contents(atPath: openclawPath),
@@ -617,6 +619,36 @@ struct DesktopAgentCLI {
             } else {
                 printColored("  ✗ WhatsApp delivery failed", color: .red)
                 deliveryFailed = true
+            }
+
+        case "watch":
+            // Deliver via HTTP POST to watch gateway's pending queue
+            // The watch adapter accumulates responses that the watch polls for
+            guard let watch = fileConfig.gateways?.watch else {
+                printColored("  ✗ Watch not configured for delivery", color: .red)
+                DeliveryQueue.fail(id: pending.id)
+                return
+            }
+            let port = watch.port ?? 8375
+            do {
+                let url = URL(string: "http://localhost:\(port)/message")!
+                var request = URLRequest(url: url)
+                request.httpMethod = "POST"
+                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                request.httpBody = try JSONSerialization.data(withJSONObject: [
+                    "device_id": chatId, "text": message, "user_name": "osai-task"
+                ])
+                let (_, response) = try await URLSession.shared.data(for: request)
+                if let http = response as? HTTPURLResponse, http.statusCode >= 300 {
+                    printColored("  ✗ Watch delivery failed: HTTP \(http.statusCode)", color: .red)
+                    deliveryFailed = true
+                }
+            } catch {
+                printColored("  ✗ Watch delivery error: \(error)", color: .red)
+                deliveryFailed = true
+            }
+            if !deliveryFailed {
+                printColored("  📬 Delivered to Watch device \(chatId)", color: .green)
             }
 
         default:
@@ -1508,7 +1540,7 @@ struct DesktopAgentCLI {
           \(c)osai\(r)                            Interactive mode (full UI)
           \(c)osai\(r) "do something"              Single command (no banner, just runs)
           \(c)echo\(r) "task" \(c)| osai\(r)               Pipe input
-          \(c)osai gateway\(r)                    Start gateway (Telegram, WhatsApp, Slack, Discord)
+          \(c)osai gateway\(r)                    Start gateway (Telegram, WhatsApp, Slack, Discord, Watch)
 
         \(b)BASICS\(r)
           \(c)/help\(r)                          Show this help
@@ -1577,11 +1609,12 @@ struct DesktopAgentCLI {
 
         \(b)GATEWAY\(r) \(d)(multi-platform messaging bridge)\(r)
           \(c)osai gateway\(r)                  Start gateway server
-          \(d)Bridges Telegram, WhatsApp, Slack, Discord to osai.\(r)
+          \(d)Bridges Telegram, WhatsApp, Slack, Discord, Apple Watch to osai.\(r)
           \(d)Configure in ~/.desktop-agent/config.json under "gateways".\(r)
           \(d)Each platform gets its own agent session per chat.\(r)
           \(d)Messages are serialized per chat (no race conditions).\(r)
           \(d)Auto typing indicator while processing. Session persistence.\(r)
+          \(d)Watch: Bonjour auto-discovery on local network (port 8375).\(r)
 
         \(b)CLAUDE CODE DELEGATION\(r) \(d)(programming proxy)\(r)
           \(d)The agent delegates all programming tasks to Claude Code CLI.\(r)
