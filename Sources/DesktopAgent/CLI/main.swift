@@ -31,6 +31,18 @@ struct DesktopAgentCLI {
             return
         }
 
+        // --- Self-update: osai update ---
+        if args.contains("update") {
+            selfUpdate()
+            return
+        }
+
+        // --- Version: osai version / osai --version ---
+        if args.contains("version") || args.contains("--version") || args.contains("-V") {
+            Swift.print("osai v3.0 (build \(buildHash()))")
+            return
+        }
+
         let config = AgentConfig.load()
 
         // Install built-in plugins & skills
@@ -1615,6 +1627,127 @@ struct DesktopAgentCLI {
 
     static func printHint(_ text: String) {
         TerminalDisplay.shared.writeLine("\u{001B}[90m  \(text)\u{001B}[0m")
+    }
+
+    // MARK: - Self Update
+
+    static func selfUpdate() {
+        Swift.print("🔄 Actualizando osai...")
+
+        // Determine source directory
+        let srcDir = ProcessInfo.processInfo.environment["OSAI_SRC"] ?? "\(NSHomeDirectory())/.osai-src"
+
+        if !FileManager.default.fileExists(atPath: srcDir) {
+            Swift.print("📦 Clonando repo...")
+            let clone = Process()
+            clone.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+            clone.arguments = ["clone", "--quiet", "https://github.com/elgatoflaco/osai.git", srcDir]
+            try? clone.run()
+            clone.waitUntilExit()
+            guard clone.terminationStatus == 0 else {
+                Swift.print("❌ Error clonando el repositorio")
+                return
+            }
+        } else {
+            Swift.print("📦 Actualizando repo...")
+            let pull = Process()
+            pull.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+            pull.arguments = ["-C", srcDir, "pull", "--quiet"]
+            try? pull.run()
+            pull.waitUntilExit()
+            guard pull.terminationStatus == 0 else {
+                Swift.print("❌ Error actualizando el repositorio")
+                return
+            }
+        }
+
+        // Get new version info
+        let log = Process()
+        let logPipe = Pipe()
+        log.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        log.arguments = ["-C", srcDir, "log", "--oneline", "-1"]
+        log.standardOutput = logPipe
+        try? log.run()
+        log.waitUntilExit()
+        let commitMsg = String(data: logPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        Swift.print("  📝 \(commitMsg)")
+
+        // Build
+        Swift.print("🔨 Compilando (puede tardar 1-2 min)...")
+        let build = Process()
+        let buildPipe = Pipe()
+        build.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        build.arguments = ["swift", "build", "-c", "release"]
+        build.currentDirectoryURL = URL(fileURLWithPath: srcDir)
+        build.standardOutput = buildPipe
+        build.standardError = buildPipe
+        try? build.run()
+        build.waitUntilExit()
+
+        guard build.terminationStatus == 0 else {
+            let output = String(data: buildPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            Swift.print("❌ Build falló:")
+            Swift.print(output.suffix(500))
+            return
+        }
+
+        // Find binary
+        let binaryPath = srcDir + "/.build/release/DesktopAgent"
+        // Also check platform-specific path
+        let platformBinary = srcDir + "/.build/arm64-apple-macosx/release/DesktopAgent"
+        let actualBinary = FileManager.default.fileExists(atPath: binaryPath) ? binaryPath : platformBinary
+
+        guard FileManager.default.fileExists(atPath: actualBinary) else {
+            Swift.print("❌ Binario no encontrado")
+            return
+        }
+
+        // Install — try without sudo first, then with sudo
+        let installPath = "/usr/local/bin/osai"
+        let cp = Process()
+        cp.executableURL = URL(fileURLWithPath: "/bin/cp")
+        cp.arguments = [actualBinary, installPath]
+        try? cp.run()
+        cp.waitUntilExit()
+
+        if cp.terminationStatus != 0 {
+            // Need sudo
+            Swift.print("🔑 Necesita permisos de administrador...")
+            let sudo = Process()
+            sudo.executableURL = URL(fileURLWithPath: "/usr/bin/sudo")
+            sudo.arguments = ["cp", actualBinary, installPath]
+            try? sudo.run()
+            sudo.waitUntilExit()
+            guard sudo.terminationStatus == 0 else {
+                Swift.print("❌ Error instalando")
+                return
+            }
+        }
+
+        // Codesign
+        let sign = Process()
+        sign.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
+        sign.arguments = ["--force", "--sign", "-", installPath]
+        try? sign.run()
+        sign.waitUntilExit()
+
+        Swift.print("✅ osai actualizado!")
+    }
+
+    static func buildHash() -> String {
+        // Try to read git hash from embedded resource or use compile date
+        let srcDir = "\(NSHomeDirectory())/.osai-src"
+        let rev = Process()
+        let pipe = Pipe()
+        rev.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        rev.arguments = ["-C", srcDir, "rev-parse", "--short", "HEAD"]
+        rev.standardOutput = pipe
+        rev.standardError = FileHandle.nullDevice
+        try? rev.run()
+        rev.waitUntilExit()
+        let hash = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? "unknown"
+        return hash
     }
 
     // MARK: - Help
