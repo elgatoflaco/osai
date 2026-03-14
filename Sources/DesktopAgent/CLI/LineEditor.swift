@@ -95,7 +95,7 @@ final class LineEditor {
             "/help", "/quit", "/exit", "/clear", "/verbose",
             "/config", "/model", "/mcp", "/plugin", "/memory",
             "/program", "/improve", "/yolo", "/context", "/compact",
-            "/skill", "/task", "/gateway",
+            "/skill", "/task", "/watch", "/gateway", "/profile",
             "/apps", "/windows", "/screen", "/perms"
         ]
         self.subCompletions = [
@@ -107,7 +107,8 @@ final class LineEditor {
             "/program": ["show", "edit", "reset", "log", "prompt", "reset-prompt"],
             "/skill": ["list", "show", "delete"],
             "/task": ["list", "cancel"],
-            "/gateway": ["status", "import"]
+            "/gateway": ["status", "import"],
+            "/profile": ["list", "use", "show", "edit"]
         ]
     }
 

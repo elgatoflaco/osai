@@ -86,6 +86,8 @@ final class ContextManager {
     private(set) var lastOutputTokens: Int = 0
     private(set) var compactionCount: Int = 0
     private(set) var imagesStripped: Int = 0
+    private(set) var tokensSavedByCompaction: Int = 0
+    private(set) var lastCompactionSaved: Int = 0  // tokens saved in the most recent compaction
 
     let model: String
     let pricing: ModelPricing
@@ -107,6 +109,8 @@ final class ContextManager {
         lastOutputTokens = 0
         compactionCount = 0
         imagesStripped = 0
+        tokensSavedByCompaction = 0
+        lastCompactionSaved = 0
     }
 
     // MARK: - Track Usage
@@ -157,6 +161,40 @@ final class ContextManager {
         Date().timeIntervalSince(sessionStart)
     }
 
+    // MARK: - Token Estimation
+
+    /// Estimate token count for a base64 image.
+    /// Base64 encoding in the API request body contributes roughly 1 token per 4 chars.
+    /// A typical screenshot (1920x1080) is ~500K-1M base64 chars.
+    private func estimateImageTokens(_ base64Length: Int) -> Int {
+        return max(base64Length / 4, 1000)
+    }
+
+    /// Rough token estimate for a set of messages (4 chars ~ 1 token for text content)
+    func estimateMessageTokens(_ messages: [ClaudeMessage]) -> Int {
+        var total = 0
+        for msg in messages {
+            for content in msg.content {
+                switch content {
+                case .text(let text):
+                    total += text.count / 4
+                case .image(let source):
+                    total += estimateImageTokens(source.data.count)
+                case .toolUse(_, _, let input, _):
+                    let inputStr = input.map { "\($0.key):\($0.value)" }.joined()
+                    total += inputStr.count / 4 + 20
+                case .toolResult(_, let blocks):
+                    for block in blocks {
+                        if let text = block.text { total += text.count / 4 }
+                        if let src = block.source { total += estimateImageTokens(src.data.count) }
+                    }
+                }
+            }
+            total += 4 // message overhead (role, structure)
+        }
+        return total
+    }
+
     // MARK: - Image Stripping (Pre-compaction Optimization)
 
     /// Strip old screenshot/image blocks from conversation history.
@@ -185,18 +223,26 @@ final class ContextManager {
 
         var stripped = messages
         var strippedCount = 0
+        var estimatedTokensSaved = 0
 
         for i in indicesToStrip {
             let msg = stripped[i]
             let newContent: [ClaudeContent] = msg.content.map { content in
                 switch content {
-                case .image:
+                case .image(let source):
                     strippedCount += 1
+                    estimatedTokensSaved += estimateImageTokens(source.data.count)
                     return .text("[image previously sent — already processed]")
                 case .toolResult(let id, let blocks):
                     let hadImage = blocks.contains { $0.source != nil }
                     if hadImage {
                         strippedCount += 1
+                        // Estimate tokens saved from stripped image blocks
+                        for block in blocks {
+                            if let src = block.source {
+                                estimatedTokensSaved += estimateImageTokens(src.data.count)
+                            }
+                        }
                         // Keep text blocks, replace image blocks with placeholder
                         let textOnly = blocks.compactMap { $0.text }.joined(separator: "\n")
                         let placeholder = textOnly.isEmpty
@@ -213,6 +259,7 @@ final class ContextManager {
         }
 
         imagesStripped += strippedCount
+        tokensSavedByCompaction += estimatedTokensSaved
         return stripped
     }
 
@@ -224,6 +271,7 @@ final class ContextManager {
         systemPrompt: String
     ) async throws -> [ClaudeMessage] {
         compactionCount += 1
+        let preCompactionCount = messages.count
 
         // Step 1: Strip old images first (biggest win — can free 100K+ tokens instantly)
         let imageStripped = stripOldImages(from: messages, keepLast: 2)
@@ -232,15 +280,28 @@ final class ContextManager {
         let keepMessages = keepLastTurns * 3
 
         if imageStripped.count <= keepMessages {
+            lastCompactionSaved = 0
             return imageStripped
         }
 
+        // Step 2: Preserve the first user message (establishes original context/goal)
+        let firstUserMessage = imageStripped.first { $0.role == "user" }
+        let firstUserIndex = imageStripped.firstIndex { $0.role == "user" } ?? 0
+
+        // Split: old messages to summarize vs recent messages to keep
         let oldMessages = Array(imageStripped.prefix(imageStripped.count - keepMessages))
         let recentMessages = Array(imageStripped.suffix(keepMessages))
 
-        // Step 2: Build summary of old messages (text only, images already stripped)
+        // Estimate pre-compaction token count
+        let preTokenEstimate = estimateMessageTokens(oldMessages)
+
+        // Step 3: Build summary of old messages (text only, images already stripped)
+        // Skip the first user message since we preserve it separately
         var summaryParts: [String] = []
-        for msg in oldMessages {
+        for (idx, msg) in oldMessages.enumerated() {
+            // Skip the first user message — it will be preserved verbatim
+            if idx == firstUserIndex && msg.role == "user" { continue }
+
             for content in msg.content {
                 switch content {
                 case .text(let text):
@@ -267,8 +328,12 @@ final class ContextManager {
         let rawSummary = summaryParts.joined(separator: "\n")
 
         let summaryRequest = """
-        Summarize this conversation concisely. Focus on: key decisions, outcomes, current task state, user's goal.
-        Under 500 words. Factual and specific.
+        Summarize this conversation history concisely. Focus on:
+        1. The user's original goal and any sub-goals that emerged
+        2. Key decisions made and their rationale
+        3. Tools used and their outcomes (especially file paths, commands, errors)
+        4. Current task state — what has been done and what remains
+        Under 500 words. Be factual and specific. Include file paths and error messages verbatim.
 
         CONVERSATION:
         \(String(rawSummary.prefix(8000)))
@@ -279,7 +344,7 @@ final class ContextManager {
         do {
             let response = try await client.sendMessage(
                 messages: summaryMessages,
-                system: "You are a conversation summarizer. Output only the summary.",
+                system: "You are a conversation summarizer. Output only the summary, no preamble.",
                 tools: nil
             )
             if let usage = response.usage { recordUsage(usage) }
@@ -289,15 +354,45 @@ final class ContextManager {
             }.joined(separator: "\n")
 
             var compacted: [ClaudeMessage] = []
-            compacted.append(ClaudeMessage(role: "user", content: [.text("[CONVERSATION SUMMARY]\n\(summaryText)\n[END SUMMARY]")]))
-            compacted.append(ClaudeMessage(role: "assistant", content: [.text("Understood. Continuing from where we left off.")]))
+
+            // Preserve the first user message (original context)
+            if let firstMsg = firstUserMessage {
+                compacted.append(firstMsg)
+                compacted.append(ClaudeMessage(role: "assistant", content: [.text("Understood. Working on this.")]))
+            }
+
+            // Add the AI-generated summary of the middle conversation
+            compacted.append(ClaudeMessage(role: "user", content: [.text("[CONVERSATION SUMMARY — \(oldMessages.count) messages compacted]\n\(summaryText)\n[END SUMMARY]")]))
+            compacted.append(ClaudeMessage(role: "assistant", content: [.text("Understood. Continuing from where we left off with full context of what was done.")]))
+
+            // Append recent messages
             compacted.append(contentsOf: recentMessages)
+
+            // Track savings
+            let postTokenEstimate = estimateMessageTokens(compacted)
+            let saved = max(preTokenEstimate - postTokenEstimate, 0)
+            lastCompactionSaved = saved
+            tokensSavedByCompaction += saved
+
             return compacted
         } catch {
             var compacted: [ClaudeMessage] = []
+
+            // Even on failure, preserve the first user message
+            if let firstMsg = firstUserMessage {
+                compacted.append(firstMsg)
+                compacted.append(ClaudeMessage(role: "assistant", content: [.text("Understood.")]))
+            }
+
             compacted.append(ClaudeMessage(role: "user", content: [.text("[Earlier conversation compacted. \(oldMessages.count) messages summarized.]")]))
             compacted.append(ClaudeMessage(role: "assistant", content: [.text("Understood. Continuing with recent context.")]))
             compacted.append(contentsOf: recentMessages)
+
+            let postTokenEstimate = estimateMessageTokens(compacted)
+            let saved = max(preTokenEstimate - postTokenEstimate, 0)
+            lastCompactionSaved = saved
+            tokensSavedByCompaction += saved
+
             return compacted
         }
     }
@@ -338,11 +433,30 @@ final class ContextManager {
     }
 
     /// One-line cost summary for after each response
+    func consumeTurnSummary() -> String {
+        let r = "\u{001B}[0m"
+        let d = "\u{001B}[90m"
+        let g = "\u{001B}[32m"
+        let m = "\u{001B}[35m"
+        var summary = "\(d)↑\(fmtTokens(lastInputTokens)) ↓\(fmtTokens(lastOutputTokens)) · \(shortStatus) · \(g)\(fmtCost(sessionCost))\(r)"
+        if lastCompactionSaved > 0 {
+            summary += " \(m)🗜 -\(fmtTokens(lastCompactionSaved))\(r)"
+            lastCompactionSaved = 0  // Reset after displaying
+        }
+        return summary
+    }
+
+    /// One-line cost summary (non-consuming, for read-only access)
     var turnSummary: String {
         let r = "\u{001B}[0m"
         let d = "\u{001B}[90m"
         let g = "\u{001B}[32m"
-        return "\(d)↑\(fmtTokens(lastInputTokens)) ↓\(fmtTokens(lastOutputTokens)) · \(shortStatus) · \(g)\(fmtCost(sessionCost))\(r)"
+        let m = "\u{001B}[35m"
+        var summary = "\(d)↑\(fmtTokens(lastInputTokens)) ↓\(fmtTokens(lastOutputTokens)) · \(shortStatus) · \(g)\(fmtCost(sessionCost))\(r)"
+        if lastCompactionSaved > 0 {
+            summary += " \(m)🗜 -\(fmtTokens(lastCompactionSaved))\(r)"
+        }
+        return summary
     }
 
     /// Full status for /context command (CodexBar-inspired)
@@ -385,7 +499,7 @@ final class ContextManager {
         lines.append("  \(b)Context Window\(r)")
         lines.append("  \(d)  \(fmtTokens(lastInputTokens)) / \(fmtTokens(contextWindow)) tokens (\(String(format: "%.1f", contextPercentage))%)\(r)")
         if compactionCount > 0 {
-            lines.append("  \(y)  Compacted \(compactionCount)x\(r)")
+            lines.append("  \(y)  Compacted \(compactionCount)x · saved ~\(fmtTokens(tokensSavedByCompaction)) tokens\(r)")
         }
         if imagesStripped > 0 {
             lines.append("  \(d)  Images stripped: \(imagesStripped)\(r)")
@@ -406,7 +520,7 @@ final class ContextManager {
 
     // MARK: - Formatters
 
-    private func fmtTokens(_ count: Int) -> String {
+    func fmtTokens(_ count: Int) -> String {
         if count >= 1_000_000 { return String(format: "%.1fM", Double(count) / 1_000_000.0) }
         if count >= 1_000 { return String(format: "%.1fK", Double(count) / 1_000.0) }
         return "\(count)"

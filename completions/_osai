@@ -5,6 +5,8 @@ _osai() {
     commands=(
         'update:Actualizar osai a la última versión'
         'version:Mostrar versión actual'
+        'run:Ejecutar un archivo script/macro (.md)'
+        'watch:Monitoreo periódico (ej: osai watch "check X" --interval 5m)'
         'gateway:Iniciar modo gateway (WhatsApp, Watch, etc.)'
     )
 
@@ -17,12 +19,32 @@ _osai() {
         '--verbose[Modo verbose]' \
         '-v[Modo verbose]' \
         '--model[Modelo a usar]:model:' \
+        '--profile[Perfil a usar]:profile:->profiles' \
         '--deliver[Entregar resultado a gateway]:target:' \
         '*::arg:->args'
 
     case "$state" in
         cmd)
             _describe 'command' commands
+            ;;
+        profiles)
+            local -a profile_list
+            if [[ -d ~/.desktop-agent/profiles ]]; then
+                profile_list=(${(f)"$(ls ~/.desktop-agent/profiles/*.md 2>/dev/null | xargs -I{} basename {} .md)"})
+            fi
+            _describe 'profile' profile_list
+            ;;
+        args)
+            case "${words[1]}" in
+                run)
+                    _files -g '*.md'
+                    ;;
+                watch)
+                    _arguments \
+                        '--interval[Check interval (30s, 5m, 1h)]:interval:' \
+                        '--every[Check interval (30s, 5m, 1h)]:interval:'
+                    ;;
+            esac
             ;;
     esac
 }

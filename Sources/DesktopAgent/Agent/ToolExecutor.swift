@@ -19,6 +19,7 @@ final class ToolExecutor {
     let memory: MemoryManager
     var mcpManager: MCPManager?
     var subAgentConfig: AgentConfig?
+    var approvalSystem: ApprovalSystem?
 
     /// Track the last app the agent interacted with (open_app, activate_app, get_ui_elements)
     /// so we can re-activate it before type_text/press_key to avoid typing in the terminal.
@@ -109,6 +110,16 @@ final class ToolExecutor {
             let lowerCmd = command.lowercased()
             if emailPatterns.contains(where: { lowerCmd.contains($0) }) || (lowerCmd.contains("email") && (lowerCmd.contains("export") || lowerCmd.contains("echo") || lowerCmd.contains("python"))) {
                 return (ToolResult(success: false, output: "⛔ Do NOT send email via shell. Use the send_email tool instead: send_email(to: \"address\", subject: \"subject\", body: \"body\"). This is simpler and more reliable.", screenshot: nil), nil)
+            }
+            // --- Dangerous command guard ---
+            // Block destructive commands unless yolo mode is active.
+            // Instead of blocking the thread for input (LineEditor is on another thread),
+            // we reject with a helpful message so the model can adjust.
+            if let matched = exe.matchesDangerousPattern(lowerCmd) {
+                let isYolo = exe.approvalSystem?.autoApprove ?? false
+                if !isYolo {
+                    return (ToolResult(success: false, output: "⚠️ Dangerous command detected: `\(command)`\nMatched pattern: \(matched)\n\nThis command could cause irreversible damage. Either:\n• Use a safer alternative\n• Ask the user to enable /yolo mode if they trust this action", screenshot: nil), nil)
+                }
             }
             return (exe.shell.execute(command: command, timeout: timeout), nil)
         }
@@ -392,6 +403,51 @@ final class ToolExecutor {
         }
 
         return handlers
+    }
+
+    // MARK: - Dangerous Command Detection
+
+    /// Patterns that match potentially destructive shell commands.
+    /// Each entry is (pattern, description) where the pattern is matched against the lowercased command.
+    private static let dangerousPatterns: [(pattern: String, description: String)] = [
+        // Destructive file operations
+        ("rm -rf", "recursive force delete"),
+        ("rm -r /", "recursive delete from root"),
+        ("rmdir", "remove directory"),
+        // Privilege escalation
+        ("sudo ", "elevated privileges"),
+        // Process killing
+        ("kill -9", "force kill process"),
+        ("killall", "kill all matching processes"),
+        // Disk/filesystem destruction
+        ("mkfs", "format filesystem"),
+        ("dd if=", "raw disk write"),
+        // Destructive git operations
+        ("git push --force", "force push (rewrites remote history)"),
+        ("git push -f ", "force push (rewrites remote history)"),
+        ("git reset --hard", "hard reset (discards uncommitted changes)"),
+        ("git clean -fd", "remove untracked files and directories"),
+        ("git clean -f", "remove untracked files"),
+        // SQL destruction
+        ("drop table", "drop database table"),
+        ("delete from", "delete database rows"),
+        ("truncate table", "truncate database table"),
+        // Permission changes
+        ("chmod 777", "world-writable permissions"),
+        ("chmod -r", "recursive permission change"),
+        // Device writes
+        ("> /dev/", "write to device file"),
+    ]
+
+    /// Check if a lowercased command matches any dangerous pattern.
+    /// Returns the matched pattern description, or nil if safe.
+    func matchesDangerousPattern(_ lowerCmd: String) -> String? {
+        for (pattern, description) in Self.dangerousPatterns {
+            if lowerCmd.contains(pattern) {
+                return description
+            }
+        }
+        return nil
     }
 
     // MARK: - Helpers

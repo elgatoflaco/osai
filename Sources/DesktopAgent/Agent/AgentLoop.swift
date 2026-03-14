@@ -22,6 +22,9 @@ final class AgentLoop {
     private var conversationHistory: [ClaudeMessage] = []
     private let verbose: Bool
 
+    // Consecutive tool failure tracking for error feedback
+    private var consecutiveFailures: (toolName: String, errorPrefix: String, count: Int) = ("", "", 0)
+
     // Gateway support
     var gatewayContext: GatewayDeliveryContext?
     var onStreamText: ((String) async -> Void)?
@@ -66,6 +69,7 @@ final class AgentLoop {
         self.executor.vision.maxWidth = config.maxScreenshotWidth
         self.executor.mcpManager = mcpManager
         self.executor.subAgentConfig = config
+        self.executor.approvalSystem = self.approval
     }
 
     /// Process input with optional images (vision)
@@ -149,13 +153,17 @@ final class AgentLoop {
 
             // Check if compaction needed before sending
             if context.needsCompaction && conversationHistory.count > 10 {
-                printColored("  📦 Compacting conversation history...", color: .magenta)
+                let preCount = conversationHistory.count
+                let preTokens = context.estimateMessageTokens(conversationHistory)
+                printColored("  🗜 Compacting context (\(preCount) messages, ~\(context.fmtTokens(preTokens)) tokens)...", color: .magenta)
                 conversationHistory = try await context.compactHistory(
                     messages: conversationHistory,
                     client: client,
                     systemPrompt: fullSystemPrompt
                 )
-                printColored("  ✓ Compacted to \(conversationHistory.count) messages", color: .green)
+                let postTokens = context.estimateMessageTokens(conversationHistory)
+                let saved = max(preTokens - postTokens, 0)
+                printColored("  ✓ Compacted: \(preCount) → \(conversationHistory.count) messages, saved ~\(context.fmtTokens(saved)) tokens", color: .green)
             }
 
             // Check spending limits before API call
@@ -218,7 +226,7 @@ final class AgentLoop {
                 case .text(let text):
                     if !text.isEmpty {
                         finalResponse += (finalResponse.isEmpty ? "" : "\n") + text
-                        printColored(text, color: .cyan)
+                        printWithPlanFormatting(text)
                         if let stream = onStreamText {
                             await stream(text)
                         }
@@ -264,7 +272,13 @@ final class AgentLoop {
                     let command = tc.input["command"]?.stringValue ?? ""
                     let timeout = tc.input["timeout"]?.intValue ?? 30
                     if timeout > 5 {
-                        let result = await executeShellWithStreaming(command: command, timeout: timeout)
+                        var result = await executeShellWithStreaming(command: command, timeout: timeout)
+                        if !result.success {
+                            let enhanced = enhanceToolError(toolName: tc.name, input: tc.input, error: result.output)
+                            result = ToolResult(success: false, output: enhanced, screenshot: result.screenshot)
+                        } else {
+                            resetConsecutiveFailures(toolName: tc.name)
+                        }
                         let statusIcon = result.success ? "✓" : "✗"
                         printColored("    \(statusIcon) \(String(result.output.prefix(300)))", color: result.success ? .green : .red)
                         toolResults.append(.toolResultText(toolUseId: tc.id, text: result.output))
@@ -412,12 +426,20 @@ final class AgentLoop {
                         }
                     }
 
+                    // Enhance failed tool results with contextual hints for self-correction
+                    let toolInput = pipelineToolCalls.first(where: { $0.id == pr.id })?.input ?? [:]
+                    if !result.success {
+                        let enhanced = enhanceToolError(toolName: pr.name, input: toolInput, error: result.output)
+                        result = ToolResult(success: false, output: enhanced, screenshot: result.screenshot)
+                    } else {
+                        resetConsecutiveFailures(toolName: pr.name)
+                    }
+
                     // Optimize result output to save tokens
                     result = responseOptimizer.optimize(toolName: pr.name, result: result)
 
                     // Also cache in CacheManager for predictive warming
-                    let input = pipelineToolCalls.first(where: { $0.id == pr.id })?.input ?? [:]
-                    cacheManager.put(toolName: pr.name, input: input, result: result, screenshotBase64: screenshotBase64)
+                    cacheManager.put(toolName: pr.name, input: toolInput, result: result, screenshotBase64: screenshotBase64)
                     cacheManager.invalidate(forTool: pr.name)
 
                     // Record in performance analyzer
@@ -1227,7 +1249,8 @@ final class AgentLoop {
             maxScreenshotWidth: config.maxScreenshotWidth,
             baseURL: pluginBaseURL,
             apiFormat: pluginProvider.format,
-            providerId: pluginProvider.id
+            providerId: pluginProvider.id,
+            profileName: config.profileName
         )
 
         let pluginClient = AIClient(config: pluginConfig)
@@ -1258,7 +1281,7 @@ final class AgentLoop {
                 case .text(let text):
                     if !text.isEmpty {
                         finalResponse += (finalResponse.isEmpty ? "" : "\n") + text
-                        printColored(text, color: .cyan)
+                        printWithPlanFormatting(text)
                     }
                 case .toolUse(let id, let name, let input, _):
                     hasToolUse = true
@@ -1275,7 +1298,16 @@ final class AgentLoop {
                         let subResult = await handleSubAgents(input: input, allTools: allTools)
                         toolResults.append(.toolResultText(toolUseId: id, text: subResult))
                     } else {
-                        let (result, base64) = executor.execute(toolName: name, input: input)
+                        var (result, base64) = executor.execute(toolName: name, input: input)
+
+                        // Enhance failed tool results with contextual hints
+                        if !result.success {
+                            let enhanced = enhanceToolError(toolName: name, input: input, error: result.output)
+                            result = ToolResult(success: false, output: enhanced, screenshot: result.screenshot)
+                        } else {
+                            resetConsecutiveFailures(toolName: name)
+                        }
+
                         let icon = result.success ? "✓" : "✗"
                         printColored("    \(icon) \(String(result.output.prefix(200)))", color: result.success ? .green : .red)
                         if let b64 = base64 {
@@ -1303,6 +1335,61 @@ final class AgentLoop {
 
         aside.stop()
         return finalResponse
+    }
+
+    // MARK: - Tool Error Enhancement
+
+    /// Enhance a failed tool result with contextual hints to help the agent self-correct.
+    /// Also tracks consecutive failures and escalates when the same tool fails repeatedly.
+    private func enhanceToolError(toolName: String, input: [String: AnyCodable], error: String) -> String {
+        var enhanced = error
+
+        // --- Contextual hints based on error content ---
+        if error.contains("command not found") {
+            enhanced += "\n\u{1F4A1} Hint: The command may not be installed. Try `which <command>` or install it with brew."
+        }
+        if error.lowercased().contains("permission denied") {
+            enhanced += "\n\u{1F4A1} Hint: Permission denied. Consider if you need sudo, or check file permissions with `ls -la`."
+        }
+        if error.contains("No such file") {
+            enhanced += "\n\u{1F4A1} Hint: File not found. Use `ls` or `find` to locate the correct path."
+        }
+        if toolName == "run_applescript" && error.contains("not allowed") {
+            enhanced += "\n\u{1F4A1} Hint: AppleScript permission denied. The app may need Accessibility permissions in System Settings."
+        }
+        if toolName == "click_element" && error.contains("not found") {
+            enhanced += "\n\u{1F4A1} Hint: UI element not found. Take a fresh screenshot to see current UI state, then use get_ui_elements to find the correct element."
+        }
+        if error.lowercased().contains("timeout") || error.lowercased().contains("timed out") {
+            enhanced += "\n\u{1F4A1} Hint: Command timed out. Try breaking it into smaller steps or increasing the timeout parameter."
+        }
+        if error.contains("connection refused") || error.contains("Could not resolve host") {
+            enhanced += "\n\u{1F4A1} Hint: Network error. Check if the service is running or the URL is correct."
+        }
+        if toolName == "run_shell" && error.contains("syntax error") {
+            enhanced += "\n\u{1F4A1} Hint: Shell syntax error. Check for unescaped quotes, missing brackets, or incorrect command structure."
+        }
+
+        // --- Consecutive failure tracking ---
+        let errorPrefix = String(error.prefix(100))
+        if consecutiveFailures.toolName == toolName && consecutiveFailures.errorPrefix == errorPrefix {
+            consecutiveFailures.count += 1
+        } else {
+            consecutiveFailures = (toolName: toolName, errorPrefix: errorPrefix, count: 1)
+        }
+
+        if consecutiveFailures.count >= 3 {
+            enhanced += "\n\u{26D4} This approach has failed \(consecutiveFailures.count) times. Try a completely different strategy."
+        }
+
+        return enhanced
+    }
+
+    /// Reset consecutive failure counter (call when a tool succeeds)
+    private func resetConsecutiveFailures(toolName: String) {
+        if consecutiveFailures.toolName == toolName {
+            consecutiveFailures = ("", "", 0)
+        }
     }
 
     // MARK: - Tool Detail (show what each tool is doing)
@@ -1418,4 +1505,56 @@ enum ANSIColor: String {
 
 func printColored(_ text: String, color: ANSIColor) {
     TerminalDisplay.shared.writeLine("\(color.rawValue)\(text)\(ANSIColor.reset.rawValue)")
+}
+
+/// Prints model text with special formatting for plan blocks and step progress.
+func printWithPlanFormatting(_ text: String) {
+    let hasPlan = text.contains("📋 Plan:") || text.contains("📋Plan:")
+    let hasProgress = text.contains("✅ Step") || text.contains("⏳ Step")
+
+    guard hasPlan || hasProgress else {
+        printColored(text, color: .cyan)
+        return
+    }
+
+    let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+    var inPlanBox = false
+    let boxWidth = 44
+    let bar = String(repeating: "─", count: boxWidth)
+
+    for line in lines {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+
+        if trimmed.hasPrefix("📋") {
+            TerminalDisplay.shared.writeLine("\(ANSIColor.magenta.rawValue)┌\(bar)┐\(ANSIColor.reset.rawValue)")
+            let padded = trimmed.padding(toLength: boxWidth - 1, withPad: " ", startingAt: 0)
+            TerminalDisplay.shared.writeLine("\(ANSIColor.bold.rawValue)\(ANSIColor.magenta.rawValue)│ \(padded)│\(ANSIColor.reset.rawValue)")
+            inPlanBox = true
+        } else if inPlanBox {
+            if let first = trimmed.first, first.isNumber || trimmed.hasPrefix("-") || trimmed.hasPrefix("*") {
+                let padded = trimmed.padding(toLength: boxWidth - 1, withPad: " ", startingAt: 0)
+                TerminalDisplay.shared.writeLine("\(ANSIColor.magenta.rawValue)│ \(ANSIColor.cyan.rawValue)\(padded)\(ANSIColor.magenta.rawValue)│\(ANSIColor.reset.rawValue)")
+            } else {
+                TerminalDisplay.shared.writeLine("\(ANSIColor.magenta.rawValue)└\(bar)┘\(ANSIColor.reset.rawValue)")
+                inPlanBox = false
+                if trimmed.hasPrefix("✅") {
+                    TerminalDisplay.shared.writeLine("\(ANSIColor.green.rawValue)\(line)\(ANSIColor.reset.rawValue)")
+                } else if trimmed.hasPrefix("⏳") {
+                    TerminalDisplay.shared.writeLine("\(ANSIColor.yellow.rawValue)\(line)\(ANSIColor.reset.rawValue)")
+                } else if !trimmed.isEmpty {
+                    printColored(line, color: .cyan)
+                }
+            }
+        } else if trimmed.hasPrefix("✅") {
+            TerminalDisplay.shared.writeLine("\(ANSIColor.green.rawValue)\(line)\(ANSIColor.reset.rawValue)")
+        } else if trimmed.hasPrefix("⏳") {
+            TerminalDisplay.shared.writeLine("\(ANSIColor.yellow.rawValue)\(line)\(ANSIColor.reset.rawValue)")
+        } else {
+            printColored(line, color: .cyan)
+        }
+    }
+
+    if inPlanBox {
+        TerminalDisplay.shared.writeLine("\(ANSIColor.magenta.rawValue)└\(bar)┘\(ANSIColor.reset.rawValue)")
+    }
 }

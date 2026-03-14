@@ -103,6 +103,7 @@ struct AgentConfig {
     let baseURL: String
     let apiFormat: String  // "anthropic" or "openai"
     let providerId: String
+    let profileName: String?
 
     static func load() -> AgentConfig {
         let fileConfig = AgentConfigFile.load()
@@ -146,8 +147,15 @@ struct AgentConfig {
         let baseURL = fileConfig.getBaseURL(provider: provider.id) ?? provider.defaultBaseURL
         let maxTokens = fileConfig.maxTokens ?? Int(ProcessInfo.processInfo.environment["DESKTOP_AGENT_MAX_TOKENS"] ?? "8192") ?? 8192
 
-        // Install default program.md if needed
+        // Install default program.md and profile templates if needed
         AgentProgram.installDefault()
+        ProfileManager.installDefaults()
+
+        // Determine active profile: CLI arg > none
+        var profileName: String? = nil
+        if let idx = args.firstIndex(of: "--profile"), idx + 1 < args.count {
+            profileName = args[idx + 1]
+        }
 
         // Build system prompt: custom override > default + program.md
         let systemPrompt: String
@@ -247,6 +255,24 @@ struct AgentConfig {
             Use this for: daily briefings, periodic checks, timed reminders, automated workflows.
             Always confirm with the user before scheduling. Use `list_tasks` to show existing tasks.
 
+            ## PLANNING
+            For complex tasks (multi-step, involving multiple tools, or requiring coordination):
+            1. First, output a brief plan with numbered steps
+            2. Then execute each step, marking progress
+            3. If a step fails, revise the plan
+
+            Format your plan as:
+            📋 Plan:
+            1. [step description]
+            2. [step description]
+            3. [step description]
+
+            Then as you work:
+            ✅ Step 1 complete: [what was done]
+            ⏳ Step 2: [working on...]
+
+            For simple tasks (single tool call, quick answers), skip the plan and just do it.
+
             ## SAFETY:
             Dangerous actions → approval system prompts user. YOLO mode (/yolo) skips confirmations.
             NEVER type passwords or credentials.
@@ -260,16 +286,23 @@ struct AgentConfig {
             }
         }
 
+        // Append profile content to system prompt
+        var finalPrompt = systemPrompt
+        if let name = profileName, let profileContent = ProfileManager.load(name: name) {
+            finalPrompt += "\n\n## ACTIVE PROFILE (\(name)):\n" + profileContent
+        }
+
         return AgentConfig(
             apiKey: apiKey,
             model: model,
             maxTokens: maxTokens,
-            systemPrompt: systemPrompt,
+            systemPrompt: finalPrompt,
             verbose: verbose,
             maxScreenshotWidth: fileConfig.maxScreenshotWidth ?? 1280,
             baseURL: baseURL,
             apiFormat: provider.format,
-            providerId: provider.id
+            providerId: provider.id,
+            profileName: profileName
         )
     }
 }

@@ -60,6 +60,49 @@ struct DesktopAgentCLI {
         let fileConfig = AgentConfigFile.load()
         mcpManager.startFromConfig(fileConfig)
 
+        // --- Script mode: osai run script.md ---
+        if args.count >= 3 && args[1] == "run" {
+            let scriptPath: String
+            let rawPath = (args[2] as NSString).expandingTildeInPath
+            if rawPath.hasPrefix("/") {
+                scriptPath = rawPath
+            } else {
+                scriptPath = FileManager.default.currentDirectoryPath + "/" + rawPath
+            }
+            guard FileManager.default.fileExists(atPath: scriptPath) else {
+                printColored("  Error: file not found: \(scriptPath)", color: .red)
+                return
+            }
+            do {
+                let contents = try String(contentsOfFile: scriptPath, encoding: .utf8)
+                guard !contents.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    printColored("  Error: script file is empty", color: .red)
+                    return
+                }
+                let agent = AgentLoop(config: config, mcpManager: mcpManager)
+                agent.approval.autoApprove = true
+                _ = try await agent.processUserInput(contents)
+            } catch {
+                printColored("  Error reading script: \(error.localizedDescription)", color: .red)
+            }
+            mcpManager.stopAll()
+            return
+        }
+
+        // --- Watch mode: osai watch "prompt" [--interval 5m] ---
+        if args.count >= 3 && args[1] == "watch" {
+            let interval = parseWatchInterval(args)
+            let prompt = args.dropFirst(2).filter { !$0.hasPrefix("--") }.joined(separator: " ")
+            guard !prompt.isEmpty else {
+                printColored("  Usage: osai watch \"check something\" [--interval 5m]", color: .yellow)
+                mcpManager.stopAll()
+                return
+            }
+            await runWatch(prompt: prompt, interval: interval, config: config, mcpManager: mcpManager)
+            mcpManager.stopAll()
+            return
+        }
+
         // --- Gateway mode: osai gateway ---
         if args.contains("gateway") {
             let gwConfig = fileConfig.gateways ?? GatewayConfig()
@@ -82,6 +125,7 @@ struct DesktopAgentCLI {
             if i == 0 { continue }
             if skipNext { skipNext = false; continue }
             if arg == "--model" { skipNext = true; continue }
+            if arg == "--profile" { skipNext = true; continue }
             if arg == "--verbose" || arg == "-v" { continue }
             if arg == "gateway" { continue }
             if arg == "--deliver" { skipNext = true; deliverTarget = args.count > i + 1 ? args[i + 1] : nil; continue }
@@ -144,7 +188,8 @@ struct DesktopAgentCLI {
 
         // Status line
         let providerName = AIProvider.find(id: config.providerId)?.name ?? config.providerId
-        printDim("  \(providerName) / \(config.model)")
+        let profileSuffix = config.profileName.map { " | profile: \($0)" } ?? ""
+        printDim("  \(providerName) / \(config.model)\(profileSuffix)")
 
         // Check permissions
         let acc = AccessibilityDriver()
@@ -306,7 +351,7 @@ struct DesktopAgentCLI {
                 activeAgent = nil
                 lineEditor.agentBusy = false
                 if agent.context.turnCount > 0 {
-                    TerminalDisplay.shared.writeLine("  \u{001B}[90m\(agent.context.turnSummary)\u{001B}[0m")
+                    TerminalDisplay.shared.writeLine("  \u{001B}[90m\(agent.context.consumeTurnSummary())\u{001B}[0m")
                 }
                 TerminalDisplay.shared.writeLine("")
             } catch let error as AgentError {
@@ -496,6 +541,10 @@ struct DesktopAgentCLI {
             handleTask(args: args)
             return .handled
 
+        // --- Profiles ---
+        case "/profile", "/profiles":
+            return handleProfile(args: args, config: &config)
+
         // --- Program / Self-Improvement ---
         case "/program":
             handleProgram(args: args)
@@ -515,12 +564,228 @@ struct DesktopAgentCLI {
             }
             return .handled
 
+        case "/watch":
+            guard !args.isEmpty else {
+                printColored("  Usage: /watch <prompt> [--interval 5m]", color: .yellow)
+                printDim("  Example: /watch check if there's a new email from X")
+                printDim("  Options: --interval 30s | 5m | 1h (default: 5m)")
+                return .handled
+            }
+            // Parse interval from args
+            var promptParts: [String] = []
+            var watchInterval: TimeInterval = 300
+            var skipNextArg = false
+            for (idx, arg) in args.enumerated() {
+                if skipNextArg { skipNextArg = false; continue }
+                if (arg == "--interval" || arg == "--every"), idx + 1 < args.count {
+                    let value = args[idx + 1]
+                    if value.hasSuffix("s"), let n = Double(value.dropLast()) { watchInterval = n }
+                    else if value.hasSuffix("m"), let n = Double(value.dropLast()) { watchInterval = n * 60 }
+                    else if value.hasSuffix("h"), let n = Double(value.dropLast()) { watchInterval = n * 3600 }
+                    else if let n = Double(value) { watchInterval = n }
+                    skipNextArg = true
+                    continue
+                }
+                promptParts.append(arg)
+            }
+            let watchPrompt = promptParts.joined(separator: " ")
+            guard !watchPrompt.isEmpty else {
+                printColored("  Error: no prompt provided", color: .red)
+                return .handled
+            }
+            agent.approval.autoApprove = true
+            let watchUnit = formatWatchInterval(watchInterval)
+            printColored("\n  \u{1F441} Watch mode: checking every \(watchUnit)", color: .cyan)
+            printDim("  \u{1F4CB} \(watchPrompt)")
+            printDim("  Type /quit or Ctrl+C to stop\n")
+            var watchIteration = 0
+            while true {
+                watchIteration += 1
+                let ts = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
+                printColored("  \u{23F1} [\(ts)] Check #\(watchIteration)...", color: .yellow)
+                do {
+                    let response = try await agent.processUserInput(watchPrompt)
+                    if !response.isEmpty { print(response) }
+                } catch {
+                    printColored("  \u{26A0} Error: \(error.localizedDescription)", color: .yellow)
+                }
+                printDim("  \u{1F4A4} Next check in \(watchUnit)...\n")
+                try? await Task.sleep(nanoseconds: UInt64(watchInterval * 1_000_000_000))
+            }
+
         case "/gateway":
             handleGateway(args: args)
             return .handled
 
         default:
             return .passthrough
+        }
+    }
+
+    // MARK: - Watch Mode
+
+    static func parseWatchInterval(_ args: [String]) -> TimeInterval {
+        for (i, arg) in args.enumerated() {
+            if (arg == "--interval" || arg == "--every"), i + 1 < args.count {
+                let value = args[i + 1]
+                if value.hasSuffix("s"), let n = Double(value.dropLast()) { return n }
+                if value.hasSuffix("m"), let n = Double(value.dropLast()) { return n * 60 }
+                if value.hasSuffix("h"), let n = Double(value.dropLast()) { return n * 3600 }
+                if let n = Double(value) { return n } // bare number = seconds
+            }
+        }
+        return 300 // default 5 minutes
+    }
+
+    static func formatWatchInterval(_ interval: TimeInterval) -> String {
+        if interval >= 3600 { return "\(Int(interval / 3600))h" }
+        if interval >= 60 { return "\(Int(interval / 60))m" }
+        return "\(Int(interval))s"
+    }
+
+    static func runWatch(prompt: String, interval: TimeInterval, config: AgentConfig, mcpManager: MCPManager) async {
+        let unit = formatWatchInterval(interval)
+
+        Swift.print("\u{001B}[36m\u{001B}[1m\u{1F441} Watch mode\u{001B}[0m: checking every \(unit)")
+        Swift.print("  \u{001B}[90m\u{1F4CB} \(prompt)\u{001B}[0m")
+        Swift.print("  \u{001B}[90mPress Ctrl+C to stop\u{001B}[0m\n")
+
+        let agent = AgentLoop(config: config, mcpManager: mcpManager)
+        agent.approval.autoApprove = true
+        var iteration = 0
+
+        while true {
+            iteration += 1
+            let timestamp = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
+            Swift.print("\u{001B}[33m\u{23F1} [\(timestamp)] Check #\(iteration)...\u{001B}[0m")
+
+            do {
+                let response = try await agent.processUserInput(prompt)
+                if !response.isEmpty {
+                    Swift.print(response)
+                }
+            } catch {
+                Swift.print("\u{001B}[33m\u{26A0} Error: \(error.localizedDescription)\u{001B}[0m")
+            }
+
+            Swift.print("  \u{001B}[90m\u{1F4A4} Next check in \(unit)...\u{001B}[0m\n")
+            try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
+        }
+    }
+
+    // MARK: - /profile command
+
+    static func handleProfile(args: [String], config: inout AgentConfig) -> CommandResult {
+        let sub = args.first ?? "list"
+
+        switch sub {
+        case "list":
+            let profiles = ProfileManager.listProfiles()
+            if profiles.isEmpty {
+                printDim("  No profiles found. Run the app once to install defaults.")
+                return .handled
+            }
+            printColored("\n  Profiles (~/.desktop-agent/profiles/):", color: .bold)
+            for name in profiles {
+                let active = (config.profileName == name) ? " \u{001B}[32m[active]\u{001B}[0m" : ""
+                printColored("    \(name)\(active)", color: .cyan)
+            }
+            if config.profileName == nil {
+                printDim("    (no profile active)")
+            }
+            print()
+            printDim("  /profile use <name>  — switch profile")
+            printDim("  /profile show        — show current profile content")
+            printDim("  /profile edit <name> — open in $EDITOR")
+            print()
+            return .handled
+
+        case "use":
+            guard args.count >= 2 else {
+                printColored("  Usage: /profile use <name>", color: .yellow)
+                let available = ProfileManager.listProfiles().joined(separator: ", ")
+                if !available.isEmpty { printDim("  Available: \(available)") }
+                return .handled
+            }
+            let name = args[1]
+            guard ProfileManager.exists(name: name) else {
+                printColored("  Profile '\(name)' not found.", color: .red)
+                let available = ProfileManager.listProfiles().joined(separator: ", ")
+                if !available.isEmpty { printDim("  Available: \(available)") }
+                return .handled
+            }
+            guard let profileContent = ProfileManager.load(name: name) else {
+                printColored("  Error loading profile '\(name)'.", color: .red)
+                return .handled
+            }
+
+            // Rebuild system prompt with the new profile
+            // Strip any existing profile section from the current prompt
+            var basePrompt = config.systemPrompt
+            if let range = basePrompt.range(of: "\n\n## ACTIVE PROFILE (") {
+                basePrompt = String(basePrompt[..<range.lowerBound])
+            }
+            let newPrompt = basePrompt + "\n\n## ACTIVE PROFILE (\(name)):\n" + profileContent
+
+            config = AgentConfig(
+                apiKey: config.apiKey,
+                model: config.model,
+                maxTokens: config.maxTokens,
+                systemPrompt: newPrompt,
+                verbose: config.verbose,
+                maxScreenshotWidth: config.maxScreenshotWidth,
+                baseURL: config.baseURL,
+                apiFormat: config.apiFormat,
+                providerId: config.providerId,
+                profileName: name
+            )
+            printColored("  Switched to profile: \(name)", color: .green)
+            return .reload
+
+        case "show":
+            let name = config.profileName ?? "default"
+            guard let content = ProfileManager.load(name: name) else {
+                printDim("  No active profile (or profile file missing).")
+                return .handled
+            }
+            printColored("\n  Profile: \(name)", color: .bold)
+            printDim("  Path: \(ProfileManager.path(for: name))")
+            print()
+            for line in content.components(separatedBy: "\n") {
+                printDim("    \(line)")
+            }
+            print()
+            return .handled
+
+        case "edit":
+            let name = args.count >= 2 ? args[1] : (config.profileName ?? "default")
+            let path = ProfileManager.path(for: name)
+
+            // Create file if it doesn't exist
+            if !FileManager.default.fileExists(atPath: path) {
+                try? FileManager.default.createDirectory(atPath: ProfileManager.profilesDir, withIntermediateDirectories: true)
+                try? "## Profile: \(name)\n\nAdd your custom instructions here.\n".write(toFile: path, atomically: true, encoding: .utf8)
+            }
+
+            let editor = ProcessInfo.processInfo.environment["EDITOR"] ?? "vim"
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+            process.arguments = [editor, path]
+            process.standardInput = FileHandle.standardInput
+            process.standardOutput = FileHandle.standardOutput
+            process.standardError = FileHandle.standardError
+            do {
+                try process.run()
+                process.waitUntilExit()
+                printColored("  Profile saved. Use /profile use \(name) to activate.", color: .green)
+            } catch {
+                printColored("  Error opening editor: \(error.localizedDescription)", color: .red)
+            }
+            return .handled
+
+        default:
+            printColored("  Usage: /profile [list|use <name>|show|edit <name>]", color: .yellow)
+            return .handled
         }
     }
 
@@ -1772,11 +2037,14 @@ struct DesktopAgentCLI {
           \(c)osai\(r)                            Interactive mode (full UI)
           \(c)osai\(r) "do something"              Single command (no banner, just runs)
           \(c)echo\(r) "task" \(c)| osai\(r)               Pipe input
+          \(c)osai watch\(r) "prompt" [--interval 5m]  Periodic monitoring mode
+          \(c)osai --profile\(r) coding "task"      Use a specific profile
           \(c)osai gateway\(r)                    Start gateway (Telegram, WhatsApp, Slack, Discord, Watch)
 
         \(b)BASICS\(r)
           \(c)/help\(r)                          Show this help
           \(c)/clear\(r)                         Clear conversation history
+          \(c)/watch\(r) <prompt> [--interval 5m]  Start periodic monitoring
           \(c)/quit\(r)                          Exit \(d)(also: /exit, /q, Ctrl+D)\(r)
 
         \(b)WHILE AGENT IS WORKING\(r) \(d)(aside)\(r)
@@ -1818,6 +2086,15 @@ struct DesktopAgentCLI {
           \(c)/yolo\(r)                          Toggle auto-approve all actions
           \(d)Context auto-compacts at 75% usage. Prompt shows ● with %.\(r)
 
+        \(b)PROFILES\(r) \(d)(system prompt presets)\(r)
+          \(c)/profile list\(r)                 List available profiles
+          \(c)/profile use\(r) <name>           Switch to a profile (reloads agent)
+          \(c)/profile show\(r)                 Show current profile content
+          \(c)/profile edit\(r) <name>          Open profile in $EDITOR
+          \(d)Profiles append extra instructions to the system prompt.\(r)
+          \(d)Store as markdown: ~/.desktop-agent/profiles/<name>.md\(r)
+          \(d)CLI flag: osai --profile coding "refactor this"\(r)
+
         \(b)SKILLS\(r) \(d)(contextual knowledge injection)\(r)
           \(c)/skill list\(r)                   List installed skills
           \(c)/skill show\(r) <name>            Show skill details & triggers
@@ -1838,6 +2115,13 @@ struct DesktopAgentCLI {
           \(c)/program prompt\(r)                Show custom system prompt
           \(c)/program reset\(r)                 Reset program to defaults
           \(c)/improve\(r) [focus]                Ask the agent to improve itself
+
+        \(b)WATCH\(r) \(d)(periodic monitoring)\(r)
+          \(c)osai watch\(r) "prompt" [--interval 5m]
+          \(c)/watch\(r) prompt [--interval 5m]
+          \(d)Runs the prompt periodically (default every 5 minutes).\(r)
+          \(d)Interval formats: 30s, 5m, 1h. Also: --every 30s\(r)
+          \(d)Auto-approves all actions. Press Ctrl+C to stop.\(r)
 
         \(b)GATEWAY\(r) \(d)(multi-platform messaging bridge)\(r)
           \(c)osai gateway\(r)                  Start gateway server
@@ -1958,6 +2242,7 @@ struct DesktopAgentCLI {
           osai "open Safari"             Single command (headless, just runs)
           osai --model openai/gpt-4o "translate this"
           echo "list my files" | osai    Pipe input
+          osai watch "check X" --interval 5m   Periodic monitoring
           osai gateway                   Start multi-platform gateway
           osai --deliver <platform> <chatId> "task output"
 
