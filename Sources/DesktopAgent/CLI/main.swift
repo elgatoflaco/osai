@@ -1634,10 +1634,18 @@ struct DesktopAgentCLI {
     static func selfUpdate() {
         Swift.print("🔄 Actualizando osai...")
 
-        // Determine source directory
-        let srcDir = ProcessInfo.processInfo.environment["OSAI_SRC"] ?? "\(NSHomeDirectory())/.osai-src"
+        // Determine source directory — check multiple locations
+        let candidates = [
+            ProcessInfo.processInfo.environment["OSAI_SRC"],
+            "\(NSHomeDirectory())/Sites/osai",
+            "\(NSHomeDirectory())/.osai-src"
+        ].compactMap { $0 }
 
-        if !FileManager.default.fileExists(atPath: srcDir) {
+        let srcDir = candidates.first(where: { dir in
+            FileManager.default.fileExists(atPath: "\(dir)/Package.swift")
+        }) ?? candidates.last!
+
+        if !FileManager.default.fileExists(atPath: "\(srcDir)/Package.swift") {
             Swift.print("📦 Clonando repo...")
             let clone = Process()
             clone.executableURL = URL(fileURLWithPath: "/usr/bin/git")
@@ -1649,7 +1657,7 @@ struct DesktopAgentCLI {
                 return
             }
         } else {
-            Swift.print("📦 Actualizando repo...")
+            Swift.print("📦 Actualizando desde \(srcDir)...")
             let pull = Process()
             pull.executableURL = URL(fileURLWithPath: "/usr/bin/git")
             pull.arguments = ["-C", srcDir, "pull", "--quiet"]
