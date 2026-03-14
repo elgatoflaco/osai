@@ -54,7 +54,15 @@ struct MCPToolInfo {
                     let type = propDict["type"] as? String ?? "string"
                     let desc = propDict["description"] as? String
                     let enumVals = propDict["enum"] as? [String]
-                    properties[key] = PropertySchema(type: type, description: desc, enumValues: enumVals)
+                    var items: ItemsSchema? = nil
+                    if type == "array", let itemsDict = propDict["items"] as? [String: Any] {
+                        items = ItemsSchema(
+                            type: itemsDict["type"] as? String ?? "string",
+                            description: itemsDict["description"] as? String,
+                            enumValues: itemsDict["enum"] as? [String]
+                        )
+                    }
+                    properties[key] = PropertySchema(type: type, description: desc, enumValues: enumVals, items: items)
                 }
             }
         }
@@ -122,13 +130,13 @@ struct AIProvider {
             id: "openai", name: "OpenAI",
             defaultBaseURL: "https://api.openai.com/v1/chat/completions",
             format: "openai",
-            models: ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "o1", "o1-mini", "o3-mini"]
+            models: ["gpt-4.1-nano", "gpt-4.1-mini", "gpt-4.1", "gpt-4o", "gpt-4o-mini", "gpt-5", "o3-mini"]
         ),
         AIProvider(
             id: "google", name: "Google Gemini",
             defaultBaseURL: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
             format: "openai",
-            models: ["gemini-2.0-flash", "gemini-2.0-pro", "gemini-1.5-pro"]
+            models: ["gemini-3-flash-preview", "gemini-3.1-flash-lite-preview", "gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash"]
         ),
         AIProvider(
             id: "groq", name: "Groq",
@@ -146,7 +154,32 @@ struct AIProvider {
             id: "openrouter", name: "OpenRouter",
             defaultBaseURL: "https://openrouter.ai/api/v1/chat/completions",
             format: "openai",
-            models: ["anthropic/claude-3.5-sonnet", "openai/gpt-4o", "google/gemini-pro-1.5", "meta-llama/llama-3.1-405b-instruct"]
+            models: [
+                // Best for agents — cheap + great tool use
+                "minimax/minimax-m2.5",
+                "minimax/minimax-m2.1",
+                // Chinese models — top tier, very cheap
+                "deepseek/deepseek-r1",
+                "deepseek/deepseek-chat-v3.1",
+                "deepseek/deepseek-v3.2-speciale",
+                "qwen/qwen3.5-397b-a17b",
+                "qwen/qwen3.5-plus-02-15",
+                "qwen/qwen3.5-flash-02-23",
+                "qwen/qwen3-max-thinking",
+                "qwen/qwen3-coder-next",
+                "moonshotai/kimi-k2.5",
+                // Strong open-source
+                "meta-llama/llama-4-maverick",
+                "meta-llama/llama-4-scout",
+                "microsoft/phi-4-reasoning-plus",
+                // Premium
+                "anthropic/claude-sonnet-4.6",
+                "anthropic/claude-opus-4.6",
+                "openai/gpt-5.4-pro",
+                "openai/gpt-4o",
+                "google/gemini-3.1-pro-preview",
+                "google/gemini-2.5-flash-preview",
+            ]
         ),
         AIProvider(
             id: "deepseek", name: "DeepSeek",
@@ -166,7 +199,7 @@ struct AIProvider {
         known.first { $0.id == id }
     }
 
-    /// Parse "provider/model" format, e.g. "openai/gpt-4o" or just "claude-sonnet-4-20250514"
+    /// Parse "provider/model" format, e.g. "openai/gpt-4o" or "openrouter/anthropic/claude-3.5-sonnet"
     static func resolve(modelString: String) -> (provider: AIProvider, model: String)? {
         if modelString.contains("/") {
             let parts = modelString.split(separator: "/", maxSplits: 1)
@@ -175,6 +208,7 @@ struct AIProvider {
             if let provider = find(id: providerId) {
                 return (provider, model)
             }
+            // If first part isn't a known provider, try the full string as model auto-detect
         }
         // Auto-detect provider from model name
         for provider in known {

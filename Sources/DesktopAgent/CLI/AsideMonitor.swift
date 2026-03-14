@@ -15,10 +15,27 @@ final class AsideMonitor {
     private var monitorThread: Thread?
     private var hasShownTip = false
 
+    /// When true, stdin is owned by LineEditor — AsideMonitor won't read from it.
+    /// Set this in chat mode where LineEditor runs continuously.
+    var disabled = false
+
+    /// Messages queued as next prompts (typed while agent was busy, after agent finishes)
+    /// First message typed while agent works = aside (injected mid-task)
+    /// Messages typed AFTER agent finishes but before prompt shows = next prompts
+    private var queuedPrompts: [String] = []
+    private let queueLock = NSLock()
+
+    /// Dequeue the next prompt (if any were typed while agent was finishing)
+    func dequeueNextPrompt() -> String? {
+        queueLock.lock()
+        defer { queueLock.unlock() }
+        return queuedPrompts.isEmpty ? nil : queuedPrompts.removeFirst()
+    }
+
     /// Start watching stdin for user input in a background thread.
     /// Call this when the agent loop starts processing.
     func start() {
-        guard !isMonitoring else { return }
+        guard !isMonitoring, !disabled else { return }
         isMonitoring = true
 
         if !hasShownTip {
@@ -36,14 +53,21 @@ final class AsideMonitor {
         thread.start()
     }
 
-    /// Stop monitoring. Waits for the background thread to finish
-    /// so it doesn't conflict with LineEditor's stdin reads.
+    /// Stop monitoring. Any pending asides that weren't consumed become queued prompts.
     func stop() {
         guard isMonitoring else { return }
         isMonitoring = false
-        // Wait a bit for the poll() timeout to expire and thread to exit
+        // Wait for the poll() timeout to expire and thread to exit
         Thread.sleep(forTimeInterval: 0.15)
         monitorThread = nil
+
+        // Move unconsumed asides to the prompt queue so they auto-process next
+        let remaining = drain()
+        if !remaining.isEmpty {
+            queueLock.lock()
+            queuedPrompts.append(contentsOf: remaining)
+            queueLock.unlock()
+        }
     }
 
     /// Check if there are pending asides. Returns all pending messages and clears them.

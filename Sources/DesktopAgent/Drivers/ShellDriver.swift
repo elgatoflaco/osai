@@ -8,6 +8,21 @@ final class ShellDriver {
     /// Set this before calling executeAsync() to get real-time output streaming.
     var onOutputStream: ((String) -> Void)?
 
+    /// Track active process so it can be killed on cancel.
+    /// Uses nonisolated(unsafe) instead of NSLock because killActiveProcess() is called
+    /// from a signal handler — NSLock would deadlock if the signal interrupts the thread
+    /// while it holds the lock.
+    nonisolated(unsafe) private var activeProcess: Process?
+
+    /// Kill the currently running process (called from signal handler on Ctrl+C)
+    /// Must be async-signal-safe: no locks, no allocations, no Swift runtime calls.
+    func killActiveProcess() {
+        guard let proc = activeProcess, proc.isRunning else { return }
+        proc.terminate()
+        // Kill the entire process group
+        kill(-proc.processIdentifier, SIGKILL)
+    }
+
     // MARK: - Async Execution (Non-blocking I/O)
 
     /// Execute a shell command with non-blocking I/O.
@@ -26,6 +41,7 @@ final class ShellDriver {
 
         do {
             try process.run()
+            activeProcess = process
         } catch {
             return ToolResult(success: false, output: "Failed to run command: \(error.localizedDescription)", screenshot: nil)
         }
@@ -88,6 +104,7 @@ final class ShellDriver {
         // Wait for process to exit (readers continue draining in parallel)
         process.waitUntilExit()
         timer.cancel()
+        activeProcess = nil
 
         // Wait for readers to finish draining any remaining buffered output
         readGroup.wait()

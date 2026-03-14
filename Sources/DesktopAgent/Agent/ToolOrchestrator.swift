@@ -161,10 +161,10 @@ final class ToolOrchestrator {
         // Update frequency
         patterns.frequency[name, default: 0] += 1
 
-        // Update average duration (running average)
+        // Update average duration (running average, overflow-safe)
         let oldAvg = patterns.avgDuration[name] ?? durationMs
-        let count = patterns.frequency[name] ?? 1
-        patterns.avgDuration[name] = oldAvg + (durationMs - oldAvg) / count
+        let count = max(patterns.frequency[name] ?? 1, 1)
+        patterns.avgDuration[name] = oldAvg &+ (durationMs &- oldAvg) / count
 
         // Update bigrams
         if currentSession.count >= 2 {

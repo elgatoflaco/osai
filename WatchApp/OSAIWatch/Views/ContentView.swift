@@ -216,6 +216,7 @@ struct ContentView: View {
 
 struct MessageRow: View {
     let message: WatchMessage
+    @State private var expanded = false
 
     var body: some View {
         VStack(alignment: message.isFromAgent ? .leading : .trailing, spacing: 2) {
@@ -239,7 +240,7 @@ struct MessageRow: View {
 
             Text(message.text)
                 .font(.caption2)
-                .lineLimit(4)
+                .lineLimit(expanded ? nil : 4)
                 .multilineTextAlignment(message.isFromAgent ? .leading : .trailing)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
@@ -249,6 +250,11 @@ struct MessageRow: View {
                         : Color.green.opacity(0.2),
                     in: RoundedRectangle(cornerRadius: 8)
                 )
+                .onTapGesture {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        expanded.toggle()
+                    }
+                }
         }
         .frame(maxWidth: .infinity, alignment: message.isFromAgent ? .leading : .trailing)
     }

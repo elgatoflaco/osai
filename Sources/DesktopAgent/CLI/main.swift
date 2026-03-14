@@ -1,6 +1,20 @@
 import Foundation
 import AppKit
 
+// MARK: - Terminal-safe print override
+// Routes all print() through TerminalDisplay so output doesn't corrupt the
+// always-active LineEditor input line. When no editor is active, behaves
+// identically to Swift.print().
+
+func print(_ items: Any..., separator: String = " ", terminator: String = "\n") {
+    let text = items.map { String(describing: $0) }.joined(separator: separator)
+    if terminator == "\n" {
+        TerminalDisplay.shared.writeLine(text)
+    } else {
+        TerminalDisplay.shared.writeInline(text + terminator)
+    }
+}
+
 // MARK: - Desktop Agent CLI
 
 @main
@@ -142,25 +156,82 @@ struct DesktopAgentCLI {
 
     // MARK: - Interactive Mode
 
+    // These must be nonisolated(unsafe) for signal handler / cross-thread access
+    nonisolated(unsafe) static var activeAgent: AgentLoop?
+    nonisolated(unsafe) static var lastSigintNs: UInt64 = 0
+    nonisolated(unsafe) static var savedTermios = termios()
+    nonisolated(unsafe) static var hasSavedTermios = false
+    // Chat mode: mutable state accessible from input thread
+    nonisolated(unsafe) static var chatConfig: AgentConfig?
+    nonisolated(unsafe) static var chatAgent: AgentLoop?
+
+    /// Save terminal state before entering raw mode (called once at interactive start)
+    static func saveTerminal() {
+        tcgetattr(STDIN_FILENO, &savedTermios)
+        hasSavedTermios = true
+    }
+
+    /// Restore terminal to normal mode (safe to call from signal handler)
+    static func restoreTerminal() {
+        if hasSavedTermios {
+            tcsetattr(STDIN_FILENO, TCSAFLUSH, &savedTermios)
+        }
+    }
+
     static func runInteractive(config: AgentConfig, mcpManager: MCPManager) async {
         var currentConfig = config
         var agent = AgentLoop(config: currentConfig, mcpManager: mcpManager)
 
-        while true {
-            let prompt = buildPrompt(config: currentConfig, context: agent.context)
+        // Publish state for input thread prompt building
+        chatConfig = currentConfig
+        chatAgent = agent
 
-            guard let inputResult = lineEditor.readInput(prompt: prompt) else {
-                // EOF (Ctrl+D)
-                print()
-                printColored("  Goodbye!", color: .gray)
-                return
+        // Disable AsideMonitor — LineEditor owns stdin in chat mode
+        agent.aside.disabled = true
+
+        // Save terminal state before anything touches raw mode
+        saveTerminal()
+
+        // SIGINT handler — safety net for when raw mode is off between readInput calls.
+        // Primary Ctrl+C handling is in LineEditor (ISIG off, catches \u{03} directly).
+        signal(SIGINT) { _ in
+            let nowNs = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
+            if DesktopAgentCLI.activeAgent != nil {
+                let elapsed = nowNs - DesktopAgentCLI.lastSigintNs
+                if DesktopAgentCLI.lastSigintNs != 0 && elapsed < 2_000_000_000 {
+                    DesktopAgentCLI.restoreTerminal()
+                    _exit(1)
+                }
+                DesktopAgentCLI.lastSigintNs = nowNs
+                DesktopAgentCLI.activeAgent?.cancel()
+                let msg = "\n\u{001B}[33m  ⚠ Cancelling... (Ctrl+C again to force quit)\u{001B}[0m\n"
+                _ = msg.withCString { ptr in write(STDOUT_FILENO, ptr, strlen(ptr)) }
+            } else {
+                DesktopAgentCLI.restoreTerminal()
+                _exit(0)
             }
+        }
+
+        // Start continuous input on a dedicated thread.
+        // The LineEditor stays active between messages — user can always type.
+        // While agent processes, output streams above via TerminalDisplay coordination.
+        let inputStream = lineEditor.startContinuousInput(promptBuilder: {
+            if DesktopAgentCLI.lineEditor.agentBusy {
+                // Minimal prompt while agent works — user can still type asides
+                return "  \u{001B}[90m···\u{001B}[0m "
+            }
+            let cfg = DesktopAgentCLI.chatConfig ?? config
+            let ctx = DesktopAgentCLI.chatAgent?.context
+            return buildPrompt(config: cfg, context: ctx)
+        })
+
+        for await inputResult in inputStream {
             let input = inputResult.text
             if input.isEmpty && !inputResult.hasImages { continue }
 
             // Show paste summary if large paste was collapsed
             if inputResult.pastedLines > 0 {
-                printDim("  📋 Pasted \(inputResult.pastedLines) lines (\(input.count) chars)")
+                TerminalDisplay.shared.writeLine("  \u{001B}[90m📋 Pasted \(inputResult.pastedLines) lines (\(input.count) chars)\u{001B}[0m")
             }
 
             // Show image attachment info
@@ -168,25 +239,30 @@ struct DesktopAgentCLI {
                 let filename = (img.path as NSString).lastPathComponent
                 let size = (try? FileManager.default.attributesOfItem(atPath: img.path)[.size] as? Int) ?? 0
                 let sizeStr = size > 1_000_000 ? "\(size / 1_000_000)MB" : "\(size / 1_000)KB"
-                printColored("  📎 \(filename) (\(sizeStr), \(img.mediaType))", color: .magenta)
+                TerminalDisplay.shared.writeLine("  \u{001B}[35m📎 \(filename) (\(sizeStr), \(img.mediaType))\u{001B}[0m")
             }
 
             // --- Slash Commands ---
             if input.hasPrefix("/") && !inputResult.hasImages {
                 let result = await handleSlashCommand(input, agent: agent, config: &currentConfig, mcpManager: mcpManager)
                 if result == .quit { return }
-                if result == .handled { continue }
-                if result == .reload {
-                    agent = AgentLoop(config: currentConfig, mcpManager: mcpManager)
+                if result == .handled {
+                    chatConfig = currentConfig  // sync in case config changed
                     continue
                 }
-                // .passthrough — unknown slash command
+                if result == .reload {
+                    agent = AgentLoop(config: currentConfig, mcpManager: mcpManager)
+                    agent.aside.disabled = true
+                    chatConfig = currentConfig
+                    chatAgent = agent
+                    continue
+                }
                 if result == .passthrough {
                     let suggestion = suggestCommand(input)
                     if let s = suggestion {
-                        printColored("  Unknown command. Did you mean \u{001B}[1m\(s)\u{001B}[0m\u{001B}[33m?\u{001B}[0m", color: .yellow)
+                        TerminalDisplay.shared.writeLine("  \u{001B}[33mUnknown command. Did you mean \u{001B}[1m\(s)\u{001B}[0m\u{001B}[33m?\u{001B}[0m")
                     } else {
-                        printColored("  Unknown command. Type /help for available commands.", color: .yellow)
+                        TerminalDisplay.shared.writeLine("  \u{001B}[33mUnknown command. Type /help for available commands.\u{001B}[0m")
                     }
                     continue
                 }
@@ -194,30 +270,47 @@ struct DesktopAgentCLI {
 
             // Check API key before sending
             if currentConfig.apiKey.isEmpty {
-                printColored("  No API key set.", color: .red)
-                printHint("Use: /config set-key \(currentConfig.providerId) YOUR_KEY")
+                TerminalDisplay.shared.writeLine("  \u{001B}[31mNo API key set.\u{001B}[0m")
+                TerminalDisplay.shared.writeLine("  \u{001B}[90mUse: /config set-key \(currentConfig.providerId) YOUR_KEY\u{001B}[0m")
                 continue
             }
 
             // Process with agent
             do {
-                print()
+                // Chat-style: echo user message with visual separator
+                TerminalDisplay.shared.writeLine("")
+                TerminalDisplay.shared.writeLine("\u{001B}[90m  ─────────────────────────────────────────\u{001B}[0m")
+                TerminalDisplay.shared.writeLine("  \u{001B}[1m❯\u{001B}[0m \(input)")
+                TerminalDisplay.shared.writeLine("")
+
+                activeAgent = agent
+                lineEditor.agentBusy = true
+                agent.resetCancel()
                 if inputResult.hasImages {
                     _ = try await agent.processUserInputWithImages(input, images: inputResult.images)
                 } else {
                     _ = try await agent.processUserInput(input)
                 }
-                // Show token usage + cost after response
+                activeAgent = nil
+                lineEditor.agentBusy = false
                 if agent.context.turnCount > 0 {
-                    print("  \(agent.context.turnSummary)")
+                    TerminalDisplay.shared.writeLine("  \u{001B}[90m\(agent.context.turnSummary)\u{001B}[0m")
                 }
-                print()
+                TerminalDisplay.shared.writeLine("")
             } catch let error as AgentError {
-                printColored("\n  Error: \(error.description)\n", color: .red)
+                activeAgent = nil
+                lineEditor.agentBusy = false
+                TerminalDisplay.shared.writeLine("\n  \u{001B}[31mError: \(error.description)\u{001B}[0m\n")
             } catch {
-                printColored("\n  Error: \(error.localizedDescription)\n", color: .red)
+                activeAgent = nil
+                lineEditor.agentBusy = false
+                TerminalDisplay.shared.writeLine("\n  \u{001B}[31mError: \(error.localizedDescription)\u{001B}[0m\n")
             }
         }
+
+        // Stream ended (EOF)
+        TerminalDisplay.shared.writeLine("")
+        TerminalDisplay.shared.writeLine("  \u{001B}[90mGoodbye!\u{001B}[0m")
     }
 
     // MARK: - Prompt Builder
@@ -1517,13 +1610,11 @@ struct DesktopAgentCLI {
     // MARK: - Print Helpers
 
     static func printDim(_ text: String) {
-        print("\u{001B}[90m\(text)\u{001B}[0m")
-        fflush(stdout)
+        TerminalDisplay.shared.writeLine("\u{001B}[90m\(text)\u{001B}[0m")
     }
 
     static func printHint(_ text: String) {
-        print("\u{001B}[90m  \(text)\u{001B}[0m")
-        fflush(stdout)
+        TerminalDisplay.shared.writeLine("\u{001B}[90m  \(text)\u{001B}[0m")
     }
 
     // MARK: - Help
@@ -1730,7 +1821,7 @@ struct DesktopAgentCLI {
           osai --deliver <platform> <chatId> "task output"
 
         OPTIONS:
-          --model <provider/model>   Model to use (default: anthropic/claude-sonnet-4-20250514)
+          --model <provider/model>   Model to use (from config or override)
           --verbose, -v              Verbose output (show token counts, iterations)
           --help, -h                 Show this help
 
@@ -1743,22 +1834,28 @@ struct DesktopAgentCLI {
         SESSIONS: ~/.desktop-agent/sessions/
 
         GATEWAY PLATFORMS:
-          Telegram    Bot API long polling       (bot_token required)
-          Discord     WebSocket Gateway v10      (bot_token required)
-          Slack       Socket Mode WebSocket      (bot_token + app_token required)
           WhatsApp    wacli CLI polling           (wacli auth required)
+          Discord     WebSocket Gateway v10      (bot_token required)
+          Telegram    Bot API long polling       (bot_token required)
+          Slack       Socket Mode WebSocket      (bot_token + app_token required)
+          Watch       HTTP + Bonjour             (Apple Watch companion app)
+
+        MCP SERVERS:
+          /mcp add <name> <command> [args]    Add external tool server
+          /mcp list                           Show active servers
 
         FIRST RUN:
-          osai
-          /config set-key anthropic sk-ant-...
-          /config import-openclaw
+          1. Get an API key from https://openrouter.ai ($1 free credit)
+          2. osai
+          3. /config set-key openrouter sk-or-...
+          4. /model use openrouter/minimax/minimax-m2.5
 
         EXAMPLES:
           osai "take a screenshot and describe what you see"
           osai "open Finder and organize my Desktop"
           osai "create an SVG logo for my startup"
           osai "every day at 9am check my email and summarize"
-          osai gateway    # Start Telegram/Discord/Slack/WhatsApp bridge
+          osai gateway    # Start WhatsApp/Discord/Telegram/Watch bridge
         """)
     }
 }

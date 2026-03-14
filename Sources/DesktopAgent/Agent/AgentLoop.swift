@@ -26,6 +26,17 @@ final class AgentLoop {
     var gatewayContext: GatewayDeliveryContext?
     var onStreamText: ((String) async -> Void)?
 
+    // Cancellation support
+    var isCancelled = false
+    func cancel() {
+        isCancelled = true
+        // Kill any running shell process immediately
+        executor.shell.killActiveProcess()
+        // Interrupt any blocking MCP tool calls
+        mcpManager.interruptActiveCalls()
+    }
+    func resetCancel() { isCancelled = false }
+
     var currentHistory: [ClaudeMessage] { conversationHistory }
 
     func restoreHistory(_ history: [ClaudeMessage]) {
@@ -117,6 +128,13 @@ final class AgentLoop {
         let allTools = ToolDefinitions.allTools + mcpManager.getClaudeTools()
 
         while iterations < maxIterations {
+            // Check cancellation
+            if isCancelled {
+                printColored("\n  ⚠ Task cancelled by user", color: .yellow)
+                isCancelled = false
+                return finalResponse
+            }
+
             iterations += 1
 
             if verbose {
@@ -206,10 +224,16 @@ final class AgentLoop {
                         }
                     }
 
-                case .toolUse(let id, let name, let input):
+                case .toolUse(let id, let name, let input, _):
                     hasToolUse = true
                     let icon = toolIcon(name)
-                    printColored("  \(icon) \(name)", color: .yellow)
+                    let detail = toolDetail(name: name, input: input)
+                    if detail.isEmpty {
+                        printColored("  \(icon) \(name)", color: .yellow)
+                    } else {
+                        printColored("  \(icon) \(name)", color: .yellow)
+                        printColored("    \(detail)", color: .gray)
+                    }
 
                     if verbose {
                         let inputDesc = input.map { "\($0.key): \($0.value.value)" }.joined(separator: ", ")
@@ -428,6 +452,13 @@ final class AgentLoop {
                 }
             }
 
+            // Check cancellation after tool execution
+            if isCancelled {
+                printColored("\n  ⚠ Task cancelled by user", color: .yellow)
+                isCancelled = false
+                return finalResponse
+            }
+
             // Record iteration timing
             let toolExecElapsed = Int((DispatchTime.now().uptimeNanoseconds - toolExecStart.uptimeNanoseconds) / 1_000_000)
             let apiElapsedForIter = Int((toolExecStart.uptimeNanoseconds - apiStartTime.uptimeNanoseconds) / 1_000_000)
@@ -460,7 +491,7 @@ final class AgentLoop {
             if hasToolUse {
                 // Collect tool names from this iteration for batching analysis
                 let toolsThisTurn = assistantContent.compactMap { c -> String? in
-                    if case .toolUse(_, let n, _) = c { return n }
+                    if case .toolUse(_, let n, _, _) = c { return n }
                     return nil
                 }
 
@@ -1229,7 +1260,7 @@ final class AgentLoop {
                         finalResponse += (finalResponse.isEmpty ? "" : "\n") + text
                         printColored(text, color: .cyan)
                     }
-                case .toolUse(let id, let name, let input):
+                case .toolUse(let id, let name, let input, _):
                     hasToolUse = true
                     printColored("  \(toolIcon(name)) \(name)", color: .yellow)
 
@@ -1274,6 +1305,59 @@ final class AgentLoop {
         return finalResponse
     }
 
+    // MARK: - Tool Detail (show what each tool is doing)
+
+    private func toolDetail(name: String, input: [String: AnyCodable]) -> String {
+        switch name {
+        case "run_shell":
+            let cmd = input["command"]?.stringValue ?? ""
+            return String(cmd.prefix(120))
+        case "run_applescript":
+            let script = input["script"]?.stringValue ?? ""
+            let firstLine = script.components(separatedBy: "\n").first ?? ""
+            return String(firstLine.prefix(100))
+        case "send_email":
+            let to = input["to"]?.stringValue ?? ""
+            let subj = input["subject"]?.stringValue ?? ""
+            return "→ \(to) | \(subj)"
+        case "open_app", "activate_app":
+            return input["name"]?.stringValue ?? ""
+        case "open_url":
+            return input["url"]?.stringValue ?? ""
+        case "click_element":
+            let x = input["x"]?.intValue ?? 0
+            let y = input["y"]?.intValue ?? 0
+            return "(\(x), \(y))"
+        case "type_text":
+            let text = input["text"]?.stringValue ?? ""
+            return String(text.prefix(80))
+        case "press_key":
+            return input["key"]?.stringValue ?? ""
+        case "read_file", "write_file", "list_directory", "file_info":
+            return input["path"]?.stringValue ?? ""
+        case "get_ui_elements":
+            return input["app_name"]?.stringValue ?? ""
+        case "save_memory":
+            return input["topic"]?.stringValue ?? ""
+        case "spotlight_search":
+            return input["query"]?.stringValue ?? ""
+        case "wait":
+            let s = input["seconds"]?.doubleValue ?? 1.0
+            return "\(s)s"
+        case "schedule_task":
+            return input["description"]?.stringValue ?? input["name"]?.stringValue ?? ""
+        default:
+            if name.hasPrefix("mcp_") {
+                // Show first meaningful param for MCP tools
+                let meaningful = input.first(where: { $0.key != "type" })
+                if let (k, v) = meaningful {
+                    return "\(k): \(String(describing: v.value).prefix(80))"
+                }
+            }
+            return ""
+        }
+    }
+
     // MARK: - Tool Icons
 
     private func toolIcon(_ name: String) -> String {
@@ -1312,6 +1396,7 @@ final class AgentLoop {
         case "cancel_task": return "🗑️"
         case "modify_config": return "⚙️"
         case "create_plugin": return "🔌"
+        case "send_email": return "✉️"
         default: return "⚡"
         }
     }
@@ -1332,6 +1417,5 @@ enum ANSIColor: String {
 }
 
 func printColored(_ text: String, color: ANSIColor) {
-    print("\(color.rawValue)\(text)\(ANSIColor.reset.rawValue)")
-    fflush(stdout)
+    TerminalDisplay.shared.writeLine("\(color.rawValue)\(text)\(ANSIColor.reset.rawValue)")
 }

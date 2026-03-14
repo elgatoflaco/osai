@@ -17,6 +17,9 @@ final class MCPClient {
     // Per-request timeout (overridable for slow tools)
     private let requestTimeout: TimeInterval
 
+    /// Set to true to interrupt a blocking readResponse() call
+    var interrupted = false
+
     var isRunning: Bool { process?.isRunning ?? false }
 
     init(serverName: String, config: MCPServerConfig, requestTimeout: TimeInterval = 30) {
@@ -65,32 +68,52 @@ final class MCPClient {
         self.stdin = stdinPipe.fileHandleForWriting
         self.stdout = stdoutPipe.fileHandleForReading
 
-        // Drain stderr on background thread to prevent pipe buffer deadlocks
+        // Capture stderr for diagnostics and to prevent pipe buffer deadlocks
+        var stderrChunks: [String] = []
+        let stderrLock = NSLock()
         let stderrHandle = stderrPipe.fileHandleForReading
         DispatchQueue.global(qos: .utility).async {
             while true {
                 let data = stderrHandle.availableData
                 if data.isEmpty { break }  // EOF — process exited
+                if let text = String(data: data, encoding: .utf8) {
+                    stderrLock.lock()
+                    stderrChunks.append(text)
+                    stderrLock.unlock()
+                }
             }
         }
 
-        // Initialize MCP handshake
-        let initParams: [String: Any] = [
-            "protocolVersion": "2024-11-05",
-            "capabilities": [String: Any](),
-            "clientInfo": [
-                "name": "DesktopAgent",
-                "version": "2.0"
+        // Initialize MCP handshake — if this fails, clean up the process
+        do {
+            let initParams: [String: Any] = [
+                "protocolVersion": "2024-11-05",
+                "capabilities": [String: Any](),
+                "clientInfo": [
+                    "name": "DesktopAgent",
+                    "version": "2.0"
+                ]
             ]
-        ]
 
-        let response = try sendRequest(method: "initialize", params: initParams)
+            let response = try sendRequest(method: "initialize", params: initParams)
 
-        // Send initialized notification
-        sendNotification(method: "notifications/initialized")
+            // Send initialized notification
+            sendNotification(method: "notifications/initialized")
 
-        if response.error != nil {
-            throw MCPError.initFailed(response.error?.message ?? "Unknown error")
+            if response.error != nil {
+                throw MCPError.initFailed(response.error?.message ?? "Unknown error")
+            }
+        } catch {
+            // Clean up process to prevent zombies
+            stderrLock.lock()
+            let stderr = stderrChunks.joined()
+            stderrLock.unlock()
+            stop()
+            // Include stderr in error message for diagnostics
+            if !stderr.isEmpty {
+                throw MCPError.initFailed("\(error) — stderr: \(stderr.prefix(500))")
+            }
+            throw error
         }
     }
 
@@ -203,11 +226,17 @@ final class MCPClient {
         let deadline = Date().addingTimeInterval(requestTimeout)
 
         while Date() < deadline {
+            // Check for interruption (Ctrl+C cancel)
+            if interrupted {
+                interrupted = false
+                throw MCPError.timeout
+            }
+
             // Use poll() to check if data is available without blocking
             var pfd = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
             let remaining = deadline.timeIntervalSinceNow
             let timeoutMs = max(0, Int32(remaining * 1000))
-            let ret = poll(&pfd, 1, min(timeoutMs, 500)) // check every 500ms max
+            let ret = poll(&pfd, 1, min(timeoutMs, 200)) // check every 200ms for faster cancel
 
             if ret > 0 && (pfd.revents & Int16(POLLIN)) != 0 {
                 // Data available — read it

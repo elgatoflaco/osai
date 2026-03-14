@@ -28,13 +28,25 @@ final class AgentConnection: ObservableObject, @unchecked Sendable {
     private var session: URLSession
     private let maxMessages = 50
 
+    // Connection stability
+    private var consecutiveFailures = 0
+    private let maxToleratedFailures = 5
+    private var isPollInFlight = false
+    private var isStatusInFlight = false
+    private var reconnectAttempts = 0
+
     // MARK: - Init
 
     init() {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 15
         config.timeoutIntervalForResource = 30
-        config.waitsForConnectivity = false
+        config.waitsForConnectivity = true  // Essential for watchOS — network goes through iPhone
+        config.allowsCellularAccess = true
+        config.allowsConstrainedNetworkAccess = true
+        config.allowsExpensiveNetworkAccess = true
+        config.urlCache = nil
+        config.requestCachePolicy = .reloadIgnoringLocalCacheData
         self.session = URLSession(configuration: config)
     }
 
@@ -54,7 +66,6 @@ final class AgentConnection: ObservableObject, @unchecked Sendable {
         // If we have a manual host, try direct connection first
         if let settings = settings, !settings.serverHost.isEmpty {
             var host = settings.serverHost
-            // Strip interface scope ID if present (e.g. "%en8")
             if let percentIndex = host.firstIndex(of: "%") {
                 host = String(host[host.startIndex..<percentIndex])
                 settings.serverHost = host
@@ -75,7 +86,7 @@ final class AgentConnection: ObservableObject, @unchecked Sendable {
             case .failed(let error):
                 Task { @MainActor in
                     self?.connectionState = .error
-                    self?.lastError = "Bonjour search failed: \(error)"
+                    self?.lastError = "Bonjour failed: \(error.localizedDescription)"
                     self?.scheduleReconnect()
                 }
             default:
@@ -86,8 +97,7 @@ final class AgentConnection: ObservableObject, @unchecked Sendable {
         nwBrowser?.browseResultsChangedHandler = { [weak self] results, changes in
             guard let self = self else { return }
             for result in results {
-                if case .service(let name, let type, let domain, _) = result.endpoint {
-                    // Resolve the endpoint by connecting to it
+                if case .service(_, _, _, _) = result.endpoint {
                     let connection = NWConnection(to: result.endpoint, using: .tcp)
                     connection.stateUpdateHandler = { @Sendable [weak self] state in
                         if case .ready = state {
@@ -101,24 +111,23 @@ final class AgentConnection: ObservableObject, @unchecked Sendable {
                                 case .name(let name, _): hostStr = name
                                 @unknown default: hostStr = "localhost"
                                 }
-                                // Strip interface scope ID (e.g. "%en8") from resolved address
                                 if let percentIndex = hostStr.firstIndex(of: "%") {
                                     hostStr = String(hostStr[hostStr.startIndex..<percentIndex])
                                 }
                                 let portValue = Int(port.rawValue)
+                                // Set host/port and verify in the SAME task to avoid race condition
                                 Task { @MainActor [weak self] in
-                                    self?.discoveredHost = hostStr
-                                    self?.discoveredPort = portValue
-                                    self?.settings?.serverHost = hostStr
-                                    self?.settings?.serverPort = portValue
+                                    guard let self = self else { return }
+                                    self.discoveredHost = hostStr
+                                    self.discoveredPort = portValue
+                                    await self.verifyConnection()
                                 }
-                                Task { [weak self] in await self?.verifyConnection() }
                             }
                             connection.cancel()
                         }
                     }
                     connection.start(queue: .global())
-                    break // Take first found service
+                    break
                 }
             }
         }
@@ -137,6 +146,16 @@ final class AgentConnection: ObservableObject, @unchecked Sendable {
         discoveredPort = nil
         connectionState = .disconnected
         agentStatus = .offline
+        consecutiveFailures = 0
+        reconnectAttempts = 0
+    }
+
+    func connectManual(host: String, port: Int) {
+        connectionState = .searching
+        discoveredHost = host
+        discoveredPort = port
+        consecutiveFailures = 0
+        Task { await verifyConnection() }
     }
 
     private func verifyConnection() async {
@@ -144,10 +163,14 @@ final class AgentConnection: ObservableObject, @unchecked Sendable {
             await MainActor.run { connectionState = .error; lastError = "No host configured" }
             return
         }
+
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 10
+
         do {
-            let (data, response) = try await session.data(from: url)
+            let (data, response) = try await session.data(for: request)
             guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
-                await MainActor.run { connectionState = .error; lastError = "Server returned error" }
+                await MainActor.run { connectionState = .error; lastError = "Server error" }
                 scheduleReconnect()
                 return
             }
@@ -156,10 +179,21 @@ final class AgentConnection: ObservableObject, @unchecked Sendable {
                 await MainActor.run {
                     connectionState = .connected
                     lastError = nil
+                    consecutiveFailures = 0
+                    reconnectAttempts = 0
                     settings?.lastConnectedDate = Date()
+                    // Start timers on MainActor directly to ensure they schedule on the right RunLoop
+                    self.pollTimer?.invalidate()
+                    self.pollTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+                        Task { await self?.pollResponses() }
+                    }
+                    self.statusTimer?.invalidate()
+                    self.statusTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+                        Task { await self?.fetchStatus() }
+                    }
                 }
-                startPolling()
-                startStatusUpdates()
+                // Also do an immediate fetch
+                await fetchStatus()
             } else {
                 await MainActor.run { connectionState = .error; lastError = "Invalid ping response" }
                 scheduleReconnect()
@@ -173,8 +207,26 @@ final class AgentConnection: ObservableObject, @unchecked Sendable {
     private func scheduleReconnect() {
         Task { @MainActor in
             reconnectTimer?.invalidate()
-            reconnectTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: false) { [weak self] _ in
-                self?.startDiscovery()
+            reconnectAttempts += 1
+            if connectionState == .error {
+                connectionState = .searching
+            }
+            let delay = min(3.0 * pow(2.0, Double(min(reconnectAttempts, 3))), 15.0)
+            reconnectTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
+                guard let self = self else { return }
+                // After 3 failed reconnects, clear discovered IP and redo Bonjour
+                if self.reconnectAttempts > 3 {
+                    self.discoveredHost = nil
+                    self.discoveredPort = nil
+                    self.nwBrowser?.cancel()
+                    self.nwBrowser = nil
+                    self.reconnectAttempts = 0
+                }
+                if let host = self.discoveredHost, let port = self.discoveredPort {
+                    self.connectManual(host: host, port: port)
+                } else {
+                    self.startDiscovery()
+                }
             }
         }
     }
@@ -184,7 +236,7 @@ final class AgentConnection: ObservableObject, @unchecked Sendable {
     private func startPolling() {
         Task { @MainActor in
             pollTimer?.invalidate()
-            pollTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
+            pollTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
                 Task { await self?.pollResponses() }
             }
         }
@@ -193,12 +245,13 @@ final class AgentConnection: ObservableObject, @unchecked Sendable {
     private func stopPolling() {
         pollTimer?.invalidate()
         pollTimer = nil
+        isPollInFlight = false
     }
 
     private func startStatusUpdates() {
         Task { @MainActor in
             statusTimer?.invalidate()
-            statusTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
+            statusTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
                 Task { await self?.fetchStatus() }
             }
         }
@@ -208,6 +261,7 @@ final class AgentConnection: ObservableObject, @unchecked Sendable {
     private func stopStatusUpdates() {
         statusTimer?.invalidate()
         statusTimer = nil
+        isStatusInFlight = false
     }
 
     // MARK: - API Methods
@@ -236,36 +290,51 @@ final class AgentConnection: ObservableObject, @unchecked Sendable {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 15
         request.httpBody = try? JSONSerialization.data(withJSONObject: payload)
 
         do {
-            let (_, response) = try await session.data(for: request)
+            let (data, response) = try await session.data(for: request)
             guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
                 let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
-                await MainActor.run { lastError = "Server error: \(statusCode)" }
+                let respBody = String(data: data, encoding: .utf8) ?? ""
+                await MainActor.run { lastError = "Error \(statusCode): \(respBody)" }
                 return
             }
-            await MainActor.run { lastError = nil }
+            await MainActor.run { lastError = nil; consecutiveFailures = 0 }
+            // Immediately poll for response after sending
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            await pollResponses()
         } catch {
-            await MainActor.run { lastError = "Send failed: \(error.localizedDescription)" }
-            handleConnectionLoss()
+            await MainActor.run { lastError = "Send: \(error.localizedDescription)" }
+            recordFailure()
         }
     }
 
     func pollResponses() async {
+        guard !isPollInFlight else { return }
         guard let settings = settings,
               let url = makeURL(path: "/poll"),
               connectionState == .connected else { return }
+
+        isPollInFlight = true
+        defer { isPollInFlight = false }
+
         let payload: [String: Any] = ["device_id": settings.deviceId]
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 10
         request.httpBody = try? JSONSerialization.data(withJSONObject: payload)
 
         do {
             let (data, response) = try await session.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else { return }
+            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+                return
+            }
+
+            await MainActor.run { consecutiveFailures = 0 }
 
             if let pollResponse = try? JSONDecoder().decode(PollResponse.self, from: data) {
                 let newMessages = pollResponse.messages.map { msg in
@@ -282,17 +351,26 @@ final class AgentConnection: ObservableObject, @unchecked Sendable {
                 }
             }
         } catch {
-            handleConnectionLoss()
+            recordFailure()
         }
     }
 
     func fetchStatus() async {
+        guard !isStatusInFlight else { return }
         guard let url = makeURL(path: "/ping"),
               connectionState == .connected else { return }
 
+        isStatusInFlight = true
+        defer { isStatusInFlight = false }
+
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 10
+
         do {
-            let (data, response) = try await session.data(from: url)
+            let (data, response) = try await session.data(for: request)
             guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else { return }
+
+            await MainActor.run { consecutiveFailures = 0 }
 
             if let status = try? JSONDecoder().decode(StatusResponse.self, from: data) {
                 await MainActor.run {
@@ -308,7 +386,7 @@ final class AgentConnection: ObservableObject, @unchecked Sendable {
                 }
             }
         } catch {
-            handleConnectionLoss()
+            recordFailure()
         }
     }
 
@@ -323,12 +401,13 @@ final class AgentConnection: ObservableObject, @unchecked Sendable {
 
     // MARK: - URL Helpers
 
-    /// Sanitize host by stripping interface scope ID (e.g. "%en8") and build URL
     private func makeURL(path: String) -> URL? {
         guard var host = discoveredHost, let port = discoveredPort else { return nil }
-        // Strip interface scope ID from resolved addresses
         if let percentIndex = host.firstIndex(of: "%") {
             host = String(host[host.startIndex..<percentIndex])
+        }
+        if host.contains(":") {
+            return URL(string: "http://[\(host)]:\(port)\(path)")
         }
         return URL(string: "http://\(host):\(port)\(path)")
     }
@@ -341,14 +420,17 @@ final class AgentConnection: ObservableObject, @unchecked Sendable {
         }
     }
 
-    private func handleConnectionLoss() {
+    private func recordFailure() {
         Task { @MainActor in
-            if connectionState == .connected {
+            guard connectionState == .connected else { return }
+            consecutiveFailures += 1
+            if consecutiveFailures >= maxToleratedFailures {
                 connectionState = .error
                 agentStatus = .offline
                 lastError = "Connection lost"
                 stopPolling()
                 stopStatusUpdates()
+                consecutiveFailures = 0
                 scheduleReconnect()
             }
         }

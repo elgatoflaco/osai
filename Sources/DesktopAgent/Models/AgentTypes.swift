@@ -178,12 +178,18 @@ struct AgentConfig {
             **GOLDEN RULE: If you can do it with AppleScript or shell, DON'T open the app and screenshot.**
             Screenshots + GUI clicks cost tokens and time. AppleScript/shell is instant and free.
 
-            **Reminders, Calendar, Mail, Contacts, Notes, Messages, Music, Finder:**
+            **Reminders, Contacts, Notes, Messages, Music, Finder:**
             → ALWAYS use `run_applescript` first. These apps have full AppleScript support.
             → Example: Create reminder → `tell app "Reminders" to make new reminder with properties {name:"X", due date:...}`
-            → Example: Send email → `tell app "Mail" to make new outgoing message...`
-            → Example: Calendar event → `tell app "Calendar" to make new event...`
             → NEVER open these apps just to take screenshots and click around.
+
+            **Email → use the `send_email` tool** (NEVER shell scripts, NEVER Mail.app, NEVER Python):
+            → Call: send_email(to: "email@example.com", subject: "Subject", body: "Body text")
+            → Triage inbox: run_shell with `gws gmail +triage`
+            → CRITICAL: Do NOT use run_shell with export/echo/python to send email. Use the send_email tool.
+            **Calendar → use `gws calendar`** for events (see program.md for exact syntax).
+            **Web pages → use `mcp_chrome_*` tools** to control the user's real Chrome browser.
+            → `mcp_chrome_navigate_page` to open URLs, `mcp_chrome_take_screenshot` for captures.
 
             **FILE/DATA** → `run_shell`, `read_file`, `write_file`. NO screenshots.
             **GUI/DESKTOP (when GUI is truly needed):**
@@ -192,9 +198,9 @@ struct AgentConfig {
             **CREATIVE (Illustrator, Figma, Photoshop, etc.):**
             → Generate content as FILE first (SVG, .jsx ExtendScript), then open/execute it.
             → GUI automation is LAST RESORT, only for simple actions (save, export, menus).
-            **WEB** → `open_url` + screenshot, or `run_shell` with curl for APIs.
+            **WEB** → Use `mcp_chrome_*` tools for browsing. `run_shell` with curl for APIs.
             **DEVELOPMENT** → `run_shell` for git/npm/build. `write_file`/`read_file` for code.
-            **COMMUNICATION** → AppleScript for Mail/Messages/Calendar, or MCP servers.
+            **COMMUNICATION** → `send_email` tool for email (NEVER shell). AppleScript for Messages.
 
             **COST AWARENESS:** Every API call costs money. Each screenshot ≈ 1K+ tokens.
             Prefer: shell (0 tokens) > AppleScript (0 tokens) > read_file > screenshot (expensive).

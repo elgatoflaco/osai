@@ -52,7 +52,7 @@ final class SessionStore {
                     continue
                 }
                 let toolUseIds = Set(prev.content.compactMap { content -> String? in
-                    if case .toolUse(let id, _, _) = content { return id }
+                    if case .toolUse(let id, _, _, _) = content { return id }
                     return nil
                 })
                 let toolResultIds = Set(msg.content.compactMap { content -> String? in

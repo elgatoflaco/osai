@@ -32,7 +32,7 @@ struct ToolResultContentBlock: Codable {
 enum ClaudeContent: Codable {
     case text(String)
     case image(source: ImageSource)
-    case toolUse(id: String, name: String, input: [String: AnyCodable])
+    case toolUse(id: String, name: String, input: [String: AnyCodable], thoughtSignature: String? = nil)
     case toolResult(toolUseId: String, content: [ToolResultContentBlock])
 
     // Convenience factories
@@ -62,7 +62,7 @@ enum ClaudeContent: Codable {
         case .image(let source):
             try container.encode("image", forKey: .type)
             try container.encode(source, forKey: .source)
-        case .toolUse(let id, let name, let input):
+        case .toolUse(let id, let name, let input, _):
             try container.encode("tool_use", forKey: .type)
             try container.encode(id, forKey: .id)
             try container.encode(name, forKey: .name)
@@ -88,7 +88,7 @@ enum ClaudeContent: Codable {
             let id = try container.decode(String.self, forKey: .id)
             let name = try container.decode(String.self, forKey: .name)
             let input = try container.decode([String: AnyCodable].self, forKey: .input)
-            self = .toolUse(id: id, name: name, input: input)
+            self = .toolUse(id: id, name: name, input: input, thoughtSignature: nil)
         case "tool_result":
             let toolUseId = try container.decode(String.self, forKey: .toolUseId)
             // Content can be string or array of blocks
@@ -181,10 +181,35 @@ struct PropertySchema: Codable {
     let type: String
     let description: String?
     let enumValues: [String]?
+    let items: ItemsSchema?
+
+    enum CodingKeys: String, CodingKey {
+        case type, description, items
+        case enumValues = "enum"
+    }
+
+    init(type: String, description: String? = nil, enumValues: [String]? = nil, items: ItemsSchema? = nil) {
+        self.type = type
+        self.description = description
+        self.enumValues = enumValues
+        self.items = (type == "array" && items == nil) ? ItemsSchema(type: "string") : items
+    }
+}
+
+struct ItemsSchema: Codable {
+    let type: String
+    let description: String?
+    let enumValues: [String]?
 
     enum CodingKeys: String, CodingKey {
         case type, description
         case enumValues = "enum"
+    }
+
+    init(type: String, description: String? = nil, enumValues: [String]? = nil) {
+        self.type = type
+        self.description = description
+        self.enumValues = enumValues
     }
 }
 

@@ -251,7 +251,7 @@ final class SubAgentExecutor {
                         if !text.isEmpty {
                             finalOutput = text
                         }
-                    case .toolUse(let id, let name, let input):
+                    case .toolUse(let id, let name, let input, _):
                         hasToolUse = true
 
                         // Check if it's an MCP tool

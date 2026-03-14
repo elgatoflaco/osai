@@ -8,6 +8,9 @@ struct SettingsView: View {
     @EnvironmentObject var locationManager: LocationManager
     @State private var crownSensitivity: Double = 0.5
     @State private var showResetConfirmation: Bool = false
+    @State private var manualHost: String = ""
+    @State private var manualPort: String = "8375"
+    @State private var useManualConnection: Bool = false
 
     var body: some View {
         ScrollView {
@@ -38,6 +41,9 @@ struct SettingsView: View {
         .navigationTitle("Settings")
         .onAppear {
             crownSensitivity = settings.crownSensitivity
+            manualHost = settings.serverHost
+            manualPort = "\(settings.serverPort)"
+            useManualConnection = !settings.serverHost.isEmpty
         }
     }
 
@@ -49,6 +55,60 @@ struct SettingsView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
+            // Toggle: Auto vs Manual
+            Toggle(isOn: $useManualConnection) {
+                Text("Manual IP")
+                    .font(.caption)
+            }
+            .padding(10)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
+            .onChange(of: useManualConnection) { _, manual in
+                if !manual {
+                    settings.serverHost = ""
+                    connection.disconnect()
+                    connection.startDiscovery()
+                }
+            }
+
+            if useManualConnection {
+                // Manual host/port entry
+                VStack(spacing: 6) {
+                    TextField("IP Address", text: $manualHost)
+                        .font(.caption2)
+                        .fontDesign(.monospaced)
+                        .textContentType(.URL)
+                        .autocorrectionDisabled()
+
+                    Divider()
+
+                    TextField("Port", text: $manualPort)
+                        .font(.caption2)
+                        .fontDesign(.monospaced)
+
+                    Divider()
+
+                    Button {
+                        let host = manualHost.trimmingCharacters(in: .whitespaces)
+                        let port = Int(manualPort) ?? 8375
+                        if !host.isEmpty {
+                            settings.serverHost = host
+                            settings.serverPort = port
+                            connection.disconnect()
+                            connection.connectManual(host: host, port: port)
+                        }
+                    } label: {
+                        Text("Connect")
+                            .font(.caption2)
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.blue)
+                }
+                .padding(10)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
+            }
+
+            // Status display
             VStack(spacing: 6) {
                 HStack {
                     Text("Host")
@@ -120,24 +180,13 @@ struct SettingsView: View {
                     Button {
                         connection.startDiscovery()
                     } label: {
-                        Text("Connect")
+                        Text("Reconnect")
                             .font(.caption2)
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.bordered)
                     .tint(.blue)
                 }
-
-                Button {
-                    settings.serverHost = ""
-                    connection.disconnect()
-                    connection.startDiscovery()
-                } label: {
-                    Text("Auto-Find")
-                        .font(.caption2)
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
             }
 
             if let error = connection.lastError {

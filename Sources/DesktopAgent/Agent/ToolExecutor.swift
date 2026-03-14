@@ -100,6 +100,16 @@ final class ToolExecutor {
             if isSourceWrite {
                 return (ToolResult(success: false, output: "⛔ Cannot modify osai source code via shell. Use the `claude_code` tool to delegate programming tasks to Claude Code.", screenshot: nil), nil)
             }
+            // Block wacli commands — the gateway handles WhatsApp messaging
+            if command.contains("wacli") {
+                return (ToolResult(success: false, output: "⛔ Do not use wacli directly. Your text responses are automatically sent to the user via the gateway. Just reply with text — the gateway delivers it.", screenshot: nil), nil)
+            }
+            // Block email via shell — must use send_email tool
+            let emailPatterns = ["gmail +send", "gmail send", "gmail.*send", "sendmail", "mail -s", "gws.*mail.*send"]
+            let lowerCmd = command.lowercased()
+            if emailPatterns.contains(where: { lowerCmd.contains($0) }) || (lowerCmd.contains("email") && (lowerCmd.contains("export") || lowerCmd.contains("echo") || lowerCmd.contains("python"))) {
+                return (ToolResult(success: false, output: "⛔ Do NOT send email via shell. Use the send_email tool instead: send_email(to: \"address\", subject: \"subject\", body: \"body\"). This is simpler and more reliable.", screenshot: nil), nil)
+            }
             return (exe.shell.execute(command: command, timeout: timeout), nil)
         }
 
@@ -324,6 +334,22 @@ final class ToolExecutor {
         handlers["file_info"] = { exe, input in
             let path = input["path"]?.stringValue ?? ""
             return (exe.file.fileInfo(path: path), nil)
+        }
+
+        // --- Email (via gws CLI) ---
+        handlers["send_email"] = { exe, input in
+            let to = input["to"]?.stringValue ?? ""
+            let subject = input["subject"]?.stringValue ?? ""
+            let body = input["body"]?.stringValue ?? ""
+            guard !to.isEmpty, !subject.isEmpty else {
+                return (ToolResult(success: false, output: "Missing required fields: to, subject", screenshot: nil), nil)
+            }
+            // Escape single quotes for shell
+            let safeTo = to.replacingOccurrences(of: "'", with: "'\\''")
+            let safeSubject = subject.replacingOccurrences(of: "'", with: "'\\''")
+            let safeBody = body.replacingOccurrences(of: "'", with: "'\\''")
+            let cmd = "gws gmail +send --to '\(safeTo)' --subject '\(safeSubject)' --body '\(safeBody)'"
+            return (exe.shell.execute(command: cmd, timeout: 30), nil)
         }
 
         // --- Memory ---

@@ -83,7 +83,7 @@ final class WatchGatewayAdapter: GatewayAdapter {
             throw GatewayError.networkError("Watch: failed to bind port \(port) (errno \(errno))")
         }
 
-        guard listen(serverSocket, 8) == 0 else {
+        guard listen(serverSocket, 16) == 0 else {
             close(serverSocket)
             throw GatewayError.networkError("Watch: failed to listen")
         }
@@ -147,92 +147,104 @@ final class WatchGatewayAdapter: GatewayAdapter {
     private func handleConnection(_ fd: Int32) async {
         defer { close(fd) }
 
-        // Set socket timeout
-        var timeout = timeval(tv_sec: 10, tv_usec: 0)
+        // Set socket timeout for keep-alive connections
+        var timeout = timeval(tv_sec: 30, tv_usec: 0)
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
 
-        // Read request
-        var buffer = [UInt8](repeating: 0, count: 8192)
-        let bytesRead = recv(fd, &buffer, buffer.count, 0)
-        guard bytesRead > 0 else { return }
+        // Disable Nagle's algorithm for lower latency
+        var noDelay: Int32 = 1
+        setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &noDelay, socklen_t(MemoryLayout<Int32>.size))
 
-        let requestData = Data(buffer[0..<bytesRead])
-        guard let requestStr = String(data: requestData, encoding: .utf8) else { return }
+        // Keep-alive loop: reuse the same socket for multiple requests
+        var requestCount = 0
+        let maxRequests = 100
 
-        // Parse HTTP request line
-        let lines = requestStr.split(separator: "\r\n", maxSplits: 1)
-        guard let requestLine = lines.first else { return }
-        let parts = requestLine.split(separator: " ")
-        guard parts.count >= 2 else { return }
+        while running && !Task.isCancelled && requestCount < maxRequests {
+            requestCount += 1
 
-        let method = String(parts[0])
-        let path = String(parts[1])
+            // Read request
+            var buffer = [UInt8](repeating: 0, count: 8192)
+            let bytesRead = recv(fd, &buffer, buffer.count, 0)
+            guard bytesRead > 0 else { return }
 
-        // Extract body (after \r\n\r\n)
-        let body: String?
-        if let range = requestStr.range(of: "\r\n\r\n") {
-            let bodyStr = String(requestStr[range.upperBound...])
-            body = bodyStr.isEmpty ? nil : bodyStr
-        } else {
-            body = nil
-        }
+            let requestData = Data(buffer[0..<bytesRead])
+            guard let requestStr = String(data: requestData, encoding: .utf8) else { return }
 
-        // Route requests
-        switch (method, path) {
-        case ("GET", "/ping"):
-            let response = """
-            {"status":"ok","service":"osai","platform":"watch"}
-            """
-            sendHTTPResponse(fd: fd, status: 200, body: response)
+            // Parse HTTP request line
+            let lines = requestStr.split(separator: "\r\n", maxSplits: 1)
+            guard let requestLine = lines.first else { return }
+            let parts = requestLine.split(separator: " ")
+            guard parts.count >= 2 else { return }
 
-        case ("POST", "/message"):
-            await handleIncomingMessage(fd: fd, body: body)
+            let method = String(parts[0])
+            let path = String(parts[1])
 
-        case ("POST", "/poll"):
-            handlePoll(fd: fd, body: body)
-
-        case ("GET", "/status"), ("GET", "/complications"), ("GET", "/geofences"):
-            let (status, responseBody) = featureEndpoints.handleRequest(method: method, path: path, body: body, deviceId: nil)
-            sendHTTPResponse(fd: fd, status: status, body: responseBody)
-
-        case ("POST", "/health"), ("POST", "/location"), ("POST", "/geofence"), ("DELETE", "/geofence"),
-             ("POST", "/geofence/trigger"), ("POST", "/shortcut"):
-            // Extract device_id from body for POST requests
-            var deviceId: String? = nil
-            if let body = body, let data = body.data(using: .utf8),
-               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                deviceId = json["device_id"] as? String
+            // Extract body (after \r\n\r\n)
+            let body: String?
+            if let range = requestStr.range(of: "\r\n\r\n") {
+                let bodyStr = String(requestStr[range.upperBound...])
+                body = bodyStr.isEmpty ? nil : bodyStr
+            } else {
+                body = nil
             }
-            // Check device whitelist
-            if let deviceId = deviceId, let allowed = config.allowedDevices, !allowed.contains(deviceId) {
-                sendHTTPResponse(fd: fd, status: 403, body: "{\"error\":\"device not allowed\"}")
-                return
-            }
-            let (status, responseBody) = featureEndpoints.handleRequest(method: method, path: path, body: body, deviceId: deviceId)
-            sendHTTPResponse(fd: fd, status: status, body: responseBody)
 
-            // If shortcut returned a command, inject as message
-            if path == "/shortcut", let responseData = responseBody.data(using: .utf8),
-               let json = try? JSONSerialization.jsonObject(with: responseData) as? [String: Any],
-               let command = json["command"] as? String, !command.isEmpty,
-               let deviceId = deviceId {
-                let message = GatewayMessage(
-                    platform: "watch",
-                    chatId: deviceId,
-                    userId: deviceId,
-                    userName: "Watch Shortcut",
-                    text: command,
-                    timestamp: Date(),
-                    replyToMessageId: nil
-                )
-                if let handler = messageHandler {
-                    await handler(message)
+            // Check if client wants to close
+            let wantsClose = requestStr.lowercased().contains("connection: close")
+
+            // Route requests
+            switch (method, path) {
+            case ("GET", "/ping"):
+                sendHTTPResponse(fd: fd, status: 200, body: "{\"status\":\"ok\",\"service\":\"osai\",\"platform\":\"watch\"}")
+
+            case ("POST", "/message"):
+                await handleIncomingMessage(fd: fd, body: body)
+
+            case ("POST", "/poll"):
+                handlePoll(fd: fd, body: body)
+
+            case ("GET", "/status"), ("GET", "/complications"), ("GET", "/geofences"):
+                let (status, responseBody) = featureEndpoints.handleRequest(method: method, path: path, body: body, deviceId: nil)
+                sendHTTPResponse(fd: fd, status: status, body: responseBody)
+
+            case ("POST", "/health"), ("POST", "/location"), ("POST", "/geofence"), ("DELETE", "/geofence"),
+                 ("POST", "/geofence/trigger"), ("POST", "/shortcut"):
+                var deviceId: String? = nil
+                if let body = body, let data = body.data(using: .utf8),
+                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                    deviceId = json["device_id"] as? String
                 }
+                if let deviceId = deviceId, let allowed = config.allowedDevices, !allowed.contains("*"), !allowed.contains(deviceId) {
+                    printColored("  ⚠ Watch: blocked \(deviceId) — add to allowed_devices", color: .yellow)
+                    sendHTTPResponse(fd: fd, status: 403, body: "{\"error\":\"device not allowed\",\"device_id\":\"\(deviceId)\"}")
+                    if wantsClose { return } else { continue }
+                }
+                let (status, responseBody) = featureEndpoints.handleRequest(method: method, path: path, body: body, deviceId: deviceId)
+                sendHTTPResponse(fd: fd, status: status, body: responseBody)
+
+                if path == "/shortcut", let responseData = responseBody.data(using: .utf8),
+                   let json = try? JSONSerialization.jsonObject(with: responseData) as? [String: Any],
+                   let command = json["command"] as? String, !command.isEmpty,
+                   let deviceId = deviceId {
+                    let message = GatewayMessage(
+                        platform: "watch",
+                        chatId: deviceId,
+                        userId: deviceId,
+                        userName: "Watch Shortcut",
+                        text: command,
+                        timestamp: Date(),
+                        replyToMessageId: nil
+                    )
+                    if let handler = messageHandler {
+                        await handler(message)
+                    }
+                }
+
+            default:
+                sendHTTPResponse(fd: fd, status: 404, body: "{\"error\":\"not found\"}")
             }
 
-        default:
-            sendHTTPResponse(fd: fd, status: 404, body: "{\"error\":\"not found\"}")
-        }
+            if wantsClose { return }
+        } // end keep-alive loop
     }
 
     private func handleIncomingMessage(fd: Int32, body: String?) async {
@@ -248,9 +260,9 @@ final class WatchGatewayAdapter: GatewayAdapter {
         let userName = json["user_name"] as? String ?? "Watch User"
 
         // Check device whitelist
-        if let allowed = config.allowedDevices, !allowed.contains(deviceId) {
-            printColored("  ⚠ Watch: blocked message from device \(deviceId)", color: .yellow)
-            sendHTTPResponse(fd: fd, status: 403, body: "{\"error\":\"device not allowed\"}")
+        if let allowed = config.allowedDevices, !allowed.contains("*"), !allowed.contains(deviceId) {
+            printColored("  ⚠ Watch: blocked message from device \(deviceId) — add to allowed_devices in config", color: .yellow)
+            sendHTTPResponse(fd: fd, status: 403, body: "{\"error\":\"device not allowed\",\"device_id\":\"\(deviceId)\"}")
             return
         }
 
@@ -284,8 +296,8 @@ final class WatchGatewayAdapter: GatewayAdapter {
         }
 
         // Check device whitelist
-        if let allowed = config.allowedDevices, !allowed.contains(deviceId) {
-            sendHTTPResponse(fd: fd, status: 403, body: "{\"error\":\"device not allowed\"}")
+        if let allowed = config.allowedDevices, !allowed.contains("*"), !allowed.contains(deviceId) {
+            sendHTTPResponse(fd: fd, status: 403, body: "{\"error\":\"device not allowed\",\"device_id\":\"\(deviceId)\"}")
             return
         }
 
@@ -320,7 +332,8 @@ final class WatchGatewayAdapter: GatewayAdapter {
         HTTP/1.1 \(status) \(statusText)\r
         Content-Type: application/json\r
         Content-Length: \(body.utf8.count)\r
-        Connection: close\r
+        Connection: keep-alive\r
+        Keep-Alive: timeout=30, max=100\r
         Access-Control-Allow-Origin: *\r
         \r
         \(body)

@@ -83,6 +83,13 @@ final class MCPManager {
 
     // MARK: - Tool Execution
 
+    /// Interrupt all active MCP calls (called on Ctrl+C cancel)
+    func interruptActiveCalls() {
+        for (_, client) in clients {
+            client.interrupted = true
+        }
+    }
+
     func canHandle(toolName: String) -> Bool {
         allTools[toolName] != nil
     }

@@ -106,6 +106,12 @@ final class AIClient {
         request.setValue("application/json", forHTTPHeaderField: "content-type")
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "authorization")
 
+        // OpenRouter-specific headers
+        if baseURL.contains("openrouter.ai") {
+            request.setValue("https://github.com/adrianba/osai", forHTTPHeaderField: "HTTP-Referer")
+            request.setValue("OSAI Desktop Agent", forHTTPHeaderField: "X-Title")
+        }
+
         // Convert messages to OpenAI format
         var openaiMessages: [[String: Any]] = []
 
@@ -114,8 +120,8 @@ final class AIClient {
         }
 
         for msg in messages {
-            let converted = convertMessageToOpenAI(msg)
-            openaiMessages.append(converted)
+            let converted = convertMessagesToOpenAI(msg)
+            openaiMessages.append(contentsOf: converted)
         }
 
         var body: [String: Any] = [
@@ -132,6 +138,12 @@ final class AIClient {
                     var propDict: [String: Any] = ["type": prop.type]
                     if let desc = prop.description { propDict["description"] = desc }
                     if let enums = prop.enumValues { propDict["enum"] = enums }
+                    if prop.type == "array", let items = prop.items {
+                        var itemsDict: [String: Any] = ["type": items.type]
+                        if let d = items.description { itemsDict["description"] = d }
+                        if let e = items.enumValues { itemsDict["enum"] = e }
+                        propDict["items"] = itemsDict
+                    }
                     props[key] = propDict
                 }
                 var schema: [String: Any] = ["type": "object", "properties": props]
@@ -167,25 +179,28 @@ final class AIClient {
 
     // MARK: - Format Conversion
 
-    private func convertMessageToOpenAI(_ message: ClaudeMessage) -> [String: Any] {
-        var result: [String: Any] = ["role": message.role]
-
-        // Check for tool results
+    /// Convert a Claude message to one or more OpenAI messages.
+    /// OpenAI requires each tool result as a separate message with role "tool".
+    private func convertMessagesToOpenAI(_ message: ClaudeMessage) -> [[String: Any]] {
+        // Collect tool results — OpenAI needs one message per tool_call_id
+        var toolResults: [[String: Any]] = []
         var hasToolResult = false
         for content in message.content {
             if case .toolResult(let toolUseId, let blocks) = content {
                 hasToolResult = true
                 let text = blocks.compactMap { $0.text }.joined(separator: "\n")
-                result["role"] = "tool"
-                result["tool_call_id"] = toolUseId
-                result["content"] = text
-                break
+                toolResults.append([
+                    "role": "tool",
+                    "tool_call_id": toolUseId,
+                    "content": text
+                ])
             }
         }
 
-        if hasToolResult { return result }
+        if hasToolResult { return toolResults }
 
         // Check for tool_use (assistant with tool calls)
+        var result: [String: Any] = ["role": message.role]
         var toolCalls: [[String: Any]] = []
         var textParts: [String] = []
 
@@ -193,17 +208,22 @@ final class AIClient {
             switch content {
             case .text(let text):
                 if !text.isEmpty { textParts.append(text) }
-            case .toolUse(let id, let name, let input):
+            case .toolUse(let id, let name, let input, let thoughtSig):
                 let args = input.mapValues { $0.value }
                 let argsJson = (try? JSONSerialization.data(withJSONObject: args)) ?? Data()
-                toolCalls.append([
+                var tc: [String: Any] = [
                     "id": id,
                     "type": "function",
                     "function": [
                         "name": name,
                         "arguments": String(data: argsJson, encoding: .utf8) ?? "{}"
                     ]
-                ])
+                ]
+                // Gemini thought signatures: must be echoed back
+                if let sig = thoughtSig {
+                    tc["extra_content"] = ["google": ["thought_signature": sig]]
+                }
+                toolCalls.append(tc)
             default:
                 break
             }
@@ -214,47 +234,47 @@ final class AIClient {
             if !textParts.isEmpty {
                 result["content"] = textParts.joined(separator: "\n")
             }
-        } else {
-            // Regular text message (possibly with images)
-            var contentParts: [Any] = []
-            for content in message.content {
-                switch content {
-                case .text(let text):
-                    contentParts.append(["type": "text", "text": text])
-                case .image(let source):
-                    contentParts.append([
-                        "type": "image_url",
-                        "image_url": ["url": "data:\(source.mediaType);base64,\(source.data)"]
-                    ])
-                case .toolResult(_, let blocks):
-                    // Inline image from tool result
-                    for block in blocks {
-                        if let text = block.text {
-                            contentParts.append(["type": "text", "text": text])
-                        }
-                        if let source = block.source {
-                            contentParts.append([
-                                "type": "image_url",
-                                "image_url": ["url": "data:\(source.mediaType);base64,\(source.data)"]
-                            ])
-                        }
-                    }
-                default:
-                    break
-                }
-            }
+            return [result]
+        }
 
-            if contentParts.count == 1, let first = contentParts.first as? [String: Any],
-               first["type"] as? String == "text" {
-                result["content"] = first["text"]
-            } else if !contentParts.isEmpty {
-                result["content"] = contentParts
-            } else {
-                result["content"] = ""
+        // Regular text message (possibly with images)
+        var contentParts: [Any] = []
+        for content in message.content {
+            switch content {
+            case .text(let text):
+                contentParts.append(["type": "text", "text": text])
+            case .image(let source):
+                contentParts.append([
+                    "type": "image_url",
+                    "image_url": ["url": "data:\(source.mediaType);base64,\(source.data)"]
+                ])
+            case .toolResult(_, let blocks):
+                for block in blocks {
+                    if let text = block.text {
+                        contentParts.append(["type": "text", "text": text])
+                    }
+                    if let source = block.source {
+                        contentParts.append([
+                            "type": "image_url",
+                            "image_url": ["url": "data:\(source.mediaType);base64,\(source.data)"]
+                        ])
+                    }
+                }
+            default:
+                break
             }
         }
 
-        return result
+        if contentParts.count == 1, let first = contentParts.first as? [String: Any],
+           first["type"] as? String == "text" {
+            result["content"] = first["text"]
+        } else if !contentParts.isEmpty {
+            result["content"] = contentParts
+        } else {
+            result["content"] = ""
+        }
+
+        return [result]
     }
 
     private func parseOpenAIResponse(_ data: Data) throws -> ClaudeResponse {
@@ -287,7 +307,14 @@ final class AIClient {
                    let argsDict = try? JSONSerialization.jsonObject(with: argsData) as? [String: Any] {
                     input = argsDict.mapValues { AnyCodable($0) }
                 }
-                content.append(.toolUse(id: tcId, name: name, input: input))
+                // Extract Gemini thought signature if present
+                var thoughtSig: String? = nil
+                if let extra = tc["extra_content"] as? [String: Any],
+                   let google = extra["google"] as? [String: Any],
+                   let sig = google["thought_signature"] as? String {
+                    thoughtSig = sig
+                }
+                content.append(.toolUse(id: tcId, name: name, input: input, thoughtSignature: thoughtSig))
             }
         }
 

@@ -591,5 +591,20 @@ struct ToolDefinitions {
                 required: ["tasks"]
             )
         ),
+
+        // --- Email (via gws CLI) ---
+        ClaudeTool(
+            name: "send_email",
+            description: "Send an email. THIS IS THE ONLY WAY TO SEND EMAIL. Never use run_shell for email. Never use gws, python, or scripts. Just call this tool with to, subject, body.",
+            inputSchema: InputSchema(
+                type: "object",
+                properties: [
+                    "to": PropertySchema(type: "string", description: "Recipient email address", enumValues: nil),
+                    "subject": PropertySchema(type: "string", description: "Email subject line", enumValues: nil),
+                    "body": PropertySchema(type: "string", description: "Email body text (plain text)", enumValues: nil)
+                ],
+                required: ["to", "subject", "body"]
+            )
+        ),
     ]
 }

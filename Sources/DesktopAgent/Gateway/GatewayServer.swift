@@ -286,7 +286,9 @@ final class GatewayServer {
                 - Do NOT tell the user that scheduling has limitations or doesn't work. It works.
                 - Do NOT suggest running things "live" instead of scheduling — scheduling is a feature the user wants.
                 - You can manage scheduled tasks: use list_tasks to show active tasks, cancel_task to remove one, run_task to trigger one immediately.
-                - When creating tasks with schedule_task, the delivery to this chat is automatic — you don't need to mention Discord/Telegram in the command.]\n
+                - When creating tasks with schedule_task, the delivery to this chat is automatic — you don't need to mention Discord/Telegram in the command.
+                - IMPORTANT: Your text responses are automatically sent to the user via the gateway. NEVER use run_shell with wacli/telegram/discord to send messages — the gateway handles delivery. Just respond with text.
+                - NEVER use run_shell to run wacli commands — wacli has a lock that blocks concurrent access.]\n
                 """
             }
             let response = try await agent.processUserInput(gatewayHint + contextPrefix + message.text)

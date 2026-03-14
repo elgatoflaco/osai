@@ -32,6 +32,7 @@ final class ContextManager {
         "o3-mini":                    ModelPricing(inputPer1M:  1.10, outputPer1M:  4.40, contextWindow: 200_000),
         // Gemini
         "gemini-2.0-flash":           ModelPricing(inputPer1M:  0.10, outputPer1M:  0.40, contextWindow: 1_000_000),
+        "gemini-3-flash-preview":     ModelPricing(inputPer1M:  0.10, outputPer1M:  0.40, contextWindow: 1_000_000),
         "gemini-2.0-pro":             ModelPricing(inputPer1M:  1.25, outputPer1M:  5.00, contextWindow: 2_000_000),
         "gemini-1.5-pro":             ModelPricing(inputPer1M:  1.25, outputPer1M:  5.00, contextWindow: 2_000_000),
         // Groq (free tier / very cheap)
@@ -51,6 +52,27 @@ final class ContextManager {
     ]
 
     static let defaultPricing = ModelPricing(inputPer1M: 3.00, outputPer1M: 15.00, contextWindow: 128_000)
+
+    /// Lookup pricing with fuzzy matching — try exact, then partial match on known keys
+    static func lookupPricing(model: String) -> ModelPricing {
+        // Exact match
+        if let p = pricing[model] { return p }
+        // Partial match: find a key that is a prefix of the model or vice versa
+        let lower = model.lowercased()
+        for (key, val) in pricing {
+            if lower.hasPrefix(key) || key.hasPrefix(lower) { return val }
+        }
+        // Family match: extract base name (e.g. "gemini-3-flash" from "gemini-3-flash-preview-whatever")
+        for (key, val) in pricing {
+            let keyParts = Set(key.split(separator: "-").map(String.init))
+            let modelParts = Set(lower.split(separator: "-").map(String.init))
+            let overlap = keyParts.intersection(modelParts)
+            if overlap.count >= 2 && (overlap.contains("flash") || overlap.contains("pro") || overlap.contains("haiku") || overlap.contains("sonnet") || overlap.contains("opus")) {
+                return val
+            }
+        }
+        return defaultPricing
+    }
 
     // Compaction thresholds
     static let compactionThreshold = 0.75
@@ -72,7 +94,7 @@ final class ContextManager {
 
     init(model: String) {
         self.model = model
-        self.pricing = ContextManager.pricing[model] ?? ContextManager.defaultPricing
+        self.pricing = ContextManager.lookupPricing(model: model)
     }
 
     // MARK: - Reset
@@ -227,7 +249,7 @@ final class ContextManager {
                         let truncated = text.count > 500 ? String(text.prefix(500)) + "..." : text
                         summaryParts.append("[\(role)] \(truncated)")
                     }
-                case .toolUse(_, let name, let input):
+                case .toolUse(_, let name, let input, _):
                     let args = input.map { "\($0.key)" }.joined(separator: ", ")
                     summaryParts.append("[Tool] \(name)(\(args))")
                 case .toolResult(_, let blocks):
