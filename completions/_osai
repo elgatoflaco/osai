@@ -1,0 +1,30 @@
+#compdef osai
+
+_osai() {
+    local -a commands
+    commands=(
+        'update:Actualizar osai a la última versión'
+        'version:Mostrar versión actual'
+        'gateway:Iniciar modo gateway (WhatsApp, Watch, etc.)'
+    )
+
+    _arguments -C \
+        '1:command:->cmd' \
+        '--help[Mostrar ayuda]' \
+        '-h[Mostrar ayuda]' \
+        '--version[Mostrar versión]' \
+        '-V[Mostrar versión]' \
+        '--verbose[Modo verbose]' \
+        '-v[Modo verbose]' \
+        '--model[Modelo a usar]:model:' \
+        '--deliver[Entregar resultado a gateway]:target:' \
+        '*::arg:->args'
+
+    case "$state" in
+        cmd)
+            _describe 'command' commands
+            ;;
+    esac
+}
+
+_osai "$@"

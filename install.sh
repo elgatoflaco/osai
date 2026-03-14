@@ -45,6 +45,11 @@ sudo cp "$BINARY" /usr/local/bin/osai
 sudo chmod +x /usr/local/bin/osai
 codesign --force --sign - /usr/local/bin/osai 2>/dev/null || true
 
+# Install zsh completions
+if [ -d /usr/local/share/zsh/site-functions ]; then
+    sudo cp "$INSTALL_DIR/completions/_osai" /usr/local/share/zsh/site-functions/_osai 2>/dev/null || true
+fi
+
 # Create config dir
 mkdir -p "${HOME}/.desktop-agent"
 
