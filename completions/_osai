@@ -73,6 +73,13 @@ _osai() {
                     ;;
                 gateway)
                     _arguments \
+                        '--background[Ejecutar en segundo plano]' \
+                        '--bg[Ejecutar en segundo plano]' \
+                        '-d[Ejecutar en segundo plano]' \
+                        '--stop[Detener gateway en segundo plano]' \
+                        '--status[Ver estado del gateway]' \
+                        '--startup[Añadir al inicio de sesión]' \
+                        '--no-startup[Quitar del inicio de sesión]' \
                         '--port[Puerto HTTP para el gateway]:port:'
                     ;;
             esac

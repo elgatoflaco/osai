@@ -115,8 +115,42 @@ struct DesktopAgentCLI {
             return
         }
 
-        // --- Gateway mode: osai gateway ---
+        // --- Gateway mode: osai gateway [--background|--startup|--stop|--status] ---
         if args.contains("gateway") {
+            // osai gateway --startup → install/remove launchd plist
+            if args.contains("--startup") {
+                installGatewayStartup()
+                mcpManager.stopAll()
+                return
+            }
+            if args.contains("--no-startup") {
+                removeGatewayStartup()
+                mcpManager.stopAll()
+                return
+            }
+
+            // osai gateway --stop → kill background gateway
+            if args.contains("--stop") {
+                stopBackgroundGateway()
+                mcpManager.stopAll()
+                return
+            }
+
+            // osai gateway --status → check if running
+            if args.contains("--status") {
+                checkGatewayStatus()
+                mcpManager.stopAll()
+                return
+            }
+
+            // osai gateway --background → daemonize
+            if args.contains("--background") || args.contains("--bg") || args.contains("-d") {
+                launchGatewayBackground()
+                mcpManager.stopAll()
+                return
+            }
+
+            // osai gateway (foreground, blocking)
             let gwConfig = fileConfig.gateways ?? GatewayConfig()
             let server = GatewayServer(config: config, mcpManager: mcpManager, gatewayConfig: gwConfig)
             await server.start()
@@ -2986,10 +3020,14 @@ struct DesktopAgentCLI {
           \(d)Auto-approves all actions. Press Ctrl+C to stop.\(r)
 
         \(b)GATEWAY\(r) \(d)(multi-platform messaging bridge)\(r)
-          \(c)osai gateway\(r)                  Start gateway server
+          \(c)osai gateway\(r)                  Start gateway (foreground)
+          \(c)osai gateway --background\(r)     Start gateway in background \(d)(also: --bg, -d)\(r)
+          \(c)osai gateway --stop\(r)           Stop background gateway
+          \(c)osai gateway --status\(r)         Check if gateway is running
+          \(c)osai gateway --startup\(r)        Auto-start gateway on login (launchd)
+          \(c)osai gateway --no-startup\(r)     Remove from login startup
           \(d)Bridges Telegram, WhatsApp, Slack, Discord, Apple Watch to osai.\(r)
           \(d)Configure in ~/.desktop-agent/config.json under "gateways".\(r)
-          \(d)Each platform gets its own agent session per chat.\(r)
           \(d)Messages are serialized per chat (no race conditions).\(r)
           \(d)Auto typing indicator while processing. Session persistence.\(r)
           \(d)Watch: Bonjour auto-discovery on local network (port 8375).\(r)
@@ -3095,6 +3133,185 @@ struct DesktopAgentCLI {
         print()
     }
 
+    // MARK: - Gateway Background & Startup
+
+    static let gatewayPidPath = NSHomeDirectory() + "/.desktop-agent/gateway.pid"
+    static let gatewayLogPath = NSHomeDirectory() + "/.desktop-agent/gateway.log"
+    static let gatewayPlistPath = NSHomeDirectory() + "/Library/LaunchAgents/com.desktop-agent.gateway.plist"
+
+    /// Launch gateway as a background process
+    static func launchGatewayBackground() {
+        // Check if already running
+        if let existingPid = readGatewayPid(), isProcessRunning(existingPid) {
+            print("  \u{26A0} Gateway already running (pid \(existingPid))")
+            print("  Use: osai gateway --stop to stop it")
+            return
+        }
+
+        let osaiPath = CommandLine.arguments[0].hasPrefix("/") ? CommandLine.arguments[0] : "/usr/local/bin/osai"
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: osaiPath)
+        process.arguments = ["gateway"]
+        process.environment = ProcessInfo.processInfo.environment
+
+        // Redirect output to log file
+        let logURL = URL(fileURLWithPath: gatewayLogPath)
+        FileManager.default.createFile(atPath: gatewayLogPath, contents: nil)
+        let logHandle = try? FileHandle(forWritingTo: logURL)
+        process.standardOutput = logHandle
+        process.standardError = logHandle
+        process.standardInput = FileHandle(forReadingAtPath: "/dev/null")
+
+        do {
+            try process.run()
+            let pid = process.processIdentifier
+            try "\(pid)".write(toFile: gatewayPidPath, atomically: true, encoding: .utf8)
+            print("  \u{2713} Gateway launched in background (pid \(pid))")
+            print("  Log: \(gatewayLogPath)")
+            print("  Stop: osai gateway --stop")
+            print("  Status: osai gateway --status")
+        } catch {
+            print("  \u{2717} Failed to launch gateway: \(error)")
+        }
+    }
+
+    /// Stop background gateway
+    static func stopBackgroundGateway() {
+        guard let pid = readGatewayPid() else {
+            print("  No gateway pid file found. Not running?")
+            return
+        }
+
+        if isProcessRunning(pid) {
+            kill(pid, SIGTERM)
+            // Give it a moment, then SIGKILL if needed
+            usleep(500_000)
+            if isProcessRunning(pid) {
+                kill(pid, SIGKILL)
+            }
+            print("  \u{2713} Gateway stopped (pid \(pid))")
+        } else {
+            print("  Gateway was not running (stale pid \(pid))")
+        }
+
+        try? FileManager.default.removeItem(atPath: gatewayPidPath)
+    }
+
+    /// Check gateway status
+    static func checkGatewayStatus() {
+        if let pid = readGatewayPid(), isProcessRunning(pid) {
+            print("  \u{2713} Gateway is running (pid \(pid))")
+            print("  Log: \(gatewayLogPath)")
+            // Show last few lines of log
+            if let data = try? String(contentsOfFile: gatewayLogPath, encoding: .utf8) {
+                let lines = data.components(separatedBy: "\n").suffix(5)
+                for line in lines where !line.isEmpty {
+                    print("    \(line)")
+                }
+            }
+        } else {
+            print("  \u{25CB} Gateway is not running")
+        }
+
+        // Check startup
+        if FileManager.default.fileExists(atPath: gatewayPlistPath) {
+            print("  \u{2713} Startup: enabled (launches on login)")
+        } else {
+            print("  \u{25CB} Startup: disabled")
+            print("    Enable: osai gateway --startup")
+        }
+    }
+
+    /// Install launchd plist for auto-start on login
+    static func installGatewayStartup() {
+        let osaiPath = "/usr/local/bin/osai"
+        guard FileManager.default.fileExists(atPath: osaiPath) else {
+            print("  \u{2717} osai not found at \(osaiPath)")
+            return
+        }
+
+        let plist = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0">
+        <dict>
+            <key>Label</key>
+            <string>com.desktop-agent.gateway</string>
+            <key>ProgramArguments</key>
+            <array>
+                <string>\(osaiPath)</string>
+                <string>gateway</string>
+            </array>
+            <key>RunAtLoad</key>
+            <true/>
+            <key>KeepAlive</key>
+            <true/>
+            <key>StandardOutPath</key>
+            <string>\(gatewayLogPath)</string>
+            <key>StandardErrorPath</key>
+            <string>\(gatewayLogPath)</string>
+            <key>EnvironmentVariables</key>
+            <dict>
+                <key>PATH</key>
+                <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:\(NSHomeDirectory())/.local/bin</string>
+                <key>HOME</key>
+                <string>\(NSHomeDirectory())</string>
+            </dict>
+        </dict>
+        </plist>
+        """
+
+        do {
+            let dir = (gatewayPlistPath as NSString).deletingLastPathComponent
+            try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+            try plist.write(toFile: gatewayPlistPath, atomically: true, encoding: .utf8)
+
+            // Load into launchd
+            let load = Process()
+            load.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+            load.arguments = ["load", gatewayPlistPath]
+            try load.run()
+            load.waitUntilExit()
+
+            print("  \u{2713} Gateway added to startup (launches on login)")
+            print("  Plist: \(gatewayPlistPath)")
+            print("  Remove: osai gateway --no-startup")
+        } catch {
+            print("  \u{2717} Failed to install startup: \(error)")
+        }
+    }
+
+    /// Remove gateway from startup
+    static func removeGatewayStartup() {
+        guard FileManager.default.fileExists(atPath: gatewayPlistPath) else {
+            print("  Gateway startup not configured.")
+            return
+        }
+
+        // Unload from launchd
+        let unload = Process()
+        unload.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        unload.arguments = ["unload", gatewayPlistPath]
+        try? unload.run()
+        unload.waitUntilExit()
+
+        try? FileManager.default.removeItem(atPath: gatewayPlistPath)
+        print("  \u{2713} Gateway removed from startup")
+    }
+
+    private static func readGatewayPid() -> pid_t? {
+        guard let str = try? String(contentsOfFile: gatewayPidPath, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
+              let pid = Int32(str) else { return nil }
+        return pid
+    }
+
+    private static func isProcessRunning(_ pid: pid_t) -> Bool {
+        kill(pid, 0) == 0
+    }
+
+    // MARK: - CLI Help
+
     static func printUsage() {
         print("""
         osai — AI-Powered macOS Desktop Agent
@@ -3112,7 +3329,12 @@ struct DesktopAgentCLI {
           osai doctor                           Diagnose configuration issues
           osai run <file.md>                    Execute a script/macro file
           osai watch "prompt" [--interval 5m]   Periodic monitoring
-          osai gateway                          Start messaging gateway
+          osai gateway                          Start messaging gateway (foreground)
+          osai gateway --background              Run gateway in background
+          osai gateway --stop                    Stop background gateway
+          osai gateway --status                  Check gateway status
+          osai gateway --startup                 Auto-start on login
+          osai gateway --no-startup              Remove from login startup
 
         OPTIONS:
           --model <provider/model>   Model override (e.g. anthropic/claude-sonnet-4.6)
