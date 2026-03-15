@@ -184,6 +184,9 @@ struct AIProvider {
                 "openai/gpt-4o",
                 "google/gemini-3.1-pro-preview",
                 "google/gemini-2.5-flash",
+                "x-ai/grok-4-0709",
+                "x-ai/grok-3",
+                "x-ai/grok-3-mini",
             ]
         ),
         AIProvider(
