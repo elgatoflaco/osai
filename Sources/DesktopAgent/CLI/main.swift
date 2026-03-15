@@ -705,6 +705,11 @@ struct DesktopAgentCLI {
             handleGateway(args: args)
             return .handled
 
+        // --- Agents ---
+        case "/agent", "/agents":
+            handleAgent(args: args)
+            return .handled
+
         // --- Sessions ---
         case "/save":
             return handleSessionSave(agent: agent, config: config)
@@ -1192,6 +1197,59 @@ struct DesktopAgentCLI {
 
         default:
             printColored("  Usage: /gateway [status|import]", color: .yellow)
+        }
+    }
+
+    // MARK: - Agent Commands
+
+    static func handleAgent(args: [String]) {
+        let sub = args.first ?? "list"
+
+        switch sub {
+        case "list":
+            let agents = AgentRegistry.loadAll()
+            if agents.isEmpty {
+                printDim("  No agents configured. Run /agent install to create defaults.")
+            } else {
+                print()
+                printColored("  Specialized Agents:", color: .bold)
+                for a in agents {
+                    printColored("  \u{1F916} \(a.name) \u{2192} \(a.model)", color: .cyan)
+                    printDim("     \(a.description)")
+                    printDim("     triggers: \(a.triggers.joined(separator: ", "))")
+                }
+                print()
+                printDim("  Agents auto-route when your message matches trigger keywords.")
+                printDim("  Dir: ~/.desktop-agent/agents/")
+            }
+
+        case "install":
+            AgentRegistry.installDefaults()
+            printColored("  \u{2713} Default agents installed in ~/.desktop-agent/agents/", color: .green)
+            let agents = AgentRegistry.loadAll()
+            for a in agents {
+                printColored("  \u{1F916} \(a.name) \u{2192} \(a.model)", color: .cyan)
+            }
+
+        case "test":
+            // Test routing for a phrase
+            let phrase = args.dropFirst().joined(separator: " ")
+            if phrase.isEmpty {
+                printDim("  Usage: /agent test <phrase>")
+                printDim("  Example: /agent test dame las noticias de hoy")
+            } else if let match = AgentRegistry.route(input: phrase) {
+                printColored("  \u{2192} Would route to: \(match.name) (\(match.model))", color: .cyan)
+                printDim("     Matched triggers: \(match.triggers.filter { phrase.lowercased().contains($0.lowercased()) }.joined(separator: ", "))")
+            } else {
+                printDim("  \u{2192} No agent matched. Main agent would handle.")
+            }
+
+        case "reload":
+            let agents = AgentRegistry.loadAll()
+            printColored("  Reloaded \(agents.count) agents.", color: .green)
+
+        default:
+            printDim("  Usage: /agent list | install | test <phrase> | reload")
         }
     }
 
@@ -2897,6 +2955,14 @@ struct DesktopAgentCLI {
           \(c)/skill delete\(r) <name>          Remove a skill
           \(d)Skills auto-activate when your message matches trigger keywords.\(r)
           \(d)Add your own: ~/.desktop-agent/skills/<name>.md\(r)
+
+        \(b)AGENTS\(r) \(d)(specialized model routing)\(r)
+          \(c)/agent list\(r)                   List specialized agents and triggers
+          \(c)/agent install\(r)                Install default agents
+          \(c)/agent test\(r) <phrase>          Test which agent would handle a phrase
+          \(c)/agent reload\(r)                 Reload agents from disk
+          \(d)Agents auto-route your first message to a specialized model\(r)
+          \(d)when trigger keywords match. Add your own: ~/.desktop-agent/agents/<name>.md\(r)
 
         \(b)TASKS\(r) \(d)(scheduled automation via launchd)\(r)
           \(c)/task list\(r)                    List scheduled tasks

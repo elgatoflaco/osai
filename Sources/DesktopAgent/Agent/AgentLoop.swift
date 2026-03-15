@@ -183,6 +183,27 @@ final class AgentLoop {
             return nil
         }.joined(separator: " ")
 
+        // --- Specialized Agent Routing ---
+        // Only auto-route on first message or very early in conversation (not follow-ups)
+        let shouldRoute = conversationHistory.count <= 2
+        if shouldRoute, let specializedAgent = AgentRegistry.route(input: userInput) {
+            // Verify the model can be resolved before committing to routing
+            if let resolved = AIProvider.resolve(modelString: specializedAgent.model) {
+                if verbose {
+                    printColored("  \u{1F3AF} Routing to specialized agent: \(specializedAgent.name) (\(specializedAgent.model))", color: .magenta)
+                }
+                let result = try await runSpecializedAgent(agent: specializedAgent, resolved: resolved, input: userInput)
+                if !result.isEmpty {
+                    // Add the result to conversation history so follow-ups work
+                    conversationHistory.append(ClaudeMessage(role: "assistant", content: [.text(result)]))
+                    return result
+                }
+                // If result is empty, fall through to normal processing
+            } else if verbose {
+                printColored("  \u{26A0} Agent '\(specializedAgent.name)' model '\(specializedAgent.model)' not resolved, using main model", color: .yellow)
+            }
+        }
+
         var finalResponse = ""
         var iterations = 0
         let maxIterations = 30
@@ -1582,6 +1603,138 @@ final class AgentLoop {
             }
             return ""
         }
+    }
+
+    // MARK: - Specialized Agent Execution
+
+    /// Run a specialized agent with its own model/provider and return the final text output.
+    private func runSpecializedAgent(
+        agent: SpecializedAgentDef,
+        resolved: (provider: AIProvider, model: String),
+        input: String
+    ) async throws -> String {
+        let fileConfig = AgentConfigFile.load()
+        let agentKey = fileConfig.getAPIKey(provider: resolved.provider.id) ?? config.apiKey
+        let agentBaseURL = fileConfig.getBaseURL(provider: resolved.provider.id) ?? resolved.provider.defaultBaseURL
+
+        let agentConfig = AgentConfig(
+            apiKey: agentKey,
+            model: resolved.model,
+            maxTokens: config.maxTokens,
+            systemPrompt: agent.systemPrompt,
+            verbose: config.verbose,
+            maxScreenshotWidth: config.maxScreenshotWidth,
+            baseURL: agentBaseURL,
+            apiFormat: resolved.provider.format,
+            providerId: resolved.provider.id,
+            profileName: nil,
+            fallbackModels: config.fallbackModels
+        )
+
+        let agentClient = AIClient(config: agentConfig)
+        let agentExecutor = ToolExecutor()
+        agentExecutor.mcpManager = mcpManager
+
+        // Determine tools for this agent
+        let tools: [ClaudeTool]
+        if let categories = agent.toolCategories {
+            let cats = Set(categories.compactMap { ToolCategory(rawValue: $0) })
+            tools = ToolDefinitions.tools(for: cats)
+        } else {
+            // All built-in tools + MCP tools, but no discover_tools or run_subagents to keep it contained
+            var allTools = ToolDefinitions.tools(for: Set(ToolCategory.allCases))
+            allTools = allTools.filter { $0.name != "run_subagents" }
+            allTools += mcpManager.getClaudeTools()
+            tools = allTools
+        }
+
+        // Show routing indicator
+        printColored("  \u{1F916} [\(agent.name)] using \(agent.model)", color: .magenta)
+
+        // Run the specialized agent conversation
+        var messages: [ClaudeMessage] = [
+            ClaudeMessage(role: "user", content: [.text(input)])
+        ]
+
+        var finalOutput = ""
+        let maxIter = agent.maxIterations ?? 15
+
+        for _ in 0..<maxIter {
+            if isCancelled {
+                printColored("\n  \u{26A0} Specialized agent cancelled", color: .yellow)
+                break
+            }
+
+            // Check spending limits
+            if let limitError = spendingGuard.checkLimits() {
+                throw AgentError.permissionDenied(limitError)
+            }
+
+            let response = try await agentClient.sendMessage(
+                messages: messages,
+                system: agent.systemPrompt,
+                tools: tools
+            )
+
+            // Track tokens in main context manager
+            context.recordUsage(response.usage)
+
+            var hasToolUse = false
+            var assistantContent: [ClaudeContent] = []
+            var toolResults: [ClaudeContent] = []
+
+            for content in response.content {
+                assistantContent.append(content)
+
+                switch content {
+                case .text(let text):
+                    if !text.isEmpty {
+                        finalOutput = text
+                        // Stream text to gateway if connected
+                        if let stream = onStreamText {
+                            await stream(text)
+                        }
+                    }
+                case .toolUse(let id, let name, let toolInput, _):
+                    hasToolUse = true
+                    let icon = toolIcon(name)
+                    printColored("  \(icon) [\(agent.name)] \(name)", color: .gray)
+
+                    // Execute the tool
+                    if mcpManager.canHandle(toolName: name) {
+                        let args = toolInput.mapValues { $0.value }
+                        let result = mcpManager.executeTool(qualifiedName: name, arguments: args)
+                        toolResults.append(.toolResultText(toolUseId: id, text: result.output))
+                    } else {
+                        let (result, screenshotBase64) = agentExecutor.execute(toolName: name, input: toolInput)
+                        if let base64 = screenshotBase64 {
+                            toolResults.append(.toolResultWithImage(
+                                toolUseId: id, text: result.output,
+                                imageBase64: base64, mediaType: "image/jpeg"
+                            ))
+                        } else {
+                            toolResults.append(.toolResultText(toolUseId: id, text: result.output))
+                        }
+                    }
+                default:
+                    break
+                }
+            }
+
+            messages.append(ClaudeMessage(role: "assistant", content: assistantContent))
+
+            if hasToolUse {
+                messages.append(ClaudeMessage(role: "user", content: toolResults))
+            } else {
+                break
+            }
+
+            if response.stopReason == "end_turn" && !hasToolUse {
+                break
+            }
+        }
+
+        return finalOutput
     }
 
     // MARK: - Tool Icons

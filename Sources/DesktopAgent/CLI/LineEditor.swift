@@ -98,7 +98,7 @@ final class LineEditor {
             "/skill", "/task", "/watch", "/gateway", "/profile",
             "/fallback", "/apps", "/windows", "/screen", "/perms",
             "/save", "/sessions", "/session", "/new",
-            "/usage", "/status"
+            "/usage", "/status", "/agent"
         ]
         self.subCompletions = [
             "/config": ["set-key", "remove-key", "set-url", "import-openclaw", "list"],
@@ -112,7 +112,8 @@ final class LineEditor {
             "/gateway": ["status", "import"],
             "/profile": ["list", "use", "show", "edit"],
             "/fallback": ["list", "add", "remove", "clear"],
-            "/session": ["list", "load", "resume", "delete"]
+            "/session": ["list", "load", "resume", "delete"],
+            "/agent": ["list", "install", "test", "reload"]
         ]
     }
 

@@ -148,9 +148,10 @@ struct AgentConfig {
         let baseURL = fileConfig.getBaseURL(provider: provider.id) ?? provider.defaultBaseURL
         let maxTokens = fileConfig.maxTokens ?? Int(ProcessInfo.processInfo.environment["DESKTOP_AGENT_MAX_TOKENS"] ?? "8192") ?? 8192
 
-        // Install default program.md and profile templates if needed
+        // Install default program.md, profile templates, and agent definitions if needed
         AgentProgram.installDefault()
         ProfileManager.installDefaults()
+        AgentRegistry.installDefaults()
 
         // Determine active profile: CLI arg > none
         var profileName: String? = nil
