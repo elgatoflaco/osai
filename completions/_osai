@@ -11,6 +11,29 @@ _osai() {
         'gateway:Iniciar modo gateway (WhatsApp, Watch, etc.)'
     )
 
+    local -a providers
+    providers=(
+        'anthropic:Anthropic (Claude)'
+        'openai:OpenAI (GPT)'
+        'google:Google (Gemini)'
+        'groq:Groq (Llama, Mixtral)'
+        'mistral:Mistral AI'
+        'openrouter:OpenRouter (multi-provider)'
+        'deepseek:DeepSeek'
+        'xai:xAI (Grok)'
+    )
+
+    local -a models
+    models=(
+        'anthropic/claude-opus-4.6' 'anthropic/claude-sonnet-4.6' 'anthropic/claude-haiku-4.5'
+        'openai/gpt-5' 'openai/gpt-5-mini' 'openai/gpt-4.1' 'openai/o3' 'openai/o4-mini'
+        'google/gemini-3.1-pro-preview' 'google/gemini-2.5-pro' 'google/gemini-2.5-flash'
+        'groq/llama-3.3-70b-versatile' 'groq/llama-3.1-8b-instant'
+        'mistral/mistral-large-latest' 'mistral/codestral-latest'
+        'deepseek/deepseek-chat' 'deepseek/deepseek-reasoner'
+        'xai/grok-4-0709' 'xai/grok-3'
+    )
+
     _arguments -C \
         '1:command:->cmd' \
         '--help[Mostrar ayuda]' \
@@ -19,7 +42,7 @@ _osai() {
         '-V[Mostrar versión]' \
         '--verbose[Modo verbose]' \
         '-v[Modo verbose]' \
-        '--model[Modelo a usar]:model:' \
+        '--model[Modelo a usar]:model:->models' \
         '--profile[Perfil a usar]:profile:->profiles' \
         '--deliver[Entregar resultado a gateway]:target:' \
         '*::arg:->args'
@@ -27,6 +50,9 @@ _osai() {
     case "$state" in
         cmd)
             _describe 'command' commands
+            ;;
+        models)
+            _describe 'model' models
             ;;
         profiles)
             local -a profile_list
@@ -44,6 +70,10 @@ _osai() {
                     _arguments \
                         '--interval[Check interval (30s, 5m, 1h)]:interval:' \
                         '--every[Check interval (30s, 5m, 1h)]:interval:'
+                    ;;
+                gateway)
+                    _arguments \
+                        '--port[Puerto HTTP para el gateway]:port:'
                     ;;
             esac
             ;;

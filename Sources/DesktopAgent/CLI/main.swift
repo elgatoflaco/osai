@@ -3034,26 +3034,38 @@ struct DesktopAgentCLI {
         osai — AI-Powered macOS Desktop Agent
 
         USAGE:
-          osai                           Interactive mode (full UI)
-          osai "open Safari"             Single command (headless, just runs)
-          osai --model openai/gpt-4o "translate this"
-          echo "list my files" | osai    Pipe input
-          osai watch "check X" --interval 5m   Periodic monitoring
-          osai gateway                   Start multi-platform gateway
-          osai --deliver <platform> <chatId> "task output"
+          osai                                  Interactive mode (full UI)
+          osai "open Safari"                    Single command (headless)
+          osai --model openai/gpt-5 "task"      Use a specific model
+          osai --profile coding "refactor X"    Use a profile
+          echo "list my files" | osai           Pipe input
+
+        COMMANDS:
+          osai update                           Update to latest version
+          osai version                          Show current version
+          osai doctor                           Diagnose configuration issues
+          osai run <file.md>                    Execute a script/macro file
+          osai watch "prompt" [--interval 5m]   Periodic monitoring
+          osai gateway                          Start messaging gateway
 
         OPTIONS:
-          --model <provider/model>   Model to use (from config or override)
-          --verbose, -v              Verbose output (show token counts, iterations)
+          --model <provider/model>   Model override (e.g. anthropic/claude-sonnet-4.6)
+          --profile <name>           Profile preset (stored in ~/.desktop-agent/profiles/)
+          --deliver <target>         Deliver result to a gateway target
+          --verbose, -v              Verbose output (token counts, iterations)
+          --version, -V              Show version
           --help, -h                 Show this help
 
-        INTERACTIVE COMMANDS:  /help (once inside)
-        CONFIG:   ~/.desktop-agent/config.json
-        PLUGINS:  ~/.desktop-agent/plugins/
-        SKILLS:   ~/.desktop-agent/skills/
-        TASKS:    ~/.desktop-agent/tasks/
-        MEMORY:   ~/.desktop-agent/memory/
-        SESSIONS: ~/.desktop-agent/sessions/
+        INTERACTIVE COMMANDS:  Type /help once inside for full list
+
+        DIRECTORIES:
+          Config:   ~/.desktop-agent/config.json
+          Plugins:  ~/.desktop-agent/plugins/
+          Skills:   ~/.desktop-agent/skills/
+          Tasks:    ~/.desktop-agent/tasks/
+          Memory:   ~/.desktop-agent/memory/
+          Sessions: ~/.desktop-agent/sessions/
+          Profiles: ~/.desktop-agent/profiles/
 
         GATEWAY PLATFORMS:
           WhatsApp    wacli CLI polling           (wacli auth required)
@@ -3062,22 +3074,21 @@ struct DesktopAgentCLI {
           Slack       Socket Mode WebSocket      (bot_token + app_token required)
           Watch       HTTP + Bonjour             (Apple Watch companion app)
 
-        MCP SERVERS:
-          /mcp add <name> <command> [args]    Add external tool server
-          /mcp list                           Show active servers
+        PROVIDERS (8 built-in):
+          anthropic, openai, google, groq, mistral, openrouter, deepseek, xai
 
         FIRST RUN:
-          1. Get an API key from https://openrouter.ai ($1 free credit)
-          2. osai
-          3. /config set-key openrouter sk-or-...
-          4. /model use openrouter/minimax/minimax-m2.5
+          Just run 'osai' — the onboarding wizard will guide you through setup.
+          Or manually: /config set-key <provider> <key>
 
         EXAMPLES:
           osai "take a screenshot and describe what you see"
           osai "open Finder and organize my Desktop"
           osai "create an SVG logo for my startup"
           osai "every day at 9am check my email and summarize"
-          osai gateway    # Start WhatsApp/Discord/Telegram/Watch bridge
+          osai doctor                  # Check your setup
+          osai gateway                 # Start messaging bridge
+          osai run ~/scripts/daily.md  # Run automation script
         """)
     }
 }
