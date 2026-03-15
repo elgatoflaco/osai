@@ -237,6 +237,7 @@ struct AIProvider {
 struct AgentConfigFile: Codable {
     var apiKeys: [String: AIProviderConfig]?
     var activeModel: String?   // "provider/model" format, e.g. "anthropic/claude-sonnet-4-20250514"
+    var fallbackModels: [String]?  // Array of "provider/model" strings to try when primary fails
     var mcpServers: [String: MCPServerConfig]?
     var gateways: GatewayConfig?
     var maxTokens: Int?
@@ -244,7 +245,7 @@ struct AgentConfigFile: Codable {
     var spendingLimits: SpendingLimits?
 
     enum CodingKeys: String, CodingKey {
-        case apiKeys, activeModel, mcpServers, gateways, maxTokens, maxScreenshotWidth
+        case apiKeys, activeModel, fallbackModels, mcpServers, gateways, maxTokens, maxScreenshotWidth
         case spendingLimits = "spending_limits"
     }
 

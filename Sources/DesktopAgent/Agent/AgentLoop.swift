@@ -97,6 +97,81 @@ final class AgentLoop {
         return try await processUserContent([.text(userInput)])
     }
 
+    // MARK: - Fallback Model Chain
+
+    /// Try each fallback model in order (1 attempt each). Returns the first successful response,
+    /// or nil if all fallbacks fail (caller should throw the original error).
+    private func tryFallbackModels(
+        messages: [ClaudeMessage],
+        system: String?,
+        tools: [ClaudeTool]?,
+        originalError: Error
+    ) async throws -> ClaudeResponse? {
+        guard !config.fallbackModels.isEmpty else { return nil }
+
+        let fileConfig = AgentConfigFile.load()
+
+        for modelString in config.fallbackModels {
+            guard let resolved = AIProvider.resolve(modelString: modelString) else {
+                if verbose {
+                    printColored("  ⚠ Skipping unknown fallback model: \(modelString)", color: .gray)
+                }
+                continue
+            }
+
+            // Get API key for fallback provider
+            var fallbackKey = fileConfig.getAPIKey(provider: resolved.provider.id) ?? ""
+            if fallbackKey.isEmpty {
+                let envKeys: [String: String] = [
+                    "anthropic": "ANTHROPIC_API_KEY",
+                    "openai": "OPENAI_API_KEY",
+                    "google": "GOOGLE_API_KEY",
+                    "groq": "GROQ_API_KEY",
+                    "mistral": "MISTRAL_API_KEY",
+                    "openrouter": "OPENROUTER_API_KEY",
+                    "deepseek": "DEEPSEEK_API_KEY",
+                    "xai": "XAI_API_KEY",
+                ]
+                if let envName = envKeys[resolved.provider.id] {
+                    fallbackKey = ProcessInfo.processInfo.environment[envName] ?? ""
+                }
+            }
+
+            guard !fallbackKey.isEmpty else {
+                if verbose {
+                    printColored("  ⚠ Skipping fallback \(modelString) — no API key", color: .gray)
+                }
+                continue
+            }
+
+            let fallbackBaseURL = fileConfig.getBaseURL(provider: resolved.provider.id) ?? resolved.provider.defaultBaseURL
+            let fallbackClient = AIClient(
+                apiKey: fallbackKey,
+                model: resolved.model,
+                maxTokens: config.maxTokens,
+                baseURL: fallbackBaseURL,
+                format: resolved.provider.format
+            )
+
+            printColored("  ⚠ Primary model failed, trying fallback: \(modelString)", color: .yellow)
+
+            do {
+                let response = try await fallbackClient.sendMessage(
+                    messages: messages,
+                    system: system,
+                    tools: tools
+                )
+                printColored("  ✓ Fallback \(modelString) succeeded", color: .green)
+                return response
+            } catch {
+                printColored("  ✗ Fallback \(modelString) also failed: \(error.localizedDescription)", color: .red)
+                continue
+            }
+        }
+
+        return nil
+    }
+
     private func processUserContent(_ content: [ClaudeContent]) async throws -> String {
         // Add user message
         conversationHistory.append(ClaudeMessage(
@@ -174,7 +249,7 @@ final class AgentLoop {
                 printColored("  \(warning)", color: .yellow)
             }
 
-            // API call with automatic retry for transient errors
+            // API call with automatic retry for transient errors + fallback models
             let apiStartTime = DispatchTime.now()
             let response: ClaudeResponse
             do {
@@ -191,13 +266,37 @@ final class AgentLoop {
                 if classified.isRetryable, case .retry(let delayMs, _) = classified.suggestedAction {
                     printColored("  🔄 \(classified.category) — retrying in \(delayMs)ms...", color: .yellow)
                     try await Task.sleep(nanoseconds: UInt64(delayMs) * 1_000_000)
-                    response = try await client.sendMessage(
+                    do {
+                        response = try await client.sendMessage(
+                            messages: conversationHistory,
+                            system: fullSystemPrompt,
+                            tools: allTools
+                        )
+                    } catch {
+                        // Primary model retry failed — try fallback models
+                        if let fallbackResponse = try await tryFallbackModels(
+                            messages: conversationHistory,
+                            system: fullSystemPrompt,
+                            tools: allTools,
+                            originalError: error
+                        ) {
+                            response = fallbackResponse
+                        } else {
+                            throw error
+                        }
+                    }
+                } else {
+                    // Non-retryable on primary — try fallback models directly
+                    if let fallbackResponse = try await tryFallbackModels(
                         messages: conversationHistory,
                         system: fullSystemPrompt,
-                        tools: allTools
-                    )
-                } else {
-                    throw error
+                        tools: allTools,
+                        originalError: error
+                    ) {
+                        response = fallbackResponse
+                    } else {
+                        throw error
+                    }
                 }
             }
 
@@ -1250,7 +1349,8 @@ final class AgentLoop {
             baseURL: pluginBaseURL,
             apiFormat: pluginProvider.format,
             providerId: pluginProvider.id,
-            profileName: config.profileName
+            profileName: config.profileName,
+            fallbackModels: config.fallbackModels
         )
 
         let pluginClient = AIClient(config: pluginConfig)

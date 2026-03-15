@@ -233,6 +233,34 @@ struct DesktopAgentCLI {
     // Chat mode: mutable state accessible from input thread
     nonisolated(unsafe) static var chatConfig: AgentConfig?
     nonisolated(unsafe) static var chatAgent: AgentLoop?
+    // Session persistence
+    nonisolated(unsafe) static var currentSessionId: String = UUID().uuidString
+    nonisolated(unsafe) static var currentSessionName: String?
+    nonisolated(unsafe) static var sessionFirstMessage: String?
+    nonisolated(unsafe) static var sessionTurnCount: Int = 0
+    nonisolated(unsafe) static var sessionTotalTokens: Int = 0
+
+    // Usage display level: cycles off → tokens → full → off
+    enum UsageDisplayLevel: Int, CaseIterable {
+        case off = 0
+        case tokens = 1
+        case full = 2
+
+        var next: UsageDisplayLevel {
+            let all = UsageDisplayLevel.allCases
+            let nextIdx = (rawValue + 1) % all.count
+            return all[nextIdx]
+        }
+
+        var label: String {
+            switch self {
+            case .off: return "off"
+            case .tokens: return "tokens"
+            case .full: return "full (tokens + cost)"
+            }
+        }
+    }
+    nonisolated(unsafe) static var usageDisplayLevel: UsageDisplayLevel = .full
 
     /// Save terminal state before entering raw mode (called once at interactive start)
     static func saveTerminal() {
@@ -257,6 +285,20 @@ struct DesktopAgentCLI {
 
         // Disable AsideMonitor — LineEditor owns stdin in chat mode
         agent.aside.disabled = true
+
+        // Session: check for a previous auto-saved session to resume
+        if SessionManager.hasCurrentSession(),
+           let session = SessionManager.load(id: "current") {
+            let ago = Int(Date().timeIntervalSince(session.info.updatedAt))
+            let agoStr: String
+            if ago < 60 { agoStr = "\(ago)s ago" }
+            else if ago < 3600 { agoStr = "\(ago / 60)m ago" }
+            else if ago < 86400 { agoStr = "\(ago / 3600)h ago" }
+            else { agoStr = "\(ago / 86400)d ago" }
+            printColored("  Previous session found: \"\(session.info.name)\" (\(session.info.turnCount) turns, \(agoStr))", color: .cyan)
+            printDim("  Type /session resume to continue, or /new to start fresh.")
+            print()
+        }
 
         // Save terminal state before anything touches raw mode
         saveTerminal()
@@ -363,9 +405,30 @@ struct DesktopAgentCLI {
                 activeAgent = nil
                 lineEditor.agentBusy = false
                 if agent.context.turnCount > 0 {
-                    TerminalDisplay.shared.writeLine("  \u{001B}[90m\(agent.context.consumeTurnSummary())\u{001B}[0m")
+                    if let usageLine = formatUsageLine(context: agent.context) {
+                        TerminalDisplay.shared.writeLine("  \u{001B}[90m\(usageLine)\u{001B}[0m")
+                    } else {
+                        // Still consume the turn summary to reset compaction display state
+                        _ = agent.context.consumeTurnSummary()
+                    }
                 }
                 TerminalDisplay.shared.writeLine("")
+
+                // Auto-save session
+                if sessionFirstMessage == nil { sessionFirstMessage = input }
+                sessionTurnCount += 1
+                let name = currentSessionName ?? SessionManager.generateName(from: sessionFirstMessage ?? input)
+                currentSessionName = name
+                let info = SessionInfo(
+                    id: currentSessionId,
+                    name: name,
+                    model: currentConfig.model,
+                    createdAt: Date(),
+                    updatedAt: Date(),
+                    turnCount: sessionTurnCount,
+                    totalTokens: sessionTotalTokens
+                )
+                SessionManager.save(id: "current", info: info, messages: agent.currentHistory)
             } catch let error as AgentError {
                 activeAgent = nil
                 lineEditor.agentBusy = false
@@ -404,8 +467,9 @@ struct DesktopAgentCLI {
         let cmd = input.split(separator: " ").first.map(String.init)?.lowercased() ?? ""
         let commands = ["/help", "/quit", "/exit", "/clear", "/config", "/model",
                        "/mcp", "/plugin", "/memory", "/skill", "/task", "/gateway",
-                       "/apps", "/windows", "/screen", "/perms",
-                       "/verbose", "/yolo", "/context", "/compact"]
+                       "/fallback", "/apps", "/windows", "/screen", "/perms",
+                       "/verbose", "/yolo", "/context", "/compact",
+                       "/save", "/sessions", "/session", "/new"]
 
         // Find closest match by edit distance or prefix
         var bestMatch: String?
@@ -461,6 +525,15 @@ struct DesktopAgentCLI {
             } else {
                 printColored("  🛡 YOLO mode OFF — dangerous actions require approval", color: .green)
             }
+            return .handled
+
+        case "/usage":
+            usageDisplayLevel = usageDisplayLevel.next
+            printColored("  Usage display: \(usageDisplayLevel.label)", color: .cyan)
+            return .handled
+
+        case "/status":
+            printStatus(agent: agent, config: config)
             return .handled
 
         case "/context", "/ctx":
@@ -625,13 +698,172 @@ struct DesktopAgentCLI {
                 try? await Task.sleep(nanoseconds: UInt64(watchInterval * 1_000_000_000))
             }
 
+        case "/fallback", "/fallbacks":
+            return handleFallback(args: args, config: &config)
+
         case "/gateway":
             handleGateway(args: args)
             return .handled
 
+        // --- Sessions ---
+        case "/save":
+            return handleSessionSave(agent: agent, config: config)
+
+        case "/sessions":
+            return handleSessionList()
+
+        case "/session":
+            return handleSession(args: args, agent: agent, config: config)
+
+        case "/new":
+            return handleSessionNew(agent: agent)
+
         default:
             return .passthrough
         }
+    }
+
+    // MARK: - Session Commands
+
+    static func handleSessionSave(agent: AgentLoop, config: AgentConfig) -> CommandResult {
+        let history = agent.currentHistory
+        guard !history.isEmpty else {
+            printDim("  Nothing to save — conversation is empty.")
+            return .handled
+        }
+
+        let name = currentSessionName ?? SessionManager.generateName(from: sessionFirstMessage ?? "untitled")
+        currentSessionName = name
+        let info = SessionInfo(
+            id: currentSessionId,
+            name: name,
+            model: config.model,
+            createdAt: Date(),
+            updatedAt: Date(),
+            turnCount: sessionTurnCount,
+            totalTokens: sessionTotalTokens
+        )
+        SessionManager.save(id: currentSessionId, info: info, messages: history)
+        let shortId = String(currentSessionId.prefix(8))
+        printColored("  Session saved: \"\(name)\" [\(shortId)]", color: .green)
+        return .handled
+    }
+
+    static func handleSessionList() -> CommandResult {
+        let sessions = SessionManager.listRecent(limit: 10)
+        if sessions.isEmpty {
+            printDim("  No saved sessions.")
+            return .handled
+        }
+        print()
+        printColored("  Saved sessions:", color: .cyan)
+        let fmt = DateFormatter()
+        fmt.dateStyle = .short
+        fmt.timeStyle = .short
+        for (i, s) in sessions.enumerated() {
+            let shortId = String(s.id.prefix(8))
+            let date = fmt.string(from: s.updatedAt)
+            printColored("  \(i + 1). \(s.name) \u{001B}[90m[\(shortId)] \(s.turnCount) turns, \(date)\u{001B}[0m", color: .reset)
+        }
+        print()
+        printDim("  Use /session load <number> to resume")
+        return .handled
+    }
+
+    static func handleSession(args: [String], agent: AgentLoop, config: AgentConfig) -> CommandResult {
+        let sub = args.first ?? "list"
+
+        switch sub {
+        case "list":
+            return handleSessionList()
+
+        case "load", "resume":
+            let target = args.count > 1 ? args[1] : nil
+
+            // /session resume — load current auto-saved session
+            if sub == "resume" || target == nil {
+                guard let session = SessionManager.load(id: "current") else {
+                    printDim("  No session to resume.")
+                    return .handled
+                }
+                agent.restoreHistory(session.messages)
+                currentSessionId = session.info.id
+                currentSessionName = session.info.name
+                sessionFirstMessage = session.info.name
+                sessionTurnCount = session.info.turnCount
+                sessionTotalTokens = session.info.totalTokens
+                printColored("  Resumed session: \"\(session.info.name)\" (\(session.messages.count) messages)", color: .green)
+                return .handled
+            }
+
+            // Try number first, then ID prefix
+            let sessions = SessionManager.listRecent(limit: 20)
+            var found: (info: SessionInfo, messages: [ClaudeMessage])?
+
+            if let num = Int(target!), num >= 1, num <= sessions.count {
+                let id = sessions[num - 1].id
+                found = SessionManager.load(id: id)
+            } else {
+                // Match by ID prefix
+                let prefix = target!.lowercased()
+                if let match = sessions.first(where: { $0.id.lowercased().hasPrefix(prefix) }) {
+                    found = SessionManager.load(id: match.id)
+                }
+            }
+
+            guard let session = found else {
+                printColored("  Session not found.", color: .red)
+                return .handled
+            }
+
+            agent.restoreHistory(session.messages)
+            currentSessionId = session.info.id
+            currentSessionName = session.info.name
+            sessionFirstMessage = session.info.name
+            sessionTurnCount = session.info.turnCount
+            sessionTotalTokens = session.info.totalTokens
+            printColored("  Loaded session: \"\(session.info.name)\" (\(session.messages.count) messages)", color: .green)
+            return .handled
+
+        case "delete":
+            guard args.count > 1 else {
+                printDim("  Usage: /session delete <number-or-id>")
+                return .handled
+            }
+            let target = args[1]
+            let sessions = SessionManager.listRecent(limit: 20)
+
+            if let num = Int(target), num >= 1, num <= sessions.count {
+                let s = sessions[num - 1]
+                SessionManager.delete(id: s.id)
+                printColored("  Deleted session: \"\(s.name)\"", color: .green)
+            } else {
+                let prefix = target.lowercased()
+                if let match = sessions.first(where: { $0.id.lowercased().hasPrefix(prefix) }) {
+                    SessionManager.delete(id: match.id)
+                    printColored("  Deleted session: \"\(match.name)\"", color: .green)
+                } else {
+                    printColored("  Session not found.", color: .red)
+                }
+            }
+            return .handled
+
+        default:
+            printDim("  Usage: /session list | load <id> | resume | delete <id>")
+            return .handled
+        }
+    }
+
+    static func handleSessionNew(agent: AgentLoop) -> CommandResult {
+        agent.clearHistory()
+        SessionManager.deleteCurrent()
+        currentSessionId = UUID().uuidString
+        currentSessionName = nil
+        sessionFirstMessage = nil
+        sessionTurnCount = 0
+        sessionTotalTokens = 0
+        printColored("  New session started.", color: .green)
+        return .handled
     }
 
     // MARK: - Watch Mode
@@ -749,7 +981,8 @@ struct DesktopAgentCLI {
                 baseURL: config.baseURL,
                 apiFormat: config.apiFormat,
                 providerId: config.providerId,
-                profileName: name
+                profileName: name,
+                fallbackModels: config.fallbackModels
             )
             printColored("  Switched to profile: \(name)", color: .green)
             return .reload
@@ -797,6 +1030,113 @@ struct DesktopAgentCLI {
 
         default:
             printColored("  Usage: /profile [list|use <name>|show|edit <name>]", color: .yellow)
+            return .handled
+        }
+    }
+
+    // MARK: - /fallback command
+
+    static func handleFallback(args: [String], config: inout AgentConfig) -> CommandResult {
+        let sub = args.first?.lowercased() ?? "list"
+
+        switch sub {
+        case "list":
+            let fallbacks = config.fallbackModels
+            if fallbacks.isEmpty {
+                printDim("  No fallback models configured.")
+                printDim("  When the primary model fails, fallbacks are tried in order.")
+            } else {
+                printColored("\n  Fallback chain:", color: .bold)
+                for (i, model) in fallbacks.enumerated() {
+                    let providerName = AIProvider.resolve(modelString: model)?.provider.name ?? "?"
+                    printColored("    \(i + 1). \(model) \u{001B}[90m(\(providerName))\u{001B}[0m", color: .cyan)
+                }
+                print()
+            }
+            printDim("  /fallback add <provider/model>    \u{2014} add a fallback")
+            printDim("  /fallback remove <provider/model>  \u{2014} remove a fallback")
+            printDim("  /fallback clear                    \u{2014} clear all fallbacks")
+            print()
+            return .handled
+
+        case "add":
+            guard args.count >= 2 else {
+                printColored("  Usage: /fallback add <provider/model>", color: .yellow)
+                printDim("  Example: /fallback add openai/gpt-4o")
+                return .handled
+            }
+            let modelString = args[1]
+
+            guard let resolved = AIProvider.resolve(modelString: modelString) else {
+                printColored("  \u{2717} Unknown model: \(modelString)", color: .red)
+                printHint("Use provider/model format, e.g. openai/gpt-4o, anthropic/claude-haiku-4-5-20251001")
+                return .handled
+            }
+
+            let canonical = "\(resolved.provider.id)/\(resolved.model)"
+            var fileConfig = AgentConfigFile.load()
+            var fallbacks = fileConfig.fallbackModels ?? []
+            if fallbacks.contains(canonical) {
+                printDim("  Already in fallback chain: \(canonical)")
+                return .handled
+            }
+            fallbacks.append(canonical)
+            fileConfig.fallbackModels = fallbacks
+            do {
+                try fileConfig.save()
+            } catch {
+                printColored("  \u{2717} Error saving: \(error)", color: .red)
+                return .handled
+            }
+            config = AgentConfig.load()
+            printColored("  \u{2713} Added fallback: \(canonical) (\(resolved.provider.name))", color: .green)
+            return .reload
+
+        case "remove":
+            guard args.count >= 2 else {
+                printColored("  Usage: /fallback remove <provider/model>", color: .yellow)
+                return .handled
+            }
+            let modelString = args[1]
+            var fileConfig = AgentConfigFile.load()
+            var fallbacks = fileConfig.fallbackModels ?? []
+            let canonical = AIProvider.resolve(modelString: modelString).map { "\($0.provider.id)/\($0.model)" } ?? modelString
+            if let idx = fallbacks.firstIndex(of: canonical) {
+                fallbacks.remove(at: idx)
+            } else if let idx = fallbacks.firstIndex(of: modelString) {
+                fallbacks.remove(at: idx)
+            } else {
+                printColored("  \u{2717} Not found in fallback chain: \(modelString)", color: .red)
+                let current = fallbacks.joined(separator: ", ")
+                if !current.isEmpty { printDim("  Current: \(current)") }
+                return .handled
+            }
+            fileConfig.fallbackModels = fallbacks.isEmpty ? nil : fallbacks
+            do {
+                try fileConfig.save()
+            } catch {
+                printColored("  \u{2717} Error saving: \(error)", color: .red)
+                return .handled
+            }
+            config = AgentConfig.load()
+            printColored("  \u{2713} Removed fallback: \(canonical)", color: .green)
+            return .reload
+
+        case "clear":
+            var fileConfig = AgentConfigFile.load()
+            fileConfig.fallbackModels = nil
+            do {
+                try fileConfig.save()
+            } catch {
+                printColored("  \u{2717} Error saving: \(error)", color: .red)
+                return .handled
+            }
+            config = AgentConfig.load()
+            printColored("  \u{2713} Cleared all fallback models", color: .green)
+            return .reload
+
+        default:
+            printColored("  Subcommands: list, add, remove, clear", color: .yellow)
             return .handled
         }
     }
@@ -1906,6 +2246,120 @@ struct DesktopAgentCLI {
         TerminalDisplay.shared.writeLine("\u{001B}[90m  \(text)\u{001B}[0m")
     }
 
+    // MARK: - Usage Display
+
+    /// Format the usage line based on the current display level.
+    /// Returns nil when display is off.
+    static func formatUsageLine(context: ContextManager) -> String? {
+        switch usageDisplayLevel {
+        case .off:
+            return nil
+        case .tokens:
+            let r = "\u{001B}[0m"
+            let d = "\u{001B}[90m"
+            let m = "\u{001B}[35m"
+            var line = "\(d)Usage: \(context.fmtTokens(context.lastInputTokens)) in / \(context.fmtTokens(context.lastOutputTokens)) out\(r)"
+            if context.lastCompactionSaved > 0 {
+                line += " \(m)compacted -\(context.fmtTokens(context.lastCompactionSaved))\(r)"
+            }
+            return line
+        case .full:
+            return context.consumeTurnSummary()
+        }
+    }
+
+    // MARK: - /status Command
+
+    static func printStatus(agent: AgentLoop, config: AgentConfig) {
+        let r = "\u{001B}[0m"
+        let d = "\u{001B}[90m"
+        let b = "\u{001B}[1m"
+        let c = "\u{001B}[36m"
+        let g = "\u{001B}[32m"
+        let y = "\u{001B}[33m"
+
+        let ctx = agent.context
+        let providerName = AIProvider.find(id: config.providerId)?.name ?? config.providerId
+        let profileLabel = config.profileName ?? "none"
+        let dur = formatStatusDuration(ctx.sessionDuration)
+        let pricing = ctx.pricing
+        let ctxWindow = ctx.contextWindow
+        let guard_ = agent.spendingGuard
+        let fileConfig = AgentConfigFile.load()
+        let limits = fileConfig.spendingLimits
+
+        print()
+        print("  \(b)Session Overview\(r)")
+        print("  \(ctx.contextBar)")
+        print()
+        print("  \(d)Provider:\(r)  \(c)\(providerName)\(r)")
+        print("  \(d)Model:\(r)    \(c)\(config.model)\(r)")
+        print("  \(d)Pricing:\(r)  \(d)\(fmtStatusCost(pricing.inputPer1M))/1M in \u{00B7} \(fmtStatusCost(pricing.outputPer1M))/1M out \u{00B7} \(ctx.fmtTokens(ctxWindow)) ctx\(r)")
+        print("  \(d)Profile:\(r)  \(profileLabel)")
+        print()
+
+        let totalTok = ctx.totalInputTokens + ctx.totalOutputTokens
+        let avgCost = ctx.avgCostPerTurn
+        print("  \(b)Session\(r)")
+        print("  \(d)Turns:\(r)    \(ctx.turnCount)")
+        print("  \(d)Duration:\(r) \(dur)")
+        print("  \(d)Tokens:\(r)   \(d)\u{2191}\(ctx.fmtTokens(ctx.totalInputTokens)) \u{2193}\(ctx.fmtTokens(ctx.totalOutputTokens)) (\(ctx.fmtTokens(totalTok)) total)\(r)")
+        print("  \(d)Cost:\(r)     \(g)\(fmtStatusCost(ctx.sessionCost))\(r)\(d) (\(fmtStatusCost(avgCost))/turn avg)\(r)")
+        if ctx.compactionCount > 0 {
+            print("  \(d)Compacted:\(r) \(y)\(ctx.compactionCount)x \u{00B7} saved ~\(ctx.fmtTokens(ctx.tokensSavedByCompaction)) tokens\(r)")
+        }
+        print()
+
+        let dailyLimit = limits?.dailyUsd
+        let monthlyLimit = limits?.monthlyUsd
+        if dailyLimit != nil || monthlyLimit != nil {
+            let statsText = guard_.stats
+            let dailySpend = extractSpend(from: statsText, label: "Today:")
+            let monthSpend = extractSpend(from: statsText, label: "Month:")
+            print("  \(b)Limits\(r)")
+            if let daily = dailyLimit {
+                let pct = daily > 0 ? dailySpend / daily * 100 : 0
+                print("  \(d)Daily:\(r)    \(fmtStatusCost(dailySpend)) / \(fmtStatusCost(daily)) (\(String(format: "%.1f", pct))%)")
+            }
+            if let monthly = monthlyLimit {
+                let pct = monthly > 0 ? monthSpend / monthly * 100 : 0
+                print("  \(d)Monthly:\(r)  \(fmtStatusCost(monthSpend)) / \(fmtStatusCost(monthly)) (\(String(format: "%.1f", pct))%)")
+            }
+            print()
+        } else {
+            print("  \(d)Limits:   none configured\(r)")
+            print("  \(d)          Add \"spending_limits\" to ~/.desktop-agent/config.json\(r)")
+            print()
+        }
+
+        print("  \(d)Usage display: \(usageDisplayLevel.label) (/usage to cycle)\(r)")
+        print()
+    }
+
+    private static func extractSpend(from stats: String, label: String) -> Double {
+        for line in stats.components(separatedBy: "\n") {
+            if line.contains(label), let dollarIdx = line.firstIndex(of: "$") {
+                let afterDollar = line[line.index(after: dollarIdx)...]
+                let numStr = afterDollar.prefix(while: { $0.isNumber || $0 == "." })
+                if let val = Double(numStr) { return val }
+            }
+        }
+        return 0
+    }
+
+    private static func fmtStatusCost(_ usd: Double) -> String {
+        if usd < 0.01 && usd > 0 { return String(format: "$%.4f", usd) }
+        if usd < 1.00 { return String(format: "$%.3f", usd) }
+        return String(format: "$%.2f", usd)
+    }
+
+    private static func formatStatusDuration(_ seconds: TimeInterval) -> String {
+        let s = Int(seconds)
+        if s < 60 { return "\(s)s" }
+        if s < 3600 { return "\(s / 60)m \(s % 60)s" }
+        return "\(s / 3600)h \((s % 3600) / 60)m"
+    }
+
     // MARK: - Doctor (self-diagnosis)
 
     static func runDoctor() {
@@ -2370,6 +2824,15 @@ struct DesktopAgentCLI {
           \(c)/watch\(r) <prompt> [--interval 5m]  Start periodic monitoring
           \(c)/quit\(r)                          Exit \(d)(also: /exit, /q, Ctrl+D)\(r)
 
+        \(b)SESSIONS\(r) \(d)(save & resume conversations)\(r)
+          \(c)/save\(r)                          Save current session with auto-name
+          \(c)/sessions\(r)                      List saved sessions
+          \(c)/session load\(r) <number-or-id>  Resume a saved session
+          \(c)/session resume\(r)               Resume auto-saved session
+          \(c)/session delete\(r) <number-or-id>  Delete a session
+          \(c)/new\(r)                           Start fresh (clear history)
+          \(d)Sessions auto-save to ~/.desktop-agent/sessions/cli/\(r)
+
         \(b)WHILE AGENT IS WORKING\(r) \(d)(aside)\(r)
           Just type and press Enter while the agent runs.
           Your message is injected as 💬 and the agent adapts.
@@ -2386,6 +2849,14 @@ struct DesktopAgentCLI {
           \(c)/model show\(r)                    Show current model
           \(c)/model list\(r)                    Interactive model selector
           \(c)/model use\(r) <provider/model>    Switch model directly
+
+        \(b)FALLBACK MODELS\(r) \(d)(automatic failover)\(r)
+          \(c)/fallback\(r)                      List current fallback chain
+          \(c)/fallback add\(r) <provider/model> Add a fallback model
+          \(c)/fallback remove\(r) <prov/model>  Remove a fallback
+          \(c)/fallback clear\(r)                Clear all fallbacks
+          \(d)When the primary model fails (rate limit, server error, auth),\(r)
+          \(d)fallback models are tried in order automatically.\(r)
 
         \(b)MCP SERVERS\(r) \(d)(capability expansion)\(r)
           \(c)/mcp list\(r)                      Show configured servers & tools
@@ -2405,6 +2876,8 @@ struct DesktopAgentCLI {
 
         \(b)CONTEXT & SAFETY\(r)
           \(c)/context\(r)                       Token usage, context window, session stats
+          \(c)/status\(r)                        Full system overview (provider, cost, limits)
+          \(c)/usage\(r)                         Cycle usage display: off → tokens → full
           \(c)/compact\(r)                       Info about conversation compaction
           \(c)/yolo\(r)                          Toggle auto-approve all actions
           \(d)Context auto-compacts at 75% usage. Prompt shows ● with %.\(r)

@@ -104,6 +104,7 @@ struct AgentConfig {
     let apiFormat: String  // "anthropic" or "openai"
     let providerId: String
     let profileName: String?
+    let fallbackModels: [String]  // "provider/model" strings to try when primary fails
 
     static func load() -> AgentConfig {
         let fileConfig = AgentConfigFile.load()
@@ -302,7 +303,8 @@ struct AgentConfig {
             baseURL: baseURL,
             apiFormat: provider.format,
             providerId: provider.id,
-            profileName: profileName
+            profileName: profileName,
+            fallbackModels: fileConfig.fallbackModels ?? []
         )
     }
 }
