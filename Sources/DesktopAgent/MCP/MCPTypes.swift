@@ -124,19 +124,34 @@ struct AIProvider {
             id: "anthropic", name: "Anthropic",
             defaultBaseURL: "https://api.anthropic.com/v1/messages",
             format: "anthropic",
-            models: ["claude-opus-4-20250514", "claude-sonnet-4-20250514", "claude-haiku-4-5-20251001"]
+            models: [
+                "claude-opus-4-20250514",
+                "claude-sonnet-4-20250514",
+                "claude-haiku-4-5-20251001",
+            ]
         ),
         AIProvider(
             id: "openai", name: "OpenAI",
             defaultBaseURL: "https://api.openai.com/v1/chat/completions",
             format: "openai",
-            models: ["gpt-4.1-nano", "gpt-4.1-mini", "gpt-4.1", "gpt-4o", "gpt-4o-mini", "gpt-5", "o3-mini"]
+            models: [
+                "gpt-5", "gpt-5-mini",
+                "gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano",
+                "gpt-4o", "gpt-4o-mini",
+                "o3", "o3-mini", "o4-mini",
+            ]
         ),
         AIProvider(
             id: "google", name: "Google Gemini",
             defaultBaseURL: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
             format: "openai",
-            models: ["gemini-3-flash-preview", "gemini-3.1-flash-lite-preview", "gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash"]
+            models: [
+                "gemini-3.1-pro-preview",
+                "gemini-3.1-flash-lite-preview",
+                "gemini-3-flash-preview",
+                "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite",
+                "gemini-2.0-flash",
+            ]
         ),
         AIProvider(
             id: "groq", name: "Groq",
@@ -148,37 +163,27 @@ struct AIProvider {
             id: "mistral", name: "Mistral",
             defaultBaseURL: "https://api.mistral.ai/v1/chat/completions",
             format: "openai",
-            models: ["mistral-large-latest", "mistral-medium-latest", "mistral-small-latest"]
+            models: [
+                "mistral-large-latest", "mistral-small-latest",
+                "codestral-latest", "mistral-nemo",
+            ]
         ),
         AIProvider(
             id: "openrouter", name: "OpenRouter",
             defaultBaseURL: "https://openrouter.ai/api/v1/chat/completions",
             format: "openai",
             models: [
-                // Best for agents — cheap + great tool use
-                "minimax/minimax-m2.5",
-                "minimax/minimax-m2.1",
-                // Chinese models — top tier, very cheap
+                "deepseek/deepseek-chat-v3.2",
                 "deepseek/deepseek-r1",
-                "deepseek/deepseek-chat-v3.1",
-                "deepseek/deepseek-v3.2-speciale",
-                "qwen/qwen3.5-397b-a17b",
-                "qwen/qwen3.5-plus-02-15",
-                "qwen/qwen3.5-flash-02-23",
-                "qwen/qwen3-max-thinking",
-                "qwen/qwen3-coder-next",
-                "moonshotai/kimi-k2.5",
-                // Strong open-source
+                "qwen/qwen3.5-coder",
                 "meta-llama/llama-4-maverick",
                 "meta-llama/llama-4-scout",
-                "microsoft/phi-4-reasoning-plus",
-                // Premium
                 "anthropic/claude-sonnet-4.6",
                 "anthropic/claude-opus-4.6",
-                "openai/gpt-5.4-pro",
+                "openai/gpt-5",
                 "openai/gpt-4o",
                 "google/gemini-3.1-pro-preview",
-                "google/gemini-2.5-flash-preview",
+                "google/gemini-2.5-flash",
             ]
         ),
         AIProvider(
@@ -191,7 +196,10 @@ struct AIProvider {
             id: "xai", name: "xAI (Grok)",
             defaultBaseURL: "https://api.x.ai/v1/chat/completions",
             format: "openai",
-            models: ["grok-2", "grok-2-mini"]
+            models: [
+                "grok-4-0709", "grok-4-1-fast-reasoning", "grok-4-1-fast-non-reasoning",
+                "grok-code-fast-1", "grok-3", "grok-3-mini",
+            ]
         ),
     ]
 

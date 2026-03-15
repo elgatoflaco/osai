@@ -16,42 +16,72 @@ struct ModelPricing {
 
 final class ContextManager {
 
-    // MARK: - Pricing Database (USD per 1M tokens, March 2025)
+    // MARK: - Pricing Database (USD per 1M tokens, March 2026)
+    // Sources: official pricing pages of each provider
 
     static let pricing: [String: ModelPricing] = [
-        // Anthropic
-        "claude-opus-4-20250514":     ModelPricing(inputPer1M: 15.00, outputPer1M: 75.00, contextWindow: 200_000),
+        // ── Anthropic (March 2026) ──
+        "claude-opus-4-20250514":     ModelPricing(inputPer1M:  5.00, outputPer1M: 25.00, contextWindow: 200_000),
         "claude-sonnet-4-20250514":   ModelPricing(inputPer1M:  3.00, outputPer1M: 15.00, contextWindow: 200_000),
-        "claude-haiku-4-5-20251001":  ModelPricing(inputPer1M:  0.80, outputPer1M:  4.00, contextWindow: 200_000),
-        // OpenAI
+        "claude-haiku-4-5-20251001":  ModelPricing(inputPer1M:  1.00, outputPer1M:  5.00, contextWindow: 200_000),
+        // Aliases for latest model references
+        "claude-opus-4.6":            ModelPricing(inputPer1M:  5.00, outputPer1M: 25.00, contextWindow: 200_000),
+        "claude-sonnet-4.6":          ModelPricing(inputPer1M:  3.00, outputPer1M: 15.00, contextWindow: 200_000),
+        "claude-haiku-4.5":           ModelPricing(inputPer1M:  1.00, outputPer1M:  5.00, contextWindow: 200_000),
+        // Legacy
+        "claude-3-5-sonnet":          ModelPricing(inputPer1M:  3.00, outputPer1M: 15.00, contextWindow: 200_000),
+        "claude-3-5-haiku":           ModelPricing(inputPer1M:  0.25, outputPer1M:  1.25, contextWindow: 200_000),
+        "claude-3-opus":              ModelPricing(inputPer1M: 15.00, outputPer1M: 75.00, contextWindow: 200_000),
+
+        // ── OpenAI (February 2026) ──
+        "gpt-5":                      ModelPricing(inputPer1M:  1.25, outputPer1M: 10.00, contextWindow: 400_000),
+        "gpt-5-mini":                 ModelPricing(inputPer1M:  0.25, outputPer1M:  2.00, contextWindow: 400_000),
+        "gpt-4.1":                    ModelPricing(inputPer1M:  2.00, outputPer1M:  8.00, contextWindow: 1_000_000),
+        "gpt-4.1-mini":               ModelPricing(inputPer1M:  0.40, outputPer1M:  1.60, contextWindow: 1_000_000),
+        "gpt-4.1-nano":               ModelPricing(inputPer1M:  0.10, outputPer1M:  0.40, contextWindow: 1_000_000),
         "gpt-4o":                     ModelPricing(inputPer1M:  2.50, outputPer1M: 10.00, contextWindow: 128_000),
         "gpt-4o-mini":                ModelPricing(inputPer1M:  0.15, outputPer1M:  0.60, contextWindow: 128_000),
-        "gpt-4-turbo":                ModelPricing(inputPer1M: 10.00, outputPer1M: 30.00, contextWindow: 128_000),
-        "o1":                         ModelPricing(inputPer1M: 15.00, outputPer1M: 60.00, contextWindow: 200_000),
-        "o1-mini":                    ModelPricing(inputPer1M:  3.00, outputPer1M: 12.00, contextWindow: 128_000),
+        "o3":                         ModelPricing(inputPer1M:  2.00, outputPer1M:  8.00, contextWindow: 200_000),
         "o3-mini":                    ModelPricing(inputPer1M:  1.10, outputPer1M:  4.40, contextWindow: 200_000),
-        // Gemini
+        "o4-mini":                    ModelPricing(inputPer1M:  1.10, outputPer1M:  4.40, contextWindow: 200_000),
+
+        // ── Google Gemini (March 2026) ──
+        "gemini-3.1-pro-preview":     ModelPricing(inputPer1M:  2.00, outputPer1M: 12.00, contextWindow: 1_000_000),
+        "gemini-3.1-flash-lite-preview": ModelPricing(inputPer1M: 0.25, outputPer1M: 1.50, contextWindow: 1_000_000),
+        "gemini-3-flash-preview":     ModelPricing(inputPer1M:  0.50, outputPer1M:  3.00, contextWindow: 1_000_000),
+        "gemini-2.5-pro":             ModelPricing(inputPer1M:  1.25, outputPer1M: 10.00, contextWindow: 1_000_000),
+        "gemini-2.5-flash":           ModelPricing(inputPer1M:  0.30, outputPer1M:  2.50, contextWindow: 1_000_000),
+        "gemini-2.5-flash-lite":      ModelPricing(inputPer1M:  0.10, outputPer1M:  0.40, contextWindow: 1_000_000),
         "gemini-2.0-flash":           ModelPricing(inputPer1M:  0.10, outputPer1M:  0.40, contextWindow: 1_000_000),
-        "gemini-3-flash-preview":     ModelPricing(inputPer1M:  0.10, outputPer1M:  0.40, contextWindow: 1_000_000),
-        "gemini-2.0-pro":             ModelPricing(inputPer1M:  1.25, outputPer1M:  5.00, contextWindow: 2_000_000),
-        "gemini-1.5-pro":             ModelPricing(inputPer1M:  1.25, outputPer1M:  5.00, contextWindow: 2_000_000),
-        // Groq (free tier / very cheap)
+
+        // ── Groq (March 2026) ──
         "llama-3.3-70b-versatile":    ModelPricing(inputPer1M:  0.59, outputPer1M:  0.79, contextWindow: 128_000),
         "llama-3.1-8b-instant":       ModelPricing(inputPer1M:  0.05, outputPer1M:  0.08, contextWindow: 128_000),
         "mixtral-8x7b-32768":         ModelPricing(inputPer1M:  0.24, outputPer1M:  0.24, contextWindow: 32_768),
-        // Mistral
-        "mistral-large-latest":       ModelPricing(inputPer1M:  2.00, outputPer1M:  6.00, contextWindow: 128_000),
-        "mistral-medium-latest":      ModelPricing(inputPer1M:  2.70, outputPer1M:  8.10, contextWindow: 32_000),
-        "mistral-small-latest":       ModelPricing(inputPer1M:  0.20, outputPer1M:  0.60, contextWindow: 32_000),
-        // DeepSeek
-        "deepseek-chat":              ModelPricing(inputPer1M:  0.14, outputPer1M:  0.28, contextWindow: 64_000),
-        "deepseek-reasoner":          ModelPricing(inputPer1M:  0.55, outputPer1M:  2.19, contextWindow: 64_000),
-        // xAI
-        "grok-2":                     ModelPricing(inputPer1M:  2.00, outputPer1M: 10.00, contextWindow: 131_072),
-        "grok-2-mini":                ModelPricing(inputPer1M:  2.00, outputPer1M: 10.00, contextWindow: 131_072),
+
+        // ── Mistral (March 2026) ──
+        "mistral-large-latest":       ModelPricing(inputPer1M:  0.50, outputPer1M:  1.50, contextWindow: 262_144),
+        "mistral-small-latest":       ModelPricing(inputPer1M:  0.03, outputPer1M:  0.11, contextWindow: 128_000),
+        "codestral-latest":           ModelPricing(inputPer1M:  0.30, outputPer1M:  0.90, contextWindow: 256_000),
+        "mistral-nemo":               ModelPricing(inputPer1M:  0.02, outputPer1M:  0.04, contextWindow: 128_000),
+
+        // ── DeepSeek (March 2026 — V3.2 unified pricing) ──
+        "deepseek-chat":              ModelPricing(inputPer1M:  0.28, outputPer1M:  0.42, contextWindow: 128_000),
+        "deepseek-reasoner":          ModelPricing(inputPer1M:  0.28, outputPer1M:  0.42, contextWindow: 128_000),
+
+        // ── xAI / Grok (March 2026) ──
+        "grok-4-0709":                ModelPricing(inputPer1M:  3.00, outputPer1M: 15.00, contextWindow: 256_000),
+        "grok-4-1-fast-reasoning":    ModelPricing(inputPer1M:  0.20, outputPer1M:  0.50, contextWindow: 2_000_000),
+        "grok-4-1-fast-non-reasoning": ModelPricing(inputPer1M: 0.20, outputPer1M:  0.50, contextWindow: 2_000_000),
+        "grok-code-fast-1":           ModelPricing(inputPer1M:  0.20, outputPer1M:  1.50, contextWindow: 256_000),
+        "grok-3":                     ModelPricing(inputPer1M:  3.00, outputPer1M: 15.00, contextWindow: 131_072),
+        "grok-3-mini":                ModelPricing(inputPer1M:  0.30, outputPer1M:  0.50, contextWindow: 131_072),
+        // Legacy aliases
+        "grok-2":                     ModelPricing(inputPer1M:  3.00, outputPer1M: 15.00, contextWindow: 131_072),
+        "grok-2-mini":                ModelPricing(inputPer1M:  0.30, outputPer1M:  0.50, contextWindow: 131_072),
     ]
 
-    static let defaultPricing = ModelPricing(inputPer1M: 3.00, outputPer1M: 15.00, contextWindow: 128_000)
+    static let defaultPricing = ModelPricing(inputPer1M: 1.00, outputPer1M: 5.00, contextWindow: 128_000)
 
     /// Lookup pricing with fuzzy matching — try exact, then partial match on known keys
     static func lookupPricing(model: String) -> ModelPricing {

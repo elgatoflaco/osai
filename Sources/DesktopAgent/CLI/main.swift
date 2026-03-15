@@ -43,6 +43,12 @@ struct DesktopAgentCLI {
             return
         }
 
+        // --- First-run onboarding ---
+        let isFirstRun = !FileManager.default.fileExists(atPath: AgentConfigFile.configPath)
+        if isFirstRun && isatty(STDIN_FILENO) != 0 && !args.contains("gateway") {
+            runOnboarding()
+        }
+
         let config = AgentConfig.load()
 
         // Install built-in plugins & skills
@@ -1892,6 +1898,176 @@ struct DesktopAgentCLI {
 
     static func printHint(_ text: String) {
         TerminalDisplay.shared.writeLine("\u{001B}[90m  \(text)\u{001B}[0m")
+    }
+
+    // MARK: - Onboarding (first run)
+
+    static func runOnboarding() {
+        let r = "\u{001B}[0m"
+        let b = "\u{001B}[1m"
+        let c = "\u{001B}[36m"
+        let g = "\u{001B}[32m"
+        let y = "\u{001B}[33m"
+        let d = "\u{001B}[90m"
+        let m = "\u{001B}[35m"
+
+        // Clear screen and show welcome
+        Swift.print("\u{001B}[2J\u{001B}[H", terminator: "")
+        fflush(stdout)
+
+        Swift.print("""
+
+        \(b)\(c)  ┌─────────────────────────────────────────────┐
+          │                                             │
+          │   \(m)🤖  Welcome to osai\(c)                       │
+          │   \(d)Your AI-powered macOS assistant\(c)            │
+          │                                             │
+          └─────────────────────────────────────────────┘\(r)
+
+        """)
+
+        Swift.print("  \(b)osai\(r) can control your Mac, automate tasks, send emails,")
+        Swift.print("  browse the web, write code, and much more.\n")
+        Swift.print("  \(d)Let's get you set up in 30 seconds.\(r)\n")
+
+        // Step 1: Choose provider + model
+        Swift.print("  \(b)\(y)Step 1/3:\(r) \(b)Choose your AI provider\(r)\n")
+
+        let providerItems: [(String, String, String)] = [
+            ("Google Gemini",  "google",    "Free tier available, great for starting out"),
+            ("Anthropic",      "anthropic", "Claude — best tool use and reasoning"),
+            ("OpenAI",         "openai",    "GPT-4.1, o3 — broad model selection"),
+            ("DeepSeek",       "deepseek",  "Cheapest — $0.28/M tokens input"),
+            ("Groq",           "groq",      "Fastest inference — free tier available"),
+            ("xAI (Grok)",     "xai",       "Grok-4 — 2M context window"),
+            ("Mistral",        "mistral",   "European — Mistral Large 3, Codestral"),
+            ("OpenRouter",     "openrouter","Route to 200+ models from one key"),
+        ]
+
+        for (i, (name, _, desc)) in providerItems.enumerated() {
+            let num = "\(c)\(i + 1)\(r)"
+            Swift.print("  \(num)  \(b)\(name)\(r)  \(d)\(desc)\(r)")
+        }
+        Swift.print()
+        Swift.print("  \(d)Enter number (1-\(providerItems.count)):\(r) ", terminator: "")
+        fflush(stdout)
+
+        var providerChoice = 0
+        if let line = readLine(), let num = Int(line), num >= 1 && num <= providerItems.count {
+            providerChoice = num - 1
+        }
+
+        let (providerName, providerId, _) = providerItems[providerChoice]
+        let provider = AIProvider.find(id: providerId) ?? AIProvider.known[0]
+
+        // Step 2: Choose model
+        Swift.print("\n  \(b)\(y)Step 2/3:\(r) \(b)Choose a model\(r) \(d)(from \(providerName))\(r)\n")
+
+        for (i, model) in provider.models.enumerated() {
+            let pricing = ContextManager.lookupPricing(model: model)
+            let costStr = String(format: "$%.2f/$%.2f per 1M", pricing.inputPer1M, pricing.outputPer1M)
+            let ctxStr = pricing.contextWindow >= 1_000_000
+                ? "\(pricing.contextWindow / 1_000_000)M ctx"
+                : "\(pricing.contextWindow / 1_000)K ctx"
+            Swift.print("  \(c)\(i + 1)\(r)  \(b)\(model)\(r)  \(d)\(costStr) · \(ctxStr)\(r)")
+        }
+        Swift.print()
+        Swift.print("  \(d)Enter number (1-\(provider.models.count)) [1]:\(r) ", terminator: "")
+        fflush(stdout)
+
+        var modelChoice = 0
+        if let line = readLine(), let num = Int(line), num >= 1 && num <= provider.models.count {
+            modelChoice = num - 1
+        }
+
+        let selectedModel = provider.models[modelChoice]
+        let modelString = "\(providerId)/\(selectedModel)"
+
+        // Step 3: API Key
+        Swift.print("\n  \(b)\(y)Step 3/3:\(r) \(b)API Key\(r)\n")
+
+        // Check env vars first
+        let envKeys: [String: String] = [
+            "anthropic": "ANTHROPIC_API_KEY",
+            "openai": "OPENAI_API_KEY",
+            "google": "GOOGLE_API_KEY",
+            "groq": "GROQ_API_KEY",
+            "mistral": "MISTRAL_API_KEY",
+            "openrouter": "OPENROUTER_API_KEY",
+            "deepseek": "DEEPSEEK_API_KEY",
+            "xai": "XAI_API_KEY",
+        ]
+
+        var apiKey = ""
+        if let envName = envKeys[providerId],
+           let envVal = ProcessInfo.processInfo.environment[envName], !envVal.isEmpty {
+            apiKey = envVal
+            Swift.print("  \(g)✓\(r) Found \(envName) in environment\n")
+        } else {
+            let keyHints: [String: String] = [
+                "google":    "Get one at: https://aistudio.google.com/apikey",
+                "anthropic":  "Get one at: https://console.anthropic.com/settings/keys",
+                "openai":    "Get one at: https://platform.openai.com/api-keys",
+                "deepseek":  "Get one at: https://platform.deepseek.com/api_keys",
+                "groq":      "Get one at: https://console.groq.com/keys",
+                "xai":       "Get one at: https://console.x.ai",
+                "mistral":   "Get one at: https://console.mistral.ai/api-keys",
+                "openrouter":"Get one at: https://openrouter.ai/settings/keys",
+            ]
+            if let hint = keyHints[providerId] {
+                Swift.print("  \(d)\(hint)\(r)")
+            }
+            Swift.print("  \(d)Paste your API key (hidden):\(r) ", terminator: "")
+            fflush(stdout)
+
+            // Read key with echo disabled
+            var originalTermios = termios()
+            tcgetattr(STDIN_FILENO, &originalTermios)
+            var noecho = originalTermios
+            noecho.c_lflag &= ~UInt(ECHO)
+            tcsetattr(STDIN_FILENO, TCSAFLUSH, &noecho)
+            apiKey = readLine() ?? ""
+            tcsetattr(STDIN_FILENO, TCSAFLUSH, &originalTermios)
+            Swift.print() // newline after hidden input
+
+            if apiKey.isEmpty {
+                Swift.print("  \(y)⚠ No key entered. You can set it later with: /config set-key \(providerId) YOUR_KEY\(r)\n")
+            } else {
+                Swift.print("  \(g)✓\(r) Key saved securely\n")
+            }
+        }
+
+        // Save config
+        var fileConfig = AgentConfigFile()
+        fileConfig.activeModel = modelString
+        if !apiKey.isEmpty {
+            fileConfig.setAPIKey(provider: providerId, key: apiKey)
+        }
+        // Set sensible spending limits
+        fileConfig.spendingLimits = SpendingLimits(dailyUsd: 5.0, monthlyUsd: 50.0, perSessionUsd: nil, warnAtPercent: 80)
+        do {
+            try fileConfig.save()
+        } catch {
+            Swift.print("  \(y)⚠ Could not save config: \(error)\(r)")
+        }
+
+        // Summary
+        let pricing = ContextManager.lookupPricing(model: selectedModel)
+        Swift.print("""
+          \(b)━━━ Setup Complete ━━━\(r)
+
+          \(d)Provider:\(r) \(b)\(providerName)\(r)
+          \(d)Model:\(r)    \(b)\(selectedModel)\(r)
+          \(d)Pricing:\(r)  \(g)$\(String(format: "%.2f", pricing.inputPer1M))\(r)/1M in · \(g)$\(String(format: "%.2f", pricing.outputPer1M))\(r)/1M out
+          \(d)Limits:\(r)   $5/day · $50/month
+          \(d)Config:\(r)   ~/.desktop-agent/config.json
+
+          \(d)Quick tips:\(r)
+          \(c)/model\(r)   — switch models    \(c)/context\(r) — see costs
+          \(c)/help\(r)    — all commands      \(c)/yolo\(r)    — skip confirmations
+          \(c)Ctrl+C\(r)   — cancel action     \(c)osai update\(r) — self-update
+
+        """)
     }
 
     // MARK: - Self Update
