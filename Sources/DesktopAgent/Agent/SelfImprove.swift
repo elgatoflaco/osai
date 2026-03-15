@@ -97,77 +97,77 @@ struct SelfModificationTools {
         return [
             ClaudeTool(
                 name: "read_program",
-                description: "Read the agent's program.md — the high-level instructions that guide your behavior. This file can be edited by you or the user to change how you operate.",
+                description: "Read the agent's program.md behavioral guidelines.",
                 inputSchema: InputSchema(type: "object", properties: [:], required: nil)
             ),
             ClaudeTool(
                 name: "edit_program",
-                description: "Modify the agent's program.md to change behavioral guidelines. Use this to improve how you work based on user feedback or self-reflection. Changes take effect on next interaction.",
+                description: "Modify the agent's program.md behavioral guidelines. Changes take effect next interaction.",
                 inputSchema: InputSchema(
                     type: "object",
                     properties: [
-                        "content": PropertySchema(type: "string", description: "The new program.md content (markdown format)", enumValues: nil)
+                        "content": PropertySchema(type: "string", description: "New program.md content (markdown)", enumValues: nil)
                     ],
                     required: ["content"]
                 )
             ),
             ClaudeTool(
                 name: "read_system_prompt",
-                description: "Read your current custom system prompt override. Returns empty if using the default system prompt.",
+                description: "Read current custom system prompt override.",
                 inputSchema: InputSchema(type: "object", properties: [:], required: nil)
             ),
             ClaudeTool(
                 name: "edit_system_prompt",
-                description: "Modify your system prompt to change how you fundamentally operate. WARNING: Use carefully — a broken system prompt can impair your functionality. Changes take effect on next conversation.",
+                description: "Modify system prompt override. Changes take effect next conversation.",
                 inputSchema: InputSchema(
                     type: "object",
                     properties: [
-                        "content": PropertySchema(type: "string", description: "The new system prompt (empty string to reset to default)", enumValues: nil)
+                        "content": PropertySchema(type: "string", description: "New system prompt (empty to reset)", enumValues: nil)
                     ],
                     required: ["content"]
                 )
             ),
             ClaudeTool(
                 name: "log_improvement",
-                description: "Log an improvement attempt to the improvements.log for tracking what changes work and what doesn't.",
+                description: "Log an improvement attempt to improvements.log.",
                 inputSchema: InputSchema(
                     type: "object",
                     properties: [
-                        "description": PropertySchema(type: "string", description: "Short description of the improvement", enumValues: nil),
-                        "success": PropertySchema(type: "boolean", description: "Whether the improvement was successful", enumValues: nil),
-                        "details": PropertySchema(type: "string", description: "Details about what changed and the outcome", enumValues: nil)
+                        "description": PropertySchema(type: "string", description: "Short description", enumValues: nil),
+                        "success": PropertySchema(type: "boolean", description: "Whether it was successful", enumValues: nil),
+                        "details": PropertySchema(type: "string", description: "What changed and the outcome", enumValues: nil)
                     ],
                     required: ["description", "success", "details"]
                 )
             ),
             ClaudeTool(
                 name: "read_improvement_log",
-                description: "Read the history of improvement attempts to understand what has worked and what hasn't.",
+                description: "Read the improvement attempt history.",
                 inputSchema: InputSchema(type: "object", properties: [:], required: nil)
             ),
             ClaudeTool(
                 name: "modify_config",
-                description: "Modify agent configuration (max tokens, screenshot width, active model). For API keys, user must use /config set-key.",
+                description: "Modify agent config: max tokens, screenshot width, active model.",
                 inputSchema: InputSchema(
                     type: "object",
                     properties: [
                         "max_tokens": PropertySchema(type: "integer", description: "Max tokens per response (1024-32768)", enumValues: nil),
                         "max_screenshot_width": PropertySchema(type: "integer", description: "Max screenshot width in pixels (640-2560)", enumValues: nil),
-                        "active_model": PropertySchema(type: "string", description: "Active model in provider/model format (e.g. anthropic/claude-sonnet-4-20250514)", enumValues: nil)
+                        "active_model": PropertySchema(type: "string", description: "Active model (provider/model format)", enumValues: nil)
                     ],
                     required: nil
                 )
             ),
             ClaudeTool(
                 name: "create_plugin",
-                description: "Create or update a specialized plugin that extends your capabilities. Plugins have their own system prompt and can use different models.",
+                description: "Create or update a plugin with its own system prompt and optional model.",
                 inputSchema: InputSchema(
                     type: "object",
                     properties: [
                         "name": PropertySchema(type: "string", description: "Plugin name (lowercase, hyphens ok)", enumValues: nil),
-                        "description": PropertySchema(type: "string", description: "Short description of what the plugin does", enumValues: nil),
-                        "system_prompt": PropertySchema(type: "string", description: "The plugin's system prompt defining its behavior", enumValues: nil),
-                        "model": PropertySchema(type: "string", description: "Optional: specific model for this plugin (provider/model format)", enumValues: nil)
+                        "description": PropertySchema(type: "string", description: "Short plugin description", enumValues: nil),
+                        "system_prompt": PropertySchema(type: "string", description: "Plugin system prompt", enumValues: nil),
+                        "model": PropertySchema(type: "string", description: "Specific model (provider/model format)", enumValues: nil)
                     ],
                     required: ["name", "description", "system_prompt"]
                 )

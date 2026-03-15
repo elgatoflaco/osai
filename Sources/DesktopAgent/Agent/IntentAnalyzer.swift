@@ -270,6 +270,117 @@ final class IntentAnalyzer {
         return profile.commonActions[action.lowercased()]
     }
 
+    // MARK: - Tool Category Selection
+
+    /// Determine which tool categories are needed based on user input (fast keyword matching, no API call)
+    static func requiredToolCategories(for input: String, activeSkills: [String] = []) -> Set<ToolCategory> {
+        var categories: Set<ToolCategory> = [.core]  // always
+
+        let lower = input.lowercased()
+
+        // Email
+        if lower.contains("email") || lower.contains("correo") || lower.contains("mail") || lower.contains("gmail") || lower.contains("send to") {
+            categories.insert(.email)
+        }
+
+        // GUI interaction
+        if lower.contains("screenshot") || lower.contains("click") || lower.contains("screen") || lower.contains("window")
+            || lower.contains("ventana") || lower.contains("pantalla") || lower.contains("button") || lower.contains("scroll")
+            || lower.contains("drag") || lower.contains("resize") || lower.contains("move window") || lower.contains("ui element") {
+            categories.insert(.gui)
+        }
+
+        // Scheduling
+        if lower.contains("schedule") || lower.contains("programar") || lower.contains("every ") || lower.contains("cada ")
+            || lower.contains("cron") || lower.contains("task") || lower.contains("tarea") || lower.contains("remind")
+            || lower.contains("timer") || lower.contains("alarm") || lower.contains("recurring") {
+            categories.insert(.scheduling)
+        }
+
+        // Memory
+        if lower.contains("remember") || lower.contains("memory") || lower.contains("memoria") || lower.contains("recuerda")
+            || lower.contains("save memory") || lower.contains("forget") || lower.contains("recall") {
+            categories.insert(.memory)
+        }
+
+        // Plugin
+        if lower.contains("plugin") || lower.contains("create plugin") {
+            categories.insert(.plugin)
+            categories.insert(.config)
+        }
+
+        // MCP
+        if lower.contains("mcp") || lower.contains("install tool") || lower.contains("install server") {
+            categories.insert(.mcp)
+        }
+
+        // Config / Self-improvement
+        if lower.contains("config") || lower.contains("program") || lower.contains("improve") || lower.contains("prompt")
+            || lower.contains("system prompt") || lower.contains("edit program") || lower.contains("settings") {
+            categories.insert(.config)
+        }
+
+        // AppleScript
+        if lower.contains("applescript") || lower.contains("reminder") || lower.contains("recordatorio")
+            || lower.contains("contact") || lower.contains("music") || lower.contains("musica") || lower.contains("note")
+            || lower.contains("nota") || lower.contains("calendar") || lower.contains("agenda") || lower.contains("imessage")
+            || lower.contains("finder") {
+            categories.insert(.applescript)
+        }
+
+        // Orchestrator / Sub-agents
+        if lower.contains("parallel") || lower.contains("subagent") || lower.contains("simultaneously")
+            || lower.contains("paralelo") || lower.contains("at the same time") || lower.contains("concurrently") {
+            categories.insert(.orchestrator)
+        }
+
+        // Web / Browser
+        if lower.contains("browser") || lower.contains("chrome") || lower.contains("web") || lower.contains("url")
+            || lower.contains("navega") || lower.contains("página") || lower.contains("website") || lower.contains("safari")
+            || lower.contains("http") {
+            categories.insert(.web)
+            categories.insert(.applescript)  // often used with browsers
+        }
+
+        // Apps
+        if lower.contains("open ") || lower.contains("launch") || lower.contains("activate") || lower.contains("app")
+            || lower.contains("aplicación") || lower.contains("spotlight") || lower.contains("find app") {
+            categories.insert(.apps)
+        }
+
+        // Files
+        if lower.contains("file") || lower.contains("folder") || lower.contains("directory") || lower.contains("archivo")
+            || lower.contains("carpeta") || lower.contains("clipboard") || lower.contains("portapapeles")
+            || lower.contains("copy") || lower.contains("paste") {
+            categories.insert(.files)
+        }
+
+        // Claude Code / Development
+        if lower.contains("code") || lower.contains("program") || lower.contains("debug") || lower.contains("refactor")
+            || lower.contains("implement") || lower.contains("build") || lower.contains("test") || lower.contains("git")
+            || lower.contains("compile") || lower.contains("deploy") {
+            categories.insert(.claudeCode)
+        }
+
+        // Gateway
+        if lower.contains("gateway") || lower.contains("telegram") || lower.contains("whatsapp") || lower.contains("discord")
+            || lower.contains("slack") || lower.contains("bot") {
+            categories.insert(.gateway)
+        }
+
+        // Accessibility
+        if lower.contains("accessibility") || lower.contains("ui tree") || lower.contains("element") {
+            categories.insert(.gui)
+        }
+
+        // If nothing specific detected beyond core, load a broader useful set
+        if categories.count <= 1 {
+            categories.formUnion([.gui, .applescript, .apps, .files, .claudeCode])
+        }
+
+        return categories
+    }
+
     /// Build a context hint for the system prompt based on intent analysis
     func buildIntentContext(input: String, frontmostApp: String?) -> String {
         let intent = analyze(input: input, frontmostApp: frontmostApp)

@@ -1,30 +1,159 @@
 import Foundation
 
+// MARK: - Tool Category for Dynamic Loading
+
+enum ToolCategory: String, CaseIterable {
+    case core           // always loaded: take_screenshot, click_element, type_text, press_key, run_shell, read_file, write_file
+    case gui            // get_ui_elements, scroll, drag, mouse_move, wait, list_windows, move_window, resize_window, get_screen_size
+    case web            // open_url (MCP chrome tools handled separately)
+    case email          // send_email
+    case scheduling     // schedule_task, list_tasks, cancel_task, run_task
+    case gateway        // configure_gateway, import_gateway_config
+    case memory         // save_memory, read_memory
+    case config         // read_program, edit_program, read_system_prompt, edit_system_prompt, log_improvement, read_improvement_log, modify_config
+    case plugin         // create_plugin
+    case mcp            // mcp_search, mcp_install
+    case orchestrator   // run_subagents, orchestrator_stats, orchestrator_insights, clear_tool_cache
+    case applescript    // run_applescript
+    case adaptive       // adaptive_stats, ui_cache_lookup, clear_ui_cache
+    case claudeCode     // claude_code
+    case apps           // list_apps, get_frontmost_app, activate_app, open_app, spotlight_search
+    case files          // list_directory, file_info, read_clipboard, write_clipboard
+}
+
 // MARK: - Tool Definitions for Claude
 
 struct ToolDefinitions {
 
+    // MARK: - Tool Category Map
+
+    /// Maps each tool name to its category
+    static let toolCategoryMap: [String: ToolCategory] = {
+        var map: [String: ToolCategory] = [:]
+
+        // Core (always loaded)
+        for name in ["take_screenshot", "click_element", "type_text", "press_key", "run_shell", "read_file", "write_file"] {
+            map[name] = .core
+        }
+
+        // GUI
+        for name in ["get_ui_elements", "scroll", "drag", "mouse_move", "wait", "list_windows", "move_window", "resize_window", "get_screen_size"] {
+            map[name] = .gui
+        }
+
+        // Web
+        map["open_url"] = .web
+
+        // Email
+        map["send_email"] = .email
+
+        // Scheduling
+        for name in ["schedule_task", "list_tasks", "cancel_task", "run_task"] {
+            map[name] = .scheduling
+        }
+
+        // Gateway
+        for name in ["configure_gateway", "import_gateway_config"] {
+            map[name] = .gateway
+        }
+
+        // Memory
+        for name in ["save_memory", "read_memory"] {
+            map[name] = .memory
+        }
+
+        // Config / Self-modification
+        for name in ["read_program", "edit_program", "read_system_prompt", "edit_system_prompt", "log_improvement", "read_improvement_log", "modify_config"] {
+            map[name] = .config
+        }
+
+        // Plugin
+        map["create_plugin"] = .plugin
+
+        // MCP management
+        for name in ["mcp_search", "mcp_install"] {
+            map[name] = .mcp
+        }
+
+        // Orchestrator
+        for name in ["run_subagents", "orchestrator_stats", "orchestrator_insights", "clear_tool_cache"] {
+            map[name] = .orchestrator
+        }
+
+        // AppleScript
+        map["run_applescript"] = .applescript
+
+        // Adaptive
+        for name in ["adaptive_stats", "ui_cache_lookup", "clear_ui_cache"] {
+            map[name] = .adaptive
+        }
+
+        // Claude Code
+        map["claude_code"] = .claudeCode
+
+        // Apps
+        for name in ["list_apps", "get_frontmost_app", "activate_app", "open_app", "spotlight_search"] {
+            map[name] = .apps
+        }
+
+        // Files
+        for name in ["list_directory", "file_info", "read_clipboard", "write_clipboard"] {
+            map[name] = .files
+        }
+
+        return map
+    }()
+
+    // MARK: - Dynamic Tool Loading
+
+    /// Returns tools filtered by the requested categories. Always includes .core.
+    static func tools(for categories: Set<ToolCategory>) -> [ClaudeTool] {
+        var cats = categories
+        cats.insert(.core) // always include core
+
+        return allTools.filter { tool in
+            guard let category = toolCategoryMap[tool.name] else {
+                // Unknown tool — include it to be safe
+                return true
+            }
+            return cats.contains(category)
+        }
+    }
+
+    /// The discover_tools meta-tool definition
+    static let discoverToolsTool = ClaudeTool(
+        name: "discover_tools",
+        description: "Search for additional tools not currently loaded. Returns matching tools available in your next response.",
+        inputSchema: InputSchema(
+            type: "object",
+            properties: [
+                "query": PropertySchema(type: "string", description: "Capability needed", enumValues: nil)
+            ],
+            required: ["query"]
+        )
+    )
+
     static let mcpManagementTools: [ClaudeTool] = [
         ClaudeTool(
             name: "mcp_search",
-            description: "Search npm registry for MCP (Model Context Protocol) server packages. Use this when the user needs a capability you don't have — search for an MCP server that provides it, then install it with mcp_install.",
+            description: "Search npm registry for MCP server packages to add capabilities.",
             inputSchema: InputSchema(
                 type: "object",
                 properties: [
-                    "query": PropertySchema(type: "string", description: "Search keywords (e.g., 'chrome devtools', 'github', 'slack', 'database', 'filesystem')", enumValues: nil)
+                    "query": PropertySchema(type: "string", description: "Search keywords", enumValues: nil)
                 ],
                 required: ["query"]
             )
         ),
         ClaudeTool(
             name: "mcp_install",
-            description: "Install and start an MCP server. This adds it to the agent's config and connects to it immediately. Once connected, the server's tools become available. Use npx-compatible package names.",
+            description: "Install and start an MCP server, making its tools available immediately.",
             inputSchema: InputSchema(
                 type: "object",
                 properties: [
-                    "package": PropertySchema(type: "string", description: "npm package name (e.g., 'chrome-devtools-mcp', '@anthropic-ai/mcp-github', '@anthropic-ai/mcp-filesystem')", enumValues: nil),
-                    "name": PropertySchema(type: "string", description: "Short name for this server (e.g., 'chrome', 'github', 'fs')", enumValues: nil),
-                    "args": PropertySchema(type: "string", description: "Additional arguments (space-separated, e.g., '/Users/user/projects' for filesystem MCP)", enumValues: nil)
+                    "package": PropertySchema(type: "string", description: "npm package name", enumValues: nil),
+                    "name": PropertySchema(type: "string", description: "Short server name", enumValues: nil),
+                    "args": PropertySchema(type: "string", description: "Additional arguments (space-separated)", enumValues: nil)
                 ],
                 required: ["package"]
             )
@@ -35,34 +164,25 @@ struct ToolDefinitions {
     static let schedulerTools: [ClaudeTool] = [
         ClaudeTool(
             name: "schedule_task",
-            description: """
-            Schedule a task to run automatically. The task runs `osai` in headless mode at the scheduled time.
-            Use this when the user asks you to do something later, on a schedule, or repeatedly.
-            Examples: "remind me in 5 minutes", "send me a daily briefing at 8am", "check my emails every hour".
-
-            Schedule types:
-            - "once": Run once at a specific time. Provide "at" as ISO 8601 datetime.
-            - "daily": Run every day. Provide "hour" (0-23) and "minute" (0-59).
-            - "interval": Run every N minutes. Provide "minutes".
-            """,
+            description: "Schedule a task to run osai in headless mode. Types: \"once\" (provide \"at\" as ISO 8601), \"daily\" (provide hour/minute), \"interval\" (provide minutes).",
             inputSchema: InputSchema(
                 type: "object",
                 properties: [
-                    "id": PropertySchema(type: "string", description: "Unique task ID (lowercase, hyphens, e.g., 'daily-briefing', 'check-emails')", enumValues: nil),
+                    "id": PropertySchema(type: "string", description: "Unique task ID (lowercase, hyphens)", enumValues: nil),
                     "description": PropertySchema(type: "string", description: "Human-readable description", enumValues: nil),
-                    "command": PropertySchema(type: "string", description: "The prompt/instruction to execute (what osai will do when the task runs)", enumValues: nil),
+                    "command": PropertySchema(type: "string", description: "Prompt/instruction to execute when task runs", enumValues: nil),
                     "schedule_type": PropertySchema(type: "string", description: "Type of schedule", enumValues: ["once", "daily", "interval"]),
                     "hour": PropertySchema(type: "integer", description: "Hour (0-23) for daily schedule", enumValues: nil),
                     "minute": PropertySchema(type: "integer", description: "Minute (0-59) for daily schedule", enumValues: nil),
                     "minutes": PropertySchema(type: "integer", description: "Interval in minutes for recurring tasks", enumValues: nil),
-                    "at": PropertySchema(type: "string", description: "ISO 8601 datetime for one-time tasks (e.g., '2025-03-11T16:30:00')", enumValues: nil)
+                    "at": PropertySchema(type: "string", description: "ISO 8601 datetime for one-time tasks", enumValues: nil)
                 ],
                 required: ["id", "description", "command", "schedule_type"]
             )
         ),
         ClaudeTool(
             name: "list_tasks",
-            description: "List all scheduled tasks with their status, schedule, and last run time.",
+            description: "List all scheduled tasks with status and last run time.",
             inputSchema: InputSchema(
                 type: "object",
                 properties: [:],
@@ -71,7 +191,7 @@ struct ToolDefinitions {
         ),
         ClaudeTool(
             name: "cancel_task",
-            description: "Cancel and remove a scheduled task by its ID.",
+            description: "Cancel a scheduled task by ID.",
             inputSchema: InputSchema(
                 type: "object",
                 properties: [
@@ -82,7 +202,7 @@ struct ToolDefinitions {
         ),
         ClaudeTool(
             name: "run_task",
-            description: "Trigger an existing scheduled task to run immediately. Results will be delivered to the configured destination.",
+            description: "Trigger a scheduled task to run immediately.",
             inputSchema: InputSchema(
                 type: "object",
                 properties: [
@@ -96,37 +216,26 @@ struct ToolDefinitions {
     static let gatewayTools: [ClaudeTool] = [
         ClaudeTool(
             name: "configure_gateway",
-            description: """
-            Configure a messaging gateway (Telegram, WhatsApp, Slack, Discord) so the user can talk to osai from those platforms.
-            Use this when the user wants to set up a bot/bridge. After configuring, tell the user to run `osai gateway` to start it.
-            For Telegram: user needs a bot token from @BotFather.
-            For WhatsApp: just enable it (uses wacli, must be authenticated).
-            For Slack: needs bot_token (xoxb-) and app_token (xapp-).
-            For Discord: needs bot token from Discord Developer Portal.
-            """,
+            description: "Configure a messaging gateway (Telegram, WhatsApp, Slack, Discord). Run `osai gateway` to start after configuring.",
             inputSchema: InputSchema(
                 type: "object",
                 properties: [
-                    "platform": PropertySchema(type: "string", description: "Platform to configure: telegram, whatsapp, slack, discord", enumValues: ["telegram", "whatsapp", "slack", "discord"]),
-                    "enabled": PropertySchema(type: "string", description: "Enable or disable: true/false", enumValues: ["true", "false"]),
-                    "bot_token": PropertySchema(type: "string", description: "Bot token (required for Telegram, Slack, Discord)", enumValues: nil),
-                    "app_token": PropertySchema(type: "string", description: "App-level token (required for Slack Socket Mode)", enumValues: nil),
-                    "allowed_users": PropertySchema(type: "string", description: "Comma-separated list of allowed user IDs (for whitelisting)", enumValues: nil),
+                    "platform": PropertySchema(type: "string", description: "Platform to configure", enumValues: ["telegram", "whatsapp", "slack", "discord"]),
+                    "enabled": PropertySchema(type: "string", description: "Enable or disable", enumValues: ["true", "false"]),
+                    "bot_token": PropertySchema(type: "string", description: "Bot token (Telegram, Slack, Discord)", enumValues: nil),
+                    "app_token": PropertySchema(type: "string", description: "App-level token (Slack Socket Mode)", enumValues: nil),
+                    "allowed_users": PropertySchema(type: "string", description: "Comma-separated allowed user IDs", enumValues: nil),
                 ],
                 required: ["platform", "enabled"]
             )
         ),
         ClaudeTool(
             name: "import_gateway_config",
-            description: """
-            Import gateway/channel configuration from OpenClaw (~/.openclaw/openclaw.json).
-            This reads existing Discord, Telegram, Slack, or WhatsApp configs and copies them to osai's gateway config.
-            Use this when the user says they have OpenClaw configured and want to reuse those settings.
-            """,
+            description: "Import gateway config from OpenClaw (~/.openclaw/openclaw.json).",
             inputSchema: InputSchema(
                 type: "object",
                 properties: [
-                    "platform": PropertySchema(type: "string", description: "Platform to import: discord, telegram, slack, whatsapp, or 'all' to import everything", enumValues: ["discord", "telegram", "slack", "whatsapp", "all"]),
+                    "platform": PropertySchema(type: "string", description: "Platform to import, or 'all'", enumValues: ["discord", "telegram", "slack", "whatsapp", "all"]),
                 ],
                 required: ["platform"]
             )
@@ -136,20 +245,12 @@ struct ToolDefinitions {
     static let claudeCodeTools: [ClaudeTool] = [
         ClaudeTool(
             name: "claude_code",
-            description: """
-            Delegate a programming task to Claude Code (claude CLI). Use this for ALL code changes, file creation, \
-            refactoring, debugging, and software engineering tasks. Claude Code has full access to the codebase, \
-            can read/write files, run tests, and make commits. \
-            You MUST use this tool instead of writing code yourself — Claude Code is the expert programmer. \
-            Write a clear, professional prompt describing exactly what needs to be done. \
-            Include relevant context: file paths, error messages, desired behavior. \
-            Claude Code works in the project directory and has full shell access.
-            """,
+            description: "Delegate a programming task to Claude Code CLI. Use for all code changes, debugging, refactoring, and engineering tasks.",
             inputSchema: InputSchema(
                 type: "object",
                 properties: [
-                    "prompt": PropertySchema(type: "string", description: "A clear, detailed prompt for Claude Code describing the programming task. Be specific about what files to change, what behavior is expected, and any constraints.", enumValues: nil),
-                    "workdir": PropertySchema(type: "string", description: "Working directory for Claude Code (default: ~/Sites/osai)", enumValues: nil),
+                    "prompt": PropertySchema(type: "string", description: "Detailed prompt describing the programming task", enumValues: nil),
+                    "workdir": PropertySchema(type: "string", description: "Working directory (default: ~/Sites/osai)", enumValues: nil),
                 ],
                 required: ["prompt"]
             )
@@ -159,17 +260,17 @@ struct ToolDefinitions {
     static let orchestratorTools: [ClaudeTool] = [
         ClaudeTool(
             name: "orchestrator_stats",
-            description: "View tool orchestrator statistics: cache hit rates, prediction accuracy, common tool sequences, batching efficiency. Use this to understand your own performance patterns and identify optimization opportunities.",
+            description: "View tool orchestrator stats: cache hit rates, prediction accuracy, batching efficiency.",
             inputSchema: InputSchema(type: "object", properties: [:], required: nil)
         ),
         ClaudeTool(
             name: "orchestrator_insights",
-            description: "Get detailed insights about tool usage patterns: most common sequences, slowest tools, batching opportunities. Use this for self-reflection on efficiency.",
+            description: "Get insights on tool usage patterns: common sequences, slowest tools, batching opportunities.",
             inputSchema: InputSchema(type: "object", properties: [:], required: nil)
         ),
         ClaudeTool(
             name: "clear_tool_cache",
-            description: "Clear the tool result cache. Use when you suspect cached data is stale or after significant system state changes.",
+            description: "Clear the tool result cache.",
             inputSchema: InputSchema(type: "object", properties: [:], required: nil)
         ),
     ]
@@ -177,23 +278,23 @@ struct ToolDefinitions {
     static let adaptiveTools: [ClaudeTool] = [
         ClaudeTool(
             name: "adaptive_stats",
-            description: "View adaptive response system statistics: detected context, UI intelligence cache, intent analysis. Useful for understanding how the system adapts to your current environment.",
+            description: "View adaptive response system stats: context detection, UI cache, intent analysis.",
             inputSchema: InputSchema(type: "object", properties: [:], required: nil)
         ),
         ClaudeTool(
             name: "ui_cache_lookup",
-            description: "Look up cached UI element positions and workflows for an app. Avoids the need to call get_ui_elements if the layout is cached. Returns frequently used elements and known workflows.",
+            description: "Look up cached UI element positions and workflows for an app.",
             inputSchema: InputSchema(
                 type: "object",
                 properties: [
-                    "app_name": PropertySchema(type: "string", description: "Application name to look up cached UI data for", enumValues: nil)
+                    "app_name": PropertySchema(type: "string", description: "Application name to look up", enumValues: nil)
                 ],
                 required: ["app_name"]
             )
         ),
         ClaudeTool(
             name: "clear_ui_cache",
-            description: "Clear the UI intelligence cache for all apps or a specific app. Use when cached positions seem stale or after app updates.",
+            description: "Clear UI intelligence cache for all or a specific app.",
             inputSchema: InputSchema(
                 type: "object",
                 properties: [
@@ -208,11 +309,11 @@ struct ToolDefinitions {
         // --- AppleScript ---
         ClaudeTool(
             name: "run_applescript",
-            description: "Execute AppleScript code to control macOS applications. Use for app-specific automation like telling Safari to open a URL, controlling Finder, managing windows, interacting with menus via System Events, etc. This is the most reliable way to interact with apps that support it.",
+            description: "Execute AppleScript to control macOS applications and System Events.",
             inputSchema: InputSchema(
                 type: "object",
                 properties: [
-                    "script": PropertySchema(type: "string", description: "The AppleScript code to execute", enumValues: nil)
+                    "script": PropertySchema(type: "string", description: "AppleScript code to execute", enumValues: nil)
                 ],
                 required: ["script"]
             )
@@ -221,12 +322,12 @@ struct ToolDefinitions {
         // --- Shell ---
         ClaudeTool(
             name: "run_shell",
-            description: "Execute a shell command (zsh) and return the output. Use for file operations (ls, cat, cp, mv), process management (ps, kill), system info, installing packages, running scripts, or ANYTHING that can be done from a terminal. Very powerful — use it when other tools can't do the job.",
+            description: "Execute a zsh command and return output. Use for file ops, process management, system info, scripts.",
             inputSchema: InputSchema(
                 type: "object",
                 properties: [
-                    "command": PropertySchema(type: "string", description: "The shell command to execute", enumValues: nil),
-                    "timeout": PropertySchema(type: "integer", description: "Maximum seconds to wait (default: 30, max: 120)", enumValues: nil)
+                    "command": PropertySchema(type: "string", description: "Shell command to execute", enumValues: nil),
+                    "timeout": PropertySchema(type: "integer", description: "Max seconds to wait (default: 30, max: 120)", enumValues: nil)
                 ],
                 required: ["command"]
             )
@@ -235,11 +336,11 @@ struct ToolDefinitions {
         // --- Spotlight ---
         ClaudeTool(
             name: "spotlight_search",
-            description: "Search for files, apps, or folders using macOS Spotlight (mdfind). Use this to find applications before opening them, or to locate files/folders.",
+            description: "Search for files, apps, or folders using macOS Spotlight.",
             inputSchema: InputSchema(
                 type: "object",
                 properties: [
-                    "query": PropertySchema(type: "string", description: "Search query (app name, file name, etc.)", enumValues: nil),
+                    "query": PropertySchema(type: "string", description: "Search query", enumValues: nil),
                     "kind": PropertySchema(type: "string", description: "Filter by type", enumValues: ["application", "document", "folder", "image", "any"])
                 ],
                 required: ["query"]
@@ -249,7 +350,7 @@ struct ToolDefinitions {
         // --- App Management ---
         ClaudeTool(
             name: "list_apps",
-            description: "List all currently running applications with their names, PIDs, and bundle IDs.",
+            description: "List running applications with names, PIDs, and bundle IDs.",
             inputSchema: InputSchema(
                 type: "object",
                 properties: [:],
@@ -258,7 +359,7 @@ struct ToolDefinitions {
         ),
         ClaudeTool(
             name: "get_frontmost_app",
-            description: "Get information about the currently active (frontmost) application.",
+            description: "Get the currently active (frontmost) application.",
             inputSchema: InputSchema(
                 type: "object",
                 properties: [:],
@@ -267,22 +368,22 @@ struct ToolDefinitions {
         ),
         ClaudeTool(
             name: "activate_app",
-            description: "Bring a running application to the foreground by its name.",
+            description: "Bring an application to the foreground.",
             inputSchema: InputSchema(
                 type: "object",
                 properties: [
-                    "name": PropertySchema(type: "string", description: "The application name", enumValues: nil)
+                    "name": PropertySchema(type: "string", description: "Application name", enumValues: nil)
                 ],
                 required: ["name"]
             )
         ),
         ClaudeTool(
             name: "open_app",
-            description: "Launch and activate an application by name. Uses 'open -a' which works with any app including those not currently running.",
+            description: "Launch and activate an application by name.",
             inputSchema: InputSchema(
                 type: "object",
                 properties: [
-                    "name": PropertySchema(type: "string", description: "The application name to open", enumValues: nil)
+                    "name": PropertySchema(type: "string", description: "Application name", enumValues: nil)
                 ],
                 required: ["name"]
             )
@@ -291,12 +392,12 @@ struct ToolDefinitions {
         // --- UI Inspection ---
         ClaudeTool(
             name: "get_ui_elements",
-            description: "Get the accessibility tree of a running application. Returns buttons, text fields, labels, and other UI elements with their positions, sizes, center coordinates, and available actions. Use this to find clickable targets before clicking. Elements include center coordinates for easy clicking.",
+            description: "Get accessibility tree of an app: buttons, fields, labels with positions and center coordinates.",
             inputSchema: InputSchema(
                 type: "object",
                 properties: [
-                    "app_name": PropertySchema(type: "string", description: "The application name or PID to inspect", enumValues: nil),
-                    "max_depth": PropertySchema(type: "integer", description: "Maximum depth to traverse the UI tree (default: 3, max: 5)", enumValues: nil)
+                    "app_name": PropertySchema(type: "string", description: "Application name or PID", enumValues: nil),
+                    "max_depth": PropertySchema(type: "integer", description: "Max UI tree depth (default: 3, max: 5)", enumValues: nil)
                 ],
                 required: ["app_name"]
             )
@@ -305,12 +406,12 @@ struct ToolDefinitions {
         // --- Mouse ---
         ClaudeTool(
             name: "click_element",
-            description: "Click at specific screen coordinates. Use get_ui_elements first to find the exact coordinates of the element you want to click.",
+            description: "Click at screen coordinates. Use get_ui_elements first to find coordinates.",
             inputSchema: InputSchema(
                 type: "object",
                 properties: [
-                    "x": PropertySchema(type: "integer", description: "X coordinate (screen pixels)", enumValues: nil),
-                    "y": PropertySchema(type: "integer", description: "Y coordinate (screen pixels)", enumValues: nil),
+                    "x": PropertySchema(type: "integer", description: "X coordinate", enumValues: nil),
+                    "y": PropertySchema(type: "integer", description: "Y coordinate", enumValues: nil),
                     "button": PropertySchema(type: "string", description: "Mouse button (default: left)", enumValues: ["left", "right"]),
                     "double_click": PropertySchema(type: "boolean", description: "Double-click (default: false)", enumValues: nil)
                 ],
@@ -319,7 +420,7 @@ struct ToolDefinitions {
         ),
         ClaudeTool(
             name: "mouse_move",
-            description: "Move the mouse cursor to a specific position without clicking.",
+            description: "Move mouse cursor to a position without clicking.",
             inputSchema: InputSchema(
                 type: "object",
                 properties: [
@@ -331,29 +432,29 @@ struct ToolDefinitions {
         ),
         ClaudeTool(
             name: "scroll",
-            description: "Scroll at a specific position. Move the mouse to the position and scroll in the specified direction.",
+            description: "Scroll at a specific screen position.",
             inputSchema: InputSchema(
                 type: "object",
                 properties: [
-                    "x": PropertySchema(type: "integer", description: "X coordinate to scroll at", enumValues: nil),
-                    "y": PropertySchema(type: "integer", description: "Y coordinate to scroll at", enumValues: nil),
+                    "x": PropertySchema(type: "integer", description: "X coordinate", enumValues: nil),
+                    "y": PropertySchema(type: "integer", description: "Y coordinate", enumValues: nil),
                     "direction": PropertySchema(type: "string", description: "Scroll direction", enumValues: ["up", "down", "left", "right"]),
-                    "amount": PropertySchema(type: "integer", description: "Number of scroll ticks (default: 3)", enumValues: nil)
+                    "amount": PropertySchema(type: "integer", description: "Scroll ticks (default: 3)", enumValues: nil)
                 ],
                 required: ["x", "y", "direction"]
             )
         ),
         ClaudeTool(
             name: "drag",
-            description: "Click and drag from one position to another. Useful for moving windows, slider controls, drawing, etc.",
+            description: "Click and drag from one position to another.",
             inputSchema: InputSchema(
                 type: "object",
                 properties: [
-                    "from_x": PropertySchema(type: "integer", description: "Starting X coordinate", enumValues: nil),
-                    "from_y": PropertySchema(type: "integer", description: "Starting Y coordinate", enumValues: nil),
-                    "to_x": PropertySchema(type: "integer", description: "Ending X coordinate", enumValues: nil),
-                    "to_y": PropertySchema(type: "integer", description: "Ending Y coordinate", enumValues: nil),
-                    "duration": PropertySchema(type: "number", description: "Duration of drag in seconds (default: 0.5)", enumValues: nil)
+                    "from_x": PropertySchema(type: "integer", description: "Starting X", enumValues: nil),
+                    "from_y": PropertySchema(type: "integer", description: "Starting Y", enumValues: nil),
+                    "to_x": PropertySchema(type: "integer", description: "Ending X", enumValues: nil),
+                    "to_y": PropertySchema(type: "integer", description: "Ending Y", enumValues: nil),
+                    "duration": PropertySchema(type: "number", description: "Drag duration in seconds (default: 0.5)", enumValues: nil)
                 ],
                 required: ["from_x", "from_y", "to_x", "to_y"]
             )
@@ -362,22 +463,22 @@ struct ToolDefinitions {
         // --- Keyboard ---
         ClaudeTool(
             name: "type_text",
-            description: "Type text character by character into the currently focused element. The text appears as if typed on the keyboard.",
+            description: "Type text character by character into the focused element.",
             inputSchema: InputSchema(
                 type: "object",
                 properties: [
-                    "text": PropertySchema(type: "string", description: "The text to type", enumValues: nil)
+                    "text": PropertySchema(type: "string", description: "Text to type", enumValues: nil)
                 ],
                 required: ["text"]
             )
         ),
         ClaudeTool(
             name: "press_key",
-            description: "Press a keyboard shortcut. Combine modifiers with '+'. Examples: 'command+c', 'command+shift+s', 'return', 'tab', 'escape', 'command+a', 'command+space' (Spotlight).",
+            description: "Press a key or shortcut. Combine modifiers with '+' (e.g. 'command+c', 'return').",
             inputSchema: InputSchema(
                 type: "object",
                 properties: [
-                    "key": PropertySchema(type: "string", description: "Key combination (e.g., 'command+c', 'return', 'tab')", enumValues: nil)
+                    "key": PropertySchema(type: "string", description: "Key combination", enumValues: nil)
                 ],
                 required: ["key"]
             )
@@ -386,14 +487,14 @@ struct ToolDefinitions {
         // --- Vision ---
         ClaudeTool(
             name: "take_screenshot",
-            description: "Capture a screenshot of the screen or a specific region. The screenshot is sent to you as an image so you can SEE what's on screen. Use this frequently to verify your actions and understand the current state. Screenshots are downscaled to 1280px wide to save tokens.",
+            description: "Capture screenshot of the screen or a region. Downscaled to 1280px wide.",
             inputSchema: InputSchema(
                 type: "object",
                 properties: [
-                    "x": PropertySchema(type: "integer", description: "X coordinate of region (optional, omit for full screen)", enumValues: nil),
-                    "y": PropertySchema(type: "integer", description: "Y coordinate of region (optional)", enumValues: nil),
-                    "width": PropertySchema(type: "integer", description: "Width of region (optional)", enumValues: nil),
-                    "height": PropertySchema(type: "integer", description: "Height of region (optional)", enumValues: nil)
+                    "x": PropertySchema(type: "integer", description: "Region X (omit for full screen)", enumValues: nil),
+                    "y": PropertySchema(type: "integer", description: "Region Y", enumValues: nil),
+                    "width": PropertySchema(type: "integer", description: "Region width", enumValues: nil),
+                    "height": PropertySchema(type: "integer", description: "Region height", enumValues: nil)
                 ],
                 required: nil
             )
@@ -402,7 +503,7 @@ struct ToolDefinitions {
         // --- Window Management ---
         ClaudeTool(
             name: "list_windows",
-            description: "List all visible windows with their owner app, title, position, and size. Useful for finding windows to interact with.",
+            description: "List visible windows with owner app, title, position, and size.",
             inputSchema: InputSchema(
                 type: "object",
                 properties: [
@@ -413,11 +514,11 @@ struct ToolDefinitions {
         ),
         ClaudeTool(
             name: "move_window",
-            description: "Move an application's window to a new position.",
+            description: "Move an app's window to a new position.",
             inputSchema: InputSchema(
                 type: "object",
                 properties: [
-                    "app_name": PropertySchema(type: "string", description: "The application name", enumValues: nil),
+                    "app_name": PropertySchema(type: "string", description: "Application name", enumValues: nil),
                     "x": PropertySchema(type: "integer", description: "New X position", enumValues: nil),
                     "y": PropertySchema(type: "integer", description: "New Y position", enumValues: nil)
                 ],
@@ -426,11 +527,11 @@ struct ToolDefinitions {
         ),
         ClaudeTool(
             name: "resize_window",
-            description: "Resize an application's window.",
+            description: "Resize an app's window.",
             inputSchema: InputSchema(
                 type: "object",
                 properties: [
-                    "app_name": PropertySchema(type: "string", description: "The application name", enumValues: nil),
+                    "app_name": PropertySchema(type: "string", description: "Application name", enumValues: nil),
                     "width": PropertySchema(type: "integer", description: "New width", enumValues: nil),
                     "height": PropertySchema(type: "integer", description: "New height", enumValues: nil)
                 ],
@@ -441,18 +542,18 @@ struct ToolDefinitions {
         // --- Utilities ---
         ClaudeTool(
             name: "open_url",
-            description: "Open a URL in the default web browser.",
+            description: "Open a URL in the default browser.",
             inputSchema: InputSchema(
                 type: "object",
                 properties: [
-                    "url": PropertySchema(type: "string", description: "The URL to open", enumValues: nil)
+                    "url": PropertySchema(type: "string", description: "URL to open", enumValues: nil)
                 ],
                 required: ["url"]
             )
         ),
         ClaudeTool(
             name: "read_clipboard",
-            description: "Read the current contents of the system clipboard.",
+            description: "Read current clipboard contents.",
             inputSchema: InputSchema(
                 type: "object",
                 properties: [:],
@@ -461,7 +562,7 @@ struct ToolDefinitions {
         ),
         ClaudeTool(
             name: "write_clipboard",
-            description: "Write text to the system clipboard.",
+            description: "Write text to the clipboard.",
             inputSchema: InputSchema(
                 type: "object",
                 properties: [
@@ -472,7 +573,7 @@ struct ToolDefinitions {
         ),
         ClaudeTool(
             name: "get_screen_size",
-            description: "Get the current screen dimensions in pixels.",
+            description: "Get screen dimensions in pixels.",
             inputSchema: InputSchema(
                 type: "object",
                 properties: [:],
@@ -481,7 +582,7 @@ struct ToolDefinitions {
         ),
         ClaudeTool(
             name: "wait",
-            description: "Pause for a specified duration. Use after clicking or typing to let the UI update before taking a screenshot.",
+            description: "Pause for a duration to let UI update.",
             inputSchema: InputSchema(
                 type: "object",
                 properties: [
@@ -494,7 +595,7 @@ struct ToolDefinitions {
         // --- File Operations ---
         ClaudeTool(
             name: "read_file",
-            description: "Read a file's contents. Supports text files up to 500 lines. Use for code, config, documents, data files, etc.",
+            description: "Read a file's contents (up to 500 lines).",
             inputSchema: InputSchema(
                 type: "object",
                 properties: [
@@ -506,7 +607,7 @@ struct ToolDefinitions {
         ),
         ClaudeTool(
             name: "write_file",
-            description: "Write content to a file. Creates the file if it doesn't exist, overwrites if it does.",
+            description: "Write content to a file. Creates or overwrites.",
             inputSchema: InputSchema(
                 type: "object",
                 properties: [
@@ -518,7 +619,7 @@ struct ToolDefinitions {
         ),
         ClaudeTool(
             name: "list_directory",
-            description: "List files and folders in a directory with sizes and types.",
+            description: "List files and folders in a directory.",
             inputSchema: InputSchema(
                 type: "object",
                 properties: [
@@ -530,7 +631,7 @@ struct ToolDefinitions {
         ),
         ClaudeTool(
             name: "file_info",
-            description: "Get detailed info about a file: size, dates, type, line count.",
+            description: "Get file metadata: size, dates, type, line count.",
             inputSchema: InputSchema(
                 type: "object",
                 properties: [
@@ -543,24 +644,24 @@ struct ToolDefinitions {
         // --- Memory ---
         ClaudeTool(
             name: "save_memory",
-            description: "Save information to persistent memory that survives across sessions. Use for remembering user preferences, project details, important findings, etc.",
+            description: "Save information to persistent memory across sessions.",
             inputSchema: InputSchema(
                 type: "object",
                 properties: [
-                    "topic": PropertySchema(type: "string", description: "Topic/filename for the memory (e.g., 'preferences', 'project-notes')", enumValues: nil),
-                    "content": PropertySchema(type: "string", description: "Content to save (markdown format)", enumValues: nil),
-                    "append": PropertySchema(type: "boolean", description: "Append to existing file instead of overwriting (default: false)", enumValues: nil)
+                    "topic": PropertySchema(type: "string", description: "Topic/filename for the memory", enumValues: nil),
+                    "content": PropertySchema(type: "string", description: "Content to save (markdown)", enumValues: nil),
+                    "append": PropertySchema(type: "boolean", description: "Append instead of overwrite (default: false)", enumValues: nil)
                 ],
                 required: ["topic", "content"]
             )
         ),
         ClaudeTool(
             name: "read_memory",
-            description: "Read from persistent memory. Returns the contents of a memory file.",
+            description: "Read from persistent memory. Omit topic to list all files.",
             inputSchema: InputSchema(
                 type: "object",
                 properties: [
-                    "topic": PropertySchema(type: "string", description: "Topic/filename to read (omit for list of all memory files)", enumValues: nil)
+                    "topic": PropertySchema(type: "string", description: "Topic to read (omit for list)", enumValues: nil)
                 ],
                 required: nil
             )
@@ -569,24 +670,12 @@ struct ToolDefinitions {
         // --- Sub-Agents ---
         ClaudeTool(
             name: "run_subagents",
-            description: """
-            Run multiple sub-tasks in PARALLEL, each handled by a separate AI agent with its own conversation.
-            Use this when you need to: analyze multiple files, research multiple topics, perform independent tasks simultaneously.
-
-            Agent types:
-            - "general": Full tool access, general purpose tasks
-            - "explore": Fast read-only research (shell, read files, spotlight) — no writes or GUI
-            - "analyze": Deep analysis of files/data — read-only, no GUI
-            - "execute": Action-oriented — can use GUI, shell, AppleScript, everything except spawning more sub-agents
-
-            Each task needs: id (unique), description (short), prompt (detailed instructions), type (agent type).
-            Pass tasks as a JSON array string.
-            """,
+            description: "Run multiple sub-tasks in parallel via separate AI agents. Types: general (full access), explore (read-only research), analyze (deep analysis), execute (action-oriented, no sub-agents).",
             inputSchema: InputSchema(
                 type: "object",
                 properties: [
-                    "tasks": PropertySchema(type: "string", description: "JSON array of tasks. Each: {\"id\": \"t1\", \"description\": \"short desc\", \"prompt\": \"detailed instructions for the sub-agent\", \"type\": \"explore|analyze|execute|general\"}", enumValues: nil),
-                    "context": PropertySchema(type: "string", description: "Optional context from the current conversation to share with all sub-agents (e.g., what you've found so far, the user's goal)", enumValues: nil)
+                    "tasks": PropertySchema(type: "string", description: "JSON array of tasks: [{id, description, prompt, type}]", enumValues: nil),
+                    "context": PropertySchema(type: "string", description: "Shared context for all sub-agents", enumValues: nil)
                 ],
                 required: ["tasks"]
             )
@@ -595,13 +684,13 @@ struct ToolDefinitions {
         // --- Email (via gws CLI) ---
         ClaudeTool(
             name: "send_email",
-            description: "Send an email. THIS IS THE ONLY WAY TO SEND EMAIL. Never use run_shell for email. Never use gws, python, or scripts. Just call this tool with to, subject, body.",
+            description: "Send an email with to, subject, and body.",
             inputSchema: InputSchema(
                 type: "object",
                 properties: [
-                    "to": PropertySchema(type: "string", description: "Recipient email address", enumValues: nil),
-                    "subject": PropertySchema(type: "string", description: "Email subject line", enumValues: nil),
-                    "body": PropertySchema(type: "string", description: "Email body text (plain text)", enumValues: nil)
+                    "to": PropertySchema(type: "string", description: "Recipient email", enumValues: nil),
+                    "subject": PropertySchema(type: "string", description: "Subject line", enumValues: nil),
+                    "body": PropertySchema(type: "string", description: "Body text (plain text)", enumValues: nil)
                 ],
                 required: ["to", "subject", "body"]
             )

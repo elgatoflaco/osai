@@ -73,9 +73,36 @@ final class MemoryManager {
 
     // MARK: - Memory as system prompt addition
 
-    func getMemoryContext() -> String {
+    /// Keywords that suggest the user wants to access memory
+    private static let memoryKeywords = [
+        "remember", "recall", "last time", "previously", "before",
+        "memoria", "recuerda", "anterior",
+        "save_memory", "read_memory", "memory", "forgot", "forget",
+        "you told me", "we discussed", "we talked"
+    ]
+
+    /// Track whether memory has been loaded this session
+    var memoryLoadedThisSession = false
+
+    /// Check if user input suggests memory is needed
+    func shouldLoadMemory(for userInput: String) -> Bool {
+        if memoryLoadedThisSession { return true }
+        let lower = userInput.lowercased()
+        return Self.memoryKeywords.contains { lower.contains($0) }
+    }
+
+    /// Conditionally return memory context based on user input relevance
+    func getMemoryContext(for userInput: String? = nil) -> String {
+        // If called without input (legacy), always load
+        if let input = userInput {
+            guard shouldLoadMemory(for: input) else { return "" }
+        }
+
         let core = loadCoreMemory()
         if core.isEmpty { return "" }
+
+        memoryLoadedThisSession = true
+
         return """
 
         ## Persistent Memory

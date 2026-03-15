@@ -7,7 +7,7 @@ final class AgentLoop {
     private let executor: ToolExecutor
     private let config: AgentConfig
     private let mcpManager: MCPManager
-    private let memory: MemoryManager
+    private var memory: MemoryManager { executor.memory }
     let approval: ApprovalSystem
     let context: ContextManager
     let aside: AsideMonitor
@@ -51,7 +51,6 @@ final class AgentLoop {
         self.client = AIClient(config: config)
         self.executor = ToolExecutor()
         self.mcpManager = mcpManager
-        self.memory = MemoryManager()
         self.approval = ApprovalSystem()
         self.context = ContextManager(model: config.model)
         self.aside = AsideMonitor()
@@ -193,8 +192,8 @@ final class AgentLoop {
             aside.start()
         }
 
-        // Build system prompt with memory context + matched skills + adaptive context
-        let memoryContext = memory.getMemoryContext()
+        // Build system prompt with conditional memory + matched skills + adaptive context
+        let memoryContext = memory.getMemoryContext(for: userInput)
         let skillContext = SkillManager.buildSkillContext(for: userInput)
         let adaptiveContext = adaptive.buildAdaptiveContext(
             userInput: userInput,
@@ -203,8 +202,28 @@ final class AgentLoop {
         )
         let fullSystemPrompt = config.systemPrompt + memoryContext + skillContext + adaptiveContext
 
-        // Combine built-in tools + MCP tools
-        let allTools = ToolDefinitions.allTools + mcpManager.getClaudeTools()
+        // Determine required tool categories based on user message (intent-based dynamic loading)
+        let requiredCategories = IntentAnalyzer.requiredToolCategories(for: userInput)
+        var filteredTools = ToolDefinitions.tools(for: requiredCategories)
+
+        // Always add MCP tools if any are configured (they're already specific to installed servers)
+        let mcpTools = mcpManager.getClaudeTools()
+        if !mcpTools.isEmpty {
+            filteredTools += mcpTools
+        }
+
+        // Add discover_tools meta-tool so the agent can request more tools if needed
+        filteredTools.append(ToolDefinitions.discoverToolsTool)
+
+        // Track dynamically discovered tools that get added mid-conversation
+        var dynamicToolCategories: Set<ToolCategory> = []
+
+        var allTools = filteredTools
+
+        if verbose {
+            let loadedNames = filteredTools.filter { $0.name != "discover_tools" }.map { $0.name }
+            printColored("  [Tools] Loaded \(loadedNames.count) tools for categories: \(requiredCategories.map { $0.rawValue }.sorted().joined(separator: ", "))", color: .gray)
+        }
 
         while iterations < maxIterations {
             // Check cancellation
@@ -385,8 +404,27 @@ final class AgentLoop {
                     }
                 }
 
+                // Handle discover_tools — dynamically load more tools
+                if tc.name == "discover_tools" {
+                    let query = tc.input["query"]?.stringValue ?? ""
+                    let matchedCategories = IntentAnalyzer.requiredToolCategories(for: query)
+                    let newCategories = matchedCategories.subtracting(requiredCategories).subtracting(dynamicToolCategories)
+
+                    if newCategories.isEmpty {
+                        toolResults.append(.toolResultText(toolUseId: tc.id, text: "All relevant tools are already loaded. Available tools: \(allTools.map { $0.name }.joined(separator: ", "))"))
+                    } else {
+                        let newTools = ToolDefinitions.tools(for: newCategories).filter { newTool in
+                            !allTools.contains(where: { $0.name == newTool.name })
+                        }
+                        dynamicToolCategories.formUnion(newCategories)
+                        allTools += newTools
+                        let toolNames = newTools.map { $0.name }.joined(separator: ", ")
+                        printColored("    🔧 Discovered \(newTools.count) tools: \(toolNames)", color: .cyan)
+                        toolResults.append(.toolResultText(toolUseId: tc.id, text: "Loaded \(newTools.count) additional tools: \(toolNames). You can now use them."))
+                    }
+                }
                 // Handle delegated tools (sub-agents, MCP, schedulers, etc.)
-                if tc.name == "run_subagents" {
+                else if tc.name == "run_subagents" {
                     let subResult = await handleSubAgents(input: tc.input, allTools: allTools)
                     toolResults.append(.toolResultText(toolUseId: tc.id, text: subResult))
                 }
@@ -1322,8 +1360,8 @@ final class AgentLoop {
     // MARK: - Run with Plugin
 
     func processWithPlugin(_ plugin: AgentPlugin, input: String) async throws -> String {
-        // Use plugin's system prompt
-        let memoryContext = memory.getMemoryContext()
+        // Use plugin's system prompt with conditional memory
+        let memoryContext = memory.getMemoryContext(for: input)
         let fullPrompt = plugin.systemPrompt + memoryContext
 
         conversationHistory.append(ClaudeMessage(role: "user", content: [.text(input)]))
@@ -1354,6 +1392,7 @@ final class AgentLoop {
         )
 
         let pluginClient = AIClient(config: pluginConfig)
+        // Plugins get all tools since they run specialized tasks
         let allTools = ToolDefinitions.allTools + mcpManager.getClaudeTools()
 
         var finalResponse = ""
@@ -1584,6 +1623,7 @@ final class AgentLoop {
         case "modify_config": return "⚙️"
         case "create_plugin": return "🔌"
         case "send_email": return "✉️"
+        case "discover_tools": return "🔧"
         default: return "⚡"
         }
     }

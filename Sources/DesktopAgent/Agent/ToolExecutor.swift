@@ -368,6 +368,7 @@ final class ToolExecutor {
             let topic = input["topic"]?.stringValue ?? "notes"
             let content = input["content"]?.stringValue ?? ""
             let append = input["append"]?.boolValue ?? false
+            exe.memory.memoryLoadedThisSession = true
             do {
                 if append, let existing = exe.memory.readMemoryFile(name: topic) {
                     try exe.memory.writeMemoryFile(name: topic, content: existing + "\n\n" + content)
@@ -382,6 +383,7 @@ final class ToolExecutor {
 
         handlers["read_memory"] = { exe, input in
             let topic = input["topic"]?.stringValue
+            exe.memory.memoryLoadedThisSession = true
             if let topic = topic {
                 if let content = exe.memory.readMemoryFile(name: topic) {
                     return (ToolResult(success: true, output: content, screenshot: nil), nil)

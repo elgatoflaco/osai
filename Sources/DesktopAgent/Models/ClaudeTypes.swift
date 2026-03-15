@@ -137,12 +137,23 @@ struct ClaudeRequest: Codable {
 struct TokenUsage: Codable {
     let inputTokens: Int
     let outputTokens: Int
+    let cacheCreationInputTokens: Int?
+    let cacheReadInputTokens: Int?
 
     var totalTokens: Int { inputTokens + outputTokens }
 
     enum CodingKeys: String, CodingKey {
         case inputTokens = "input_tokens"
         case outputTokens = "output_tokens"
+        case cacheCreationInputTokens = "cache_creation_input_tokens"
+        case cacheReadInputTokens = "cache_read_input_tokens"
+    }
+
+    init(inputTokens: Int, outputTokens: Int, cacheCreationInputTokens: Int? = nil, cacheReadInputTokens: Int? = nil) {
+        self.inputTokens = inputTokens
+        self.outputTokens = outputTokens
+        self.cacheCreationInputTokens = cacheCreationInputTokens
+        self.cacheReadInputTokens = cacheReadInputTokens
     }
 }
 

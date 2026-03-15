@@ -59,16 +59,36 @@ final class AIClient {
         request.setValue("application/json", forHTTPHeaderField: "content-type")
         request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
         request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+        request.setValue("token-efficient-tool-use-2025-04-14", forHTTPHeaderField: "anthropic-beta")
 
-        let body = ClaudeRequest(
-            model: model,
-            maxTokens: maxTokens,
-            system: system,
-            tools: tools,
-            messages: messages
-        )
+        // Build request body with prompt caching support
+        let encoder = JSONEncoder()
+        let messagesData = try encoder.encode(messages)
+        let messagesJson = try JSONSerialization.jsonObject(with: messagesData)
 
-        request.httpBody = try JSONEncoder().encode(body)
+        var body: [String: Any] = [
+            "model": model,
+            "max_tokens": maxTokens,
+            "messages": messagesJson
+        ]
+
+        // System prompt as content block array with cache_control
+        if let system = system {
+            body["system"] = [
+                ["type": "text", "text": system, "cache_control": ["type": "ephemeral"]]
+            ]
+        }
+
+        // Tools with cache_control on the last tool (caches all tools)
+        if let tools = tools, !tools.isEmpty {
+            let toolsData = try encoder.encode(tools)
+            var toolsArray = try JSONSerialization.jsonObject(with: toolsData) as! [[String: Any]]
+            // Add cache_control to the last tool definition
+            toolsArray[toolsArray.count - 1]["cache_control"] = ["type": "ephemeral"]
+            body["tools"] = toolsArray
+        }
+
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         let (data, response) = try await session.data(for: request)
 
@@ -83,12 +103,18 @@ final class AIClient {
         var decoded = try JSONDecoder().decode(ClaudeResponse.self, from: data)
 
         // Parse usage if decoder missed it (Anthropic returns it at top level)
-        if decoded.usage == nil,
-           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            let usageDict = json["usage"] as? [String: Any] {
             let input = usageDict["input_tokens"] as? Int ?? 0
             let output = usageDict["output_tokens"] as? Int ?? 0
-            decoded.usage = TokenUsage(inputTokens: input, outputTokens: output)
+            let cacheCreation = usageDict["cache_creation_input_tokens"] as? Int
+            let cacheRead = usageDict["cache_read_input_tokens"] as? Int
+            decoded.usage = TokenUsage(
+                inputTokens: input,
+                outputTokens: output,
+                cacheCreationInputTokens: cacheCreation,
+                cacheReadInputTokens: cacheRead
+            )
         }
 
         return decoded
