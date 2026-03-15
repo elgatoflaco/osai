@@ -7,19 +7,25 @@ import Foundation
 struct SpecializedAgentDef: Codable {
     let name: String
     let description: String
-    let model: String  // "provider/model" format
+    let model: String  // "provider/model" format, or "claude-code" for CLI delegation
     let triggers: [String]  // keywords that auto-route to this agent
     let systemPrompt: String
     let toolCategories: [String]?  // nil = all tools, otherwise ToolCategory rawValue names
     let maxIterations: Int?
     let temperature: Double?
+    let backend: String?  // nil = API call, "claude-code" = delegate to Claude Code CLI
+
+    /// If true, this agent delegates to Claude Code CLI instead of making API calls
+    var usesClaudeCode: Bool {
+        backend == "claude-code" || model == "claude-code"
+    }
 
     enum CodingKeys: String, CodingKey {
         case name, description, model, triggers
         case systemPrompt = "system_prompt"
         case toolCategories = "tool_categories"
         case maxIterations = "max_iterations"
-        case temperature
+        case temperature, backend
     }
 }
 
@@ -74,17 +80,20 @@ final class AgentRegistry {
 
     /// Install default agents if none exist
     static func installDefaults() {
+        // Just ensure the directory exists — no default agents installed.
+        // Users create their own agents in ~/.desktop-agent/agents/
+        // Use /agent install to install example templates if desired.
         ensureDir()
+    }
 
-        // Only install if directory is empty
-        let fm = FileManager.default
-        let existing = (try? fm.contentsOfDirectory(atPath: agentsDir))?.filter { $0.hasSuffix(".md") } ?? []
-        if !existing.isEmpty { return }
-
-        // Install default agents
+    /// Explicitly install example agent templates (called via /agent install)
+    static func installTemplates() {
+        ensureDir()
         for (filename, content) in defaultAgents {
             let path = agentsDir + "/" + filename
-            try? content.write(toFile: path, atomically: true, encoding: .utf8)
+            if !FileManager.default.fileExists(atPath: path) {
+                try? content.write(toFile: path, atomically: true, encoding: .utf8)
+            }
         }
     }
 
@@ -113,6 +122,7 @@ final class AgentRegistry {
         var toolCategories: [String]? = nil
         var maxIterations: Int? = nil
         var temperature: Double? = nil
+        var backend: String? = nil
 
         // Track multi-line YAML array parsing
         var currentArrayKey: String? = nil
@@ -171,6 +181,8 @@ final class AgentRegistry {
                 maxIterations = Int(value)
             case "temperature":
                 temperature = Double(value)
+            case "backend":
+                backend = value
             default:
                 break
             }
@@ -193,7 +205,8 @@ final class AgentRegistry {
             systemPrompt: body,
             toolCategories: toolCategories,
             maxIterations: maxIterations,
-            temperature: temperature
+            temperature: temperature,
+            backend: backend
         )
     }
 

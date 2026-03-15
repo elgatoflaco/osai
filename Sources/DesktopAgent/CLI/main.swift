@@ -1224,8 +1224,8 @@ struct DesktopAgentCLI {
             }
 
         case "install":
-            AgentRegistry.installDefaults()
-            printColored("  \u{2713} Default agents installed in ~/.desktop-agent/agents/", color: .green)
+            AgentRegistry.installTemplates()
+            printColored("  \u{2713} Example agents installed in ~/.desktop-agent/agents/", color: .green)
             let agents = AgentRegistry.loadAll()
             for a in agents {
                 printColored("  \u{1F916} \(a.name) \u{2192} \(a.model)", color: .cyan)

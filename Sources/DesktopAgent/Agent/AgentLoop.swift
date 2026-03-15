@@ -187,18 +187,27 @@ final class AgentLoop {
         // Only auto-route on first message or very early in conversation (not follow-ups)
         let shouldRoute = conversationHistory.count <= 2
         if shouldRoute, let specializedAgent = AgentRegistry.route(input: userInput) {
-            // Verify the model can be resolved before committing to routing
-            if let resolved = AIProvider.resolve(modelString: specializedAgent.model) {
+            // Claude Code backend: delegate directly to CLI
+            if specializedAgent.usesClaudeCode {
+                if verbose {
+                    printColored("  \u{1F3AF} Routing to Claude Code agent: \(specializedAgent.name)", color: .magenta)
+                }
+                let result = try await runClaudeCodeAgent(agent: specializedAgent, input: userInput)
+                if !result.isEmpty {
+                    conversationHistory.append(ClaudeMessage(role: "assistant", content: [.text(result)]))
+                    return result
+                }
+            }
+            // API backend: verify the model can be resolved
+            else if let resolved = AIProvider.resolve(modelString: specializedAgent.model) {
                 if verbose {
                     printColored("  \u{1F3AF} Routing to specialized agent: \(specializedAgent.name) (\(specializedAgent.model))", color: .magenta)
                 }
                 let result = try await runSpecializedAgent(agent: specializedAgent, resolved: resolved, input: userInput)
                 if !result.isEmpty {
-                    // Add the result to conversation history so follow-ups work
                     conversationHistory.append(ClaudeMessage(role: "assistant", content: [.text(result)]))
                     return result
                 }
-                // If result is empty, fall through to normal processing
             } else if verbose {
                 printColored("  \u{26A0} Agent '\(specializedAgent.name)' model '\(specializedAgent.model)' not resolved, using main model", color: .yellow)
             }
@@ -1603,6 +1612,86 @@ final class AgentLoop {
             }
             return ""
         }
+    }
+
+    // MARK: - Claude Code Agent Backend
+
+    /// Delegate a task to Claude Code CLI (zero API tokens — uses subscription)
+    /// Only reads the final summary, not the full code output
+    private func runClaudeCodeAgent(agent: SpecializedAgentDef, input: String) async throws -> String {
+        let claudePath = NSHomeDirectory() + "/.local/bin/claude"
+        guard FileManager.default.fileExists(atPath: claudePath) else {
+            printColored("  \u{26A0} Claude Code not found at \(claudePath)", color: .yellow)
+            return ""  // Fall through to normal processing
+        }
+
+        printColored("  \u{1F9E0} [\(agent.name)] Delegating to Claude Code (zero API cost)...", color: .magenta)
+
+        // Build the prompt: agent's system prompt + user input
+        let fullPrompt: String
+        if agent.systemPrompt.isEmpty {
+            fullPrompt = input
+        } else {
+            fullPrompt = "\(agent.systemPrompt)\n\n## Task:\n\(input)"
+        }
+
+        // Notify gateway
+        if let stream = onStreamText {
+            await stream("\u{1F9E0} [\(agent.name)] Delegando a Claude Code...")
+        }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: claudePath)
+        process.arguments = ["--dangerously-skip-permissions", "-p", "--output-format", "text", fullPrompt]
+        process.currentDirectoryURL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        process.environment = ProcessInfo.processInfo.environment
+
+        let devNull = FileHandle(forReadingAtPath: "/dev/null")!
+        process.standardInput = devNull
+
+        let stdoutPipe = Pipe()
+        let stderrPipe = Pipe()
+        process.standardOutput = stdoutPipe
+        process.standardError = stderrPipe
+
+        do {
+            try process.run()
+        } catch {
+            return "Error running Claude Code: \(error)"
+        }
+
+        setpgid(process.processIdentifier, process.processIdentifier)
+
+        // Read output — only capture the final text, not streaming
+        let outputData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+
+        let fullOutput = String(data: outputData, encoding: .utf8) ?? ""
+        let exitCode = process.terminationStatus
+
+        if exitCode != 0 {
+            let stderr = String(data: stderrPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            printColored("  \u{26A0} Claude Code exited with code \(exitCode)", color: .yellow)
+            if !stderr.isEmpty {
+                return "Claude Code error: \(stderr.prefix(500))"
+            }
+        }
+
+        // Extract just the conclusion — Claude Code's text output is already the summary
+        let result = fullOutput.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if result.isEmpty {
+            return "Claude Code completed but returned no output."
+        }
+
+        printColored("  \u{2713} [\(agent.name)] Claude Code finished", color: .green)
+
+        // Stream result to gateway
+        if let stream = onStreamText {
+            await stream(result)
+        }
+
+        return result
     }
 
     // MARK: - Specialized Agent Execution
