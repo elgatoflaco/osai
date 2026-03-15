@@ -37,6 +37,12 @@ struct DesktopAgentCLI {
             return
         }
 
+        // --- Doctor: osai doctor ---
+        if args.contains("doctor") {
+            runDoctor()
+            return
+        }
+
         // --- Version: osai version / osai --version ---
         if args.contains("version") || args.contains("--version") || args.contains("-V") {
             Swift.print("osai v3.0 (build \(buildHash()))")
@@ -1898,6 +1904,147 @@ struct DesktopAgentCLI {
 
     static func printHint(_ text: String) {
         TerminalDisplay.shared.writeLine("\u{001B}[90m  \(text)\u{001B}[0m")
+    }
+
+    // MARK: - Doctor (self-diagnosis)
+
+    static func runDoctor() {
+        let g = "\u{001B}[32m"
+        let r = "\u{001B}[31m"
+        let y = "\u{001B}[33m"
+        let d = "\u{001B}[90m"
+        let b = "\u{001B}[1m"
+        let n = "\u{001B}[0m"
+
+        Swift.print("\n  \(b)🩺 osai doctor\(n)\n")
+
+        var issues = 0
+        var warnings = 0
+
+        func ok(_ msg: String) { Swift.print("  \(g)✓\(n) \(msg)") }
+        func warn(_ msg: String) { Swift.print("  \(y)⚠\(n) \(msg)"); warnings += 1 }
+        func fail(_ msg: String) { Swift.print("  \(r)✗\(n) \(msg)"); issues += 1 }
+
+        // 1. Config file
+        let configExists = FileManager.default.fileExists(atPath: AgentConfigFile.configPath)
+        if configExists {
+            ok("Config file exists at ~/.desktop-agent/config.json")
+        } else {
+            fail("No config file found. Run \(b)osai\(n) to start onboarding.")
+        }
+
+        // 2. API key
+        let fileConfig = AgentConfigFile.load()
+        let config = AgentConfig.load()
+        if config.apiKey.isEmpty {
+            fail("No API key configured for \(b)\(config.providerId)\(n). Set with: /config set-key \(config.providerId) YOUR_KEY")
+        } else {
+            let masked = String(config.apiKey.prefix(8)) + "..." + String(config.apiKey.suffix(4))
+            ok("API key set for \(b)\(config.providerId)\(n) \(d)(\(masked))\(n)")
+        }
+
+        // 3. Model
+        let pricing = ContextManager.lookupPricing(model: config.model)
+        let isDefault = (pricing.inputPer1M == ContextManager.defaultPricing.inputPer1M
+                      && pricing.outputPer1M == ContextManager.defaultPricing.outputPer1M)
+        if isDefault {
+            warn("Model \(b)\(config.model)\(n) not in pricing database — using default pricing ($\(String(format: "%.2f", pricing.inputPer1M))/$\(String(format: "%.2f", pricing.outputPer1M)))")
+        } else {
+            ok("Model \(b)\(config.model)\(n) — $\(String(format: "%.2f", pricing.inputPer1M))/$\(String(format: "%.2f", pricing.outputPer1M)) per 1M tokens")
+        }
+
+        // 4. Accessibility permissions
+        let trusted = AXIsProcessTrusted()
+        if trusted {
+            ok("Accessibility permissions granted")
+        } else {
+            warn("Accessibility not granted — GUI automation will fail. Enable in System Settings > Privacy > Accessibility")
+        }
+
+        // 5. Screen recording
+        let hasScreenRecording = CGPreflightScreenCaptureAccess()
+        if hasScreenRecording {
+            ok("Screen recording permissions granted")
+        } else {
+            warn("Screen recording not granted — screenshots will fail. Enable in System Settings > Privacy > Screen Recording")
+        }
+
+        // 6. Config directory structure
+        let fm = FileManager.default
+        let configDir = AgentConfigFile.configDir
+        let dirs = ["plugins", "skills", "memory", "profiles"]
+        var missingDirs: [String] = []
+        for dir in dirs {
+            if !fm.fileExists(atPath: configDir + "/" + dir) { missingDirs.append(dir) }
+        }
+        if missingDirs.isEmpty {
+            ok("All directories present \(d)(plugins, skills, memory, profiles)\(n)")
+        } else {
+            warn("Missing directories: \(missingDirs.joined(separator: ", ")). They'll be created on first use.")
+        }
+
+        // 7. Spending limits
+        if let limits = fileConfig.spendingLimits {
+            let daily = limits.dailyUsd.map { "$\(String(format: "%.0f", $0))/day" } ?? "none"
+            let monthly = limits.monthlyUsd.map { "$\(String(format: "%.0f", $0))/month" } ?? "none"
+            ok("Spending limits: \(daily), \(monthly)")
+        } else {
+            warn("No spending limits configured. Set in config.json or during onboarding.")
+        }
+
+        // 8. wacli (WhatsApp)
+        let wacliPaths = ["/opt/homebrew/bin/wacli", "/usr/local/bin/wacli"]
+        if let wacliFound = wacliPaths.first(where: { fm.fileExists(atPath: $0) }) {
+            ok("wacli found at \(wacliFound)")
+        } else {
+            // Only warn if gateway is configured for WhatsApp
+            if fileConfig.gateways?.whatsapp != nil {
+                warn("wacli not found — WhatsApp gateway won't work. Install from https://github.com/nicebyte/wacli")
+            } else {
+                Swift.print("  \(d)·\(n) wacli not installed \(d)(WhatsApp gateway not configured)\(n)")
+            }
+        }
+
+        // 9. MCP servers
+        let mcpCount = fileConfig.mcpServers?.count ?? 0
+        if mcpCount > 0 {
+            ok("\(mcpCount) MCP server(s) configured")
+            for (name, server) in fileConfig.mcpServers ?? [:] {
+                let cmd = server.command
+                let exists = fm.fileExists(atPath: cmd) || (cmd.contains("/") == false)
+                if exists {
+                    Swift.print("    \(d)· \(name): \(cmd)\(n)")
+                } else {
+                    warn("  MCP server '\(name)': command not found at \(cmd)")
+                }
+            }
+        } else {
+            Swift.print("  \(d)·\(n) No MCP servers configured \(d)(optional)\(n)")
+        }
+
+        // 10. Disk space for spending log
+        let spendingLogPath = configDir + "/spending.json"
+        if fm.fileExists(atPath: spendingLogPath) {
+            if let attrs = try? fm.attributesOfItem(atPath: spendingLogPath),
+               let size = attrs[.size] as? UInt64 {
+                let sizeKB = size / 1024
+                if sizeKB > 1024 {
+                    warn("Spending log is \(sizeKB)KB — consider pruning old entries")
+                } else {
+                    ok("Spending log: \(sizeKB)KB")
+                }
+            }
+        }
+
+        // Summary
+        Swift.print()
+        if issues == 0 && warnings == 0 {
+            Swift.print("  \(g)\(b)All checks passed!\(n) osai is ready to use.\n")
+        } else if issues == 0 {
+            Swift.print("  \(y)\(b)\(warnings) warning(s)\(n) — osai will work but some features may be limited.\n")
+        } else {
+            Swift.print("  \(r)\(b)\(issues) issue(s)\(n), \(y)\(warnings) warning(s)\(n) — fix issues above to use osai.\n")
+        }
     }
 
     // MARK: - Onboarding (first run)

@@ -21,17 +21,16 @@ final class ContextManager {
 
     static let pricing: [String: ModelPricing] = [
         // ── Anthropic (March 2026) ──
-        "claude-opus-4-20250514":     ModelPricing(inputPer1M:  5.00, outputPer1M: 25.00, contextWindow: 200_000),
-        "claude-sonnet-4-20250514":   ModelPricing(inputPer1M:  3.00, outputPer1M: 15.00, contextWindow: 200_000),
-        "claude-haiku-4-5-20251001":  ModelPricing(inputPer1M:  1.00, outputPer1M:  5.00, contextWindow: 200_000),
-        // Aliases for latest model references
-        "claude-opus-4.6":            ModelPricing(inputPer1M:  5.00, outputPer1M: 25.00, contextWindow: 200_000),
-        "claude-sonnet-4.6":          ModelPricing(inputPer1M:  3.00, outputPer1M: 15.00, contextWindow: 200_000),
+        // Current gen (4.6)
+        "claude-opus-4.6":            ModelPricing(inputPer1M:  5.00, outputPer1M: 25.00, contextWindow: 1_000_000),
+        "claude-sonnet-4.6":          ModelPricing(inputPer1M:  3.00, outputPer1M: 15.00, contextWindow: 1_000_000),
         "claude-haiku-4.5":           ModelPricing(inputPer1M:  1.00, outputPer1M:  5.00, contextWindow: 200_000),
-        // Legacy
+        "claude-haiku-4-5-20251001":  ModelPricing(inputPer1M:  1.00, outputPer1M:  5.00, contextWindow: 200_000),
+        // Legacy gen (4.0) — these snapshot IDs cost more
+        "claude-opus-4-20250514":     ModelPricing(inputPer1M: 15.00, outputPer1M: 75.00, contextWindow: 200_000),
+        "claude-sonnet-4-20250514":   ModelPricing(inputPer1M:  3.00, outputPer1M: 15.00, contextWindow: 200_000),
         "claude-3-5-sonnet":          ModelPricing(inputPer1M:  3.00, outputPer1M: 15.00, contextWindow: 200_000),
         "claude-3-5-haiku":           ModelPricing(inputPer1M:  0.25, outputPer1M:  1.25, contextWindow: 200_000),
-        "claude-3-opus":              ModelPricing(inputPer1M: 15.00, outputPer1M: 75.00, contextWindow: 200_000),
 
         // ── OpenAI (February 2026) ──
         "gpt-5":                      ModelPricing(inputPer1M:  1.25, outputPer1M: 10.00, contextWindow: 400_000),
@@ -42,7 +41,8 @@ final class ContextManager {
         "gpt-4o":                     ModelPricing(inputPer1M:  2.50, outputPer1M: 10.00, contextWindow: 128_000),
         "gpt-4o-mini":                ModelPricing(inputPer1M:  0.15, outputPer1M:  0.60, contextWindow: 128_000),
         "o3":                         ModelPricing(inputPer1M:  2.00, outputPer1M:  8.00, contextWindow: 200_000),
-        "o3-mini":                    ModelPricing(inputPer1M:  1.10, outputPer1M:  4.40, contextWindow: 200_000),
+        "o3-mini":                    ModelPricing(inputPer1M:  0.55, outputPer1M:  2.20, contextWindow: 200_000),
+        "o3-pro":                     ModelPricing(inputPer1M: 20.00, outputPer1M: 80.00, contextWindow: 200_000),
         "o4-mini":                    ModelPricing(inputPer1M:  1.10, outputPer1M:  4.40, contextWindow: 200_000),
 
         // ── Google Gemini (March 2026) ──

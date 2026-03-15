@@ -5,6 +5,7 @@ _osai() {
     commands=(
         'update:Actualizar osai a la última versión'
         'version:Mostrar versión actual'
+        'doctor:Diagnosticar problemas de configuración'
         'run:Ejecutar un archivo script/macro (.md)'
         'watch:Monitoreo periódico (ej: osai watch "check X" --interval 5m)'
         'gateway:Iniciar modo gateway (WhatsApp, Watch, etc.)'
