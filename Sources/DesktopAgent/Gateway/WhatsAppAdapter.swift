@@ -14,7 +14,30 @@ final class WhatsAppAdapter: GatewayAdapter {
     private var running = false
     private var task: Task<Void, Never>?
     private var lastSeen: [String: Date] = [:]  // chatJID → last message timestamp
-    private let wacliPath = "/opt/homebrew/bin/wacli"
+    private let wacliPath: String = {
+        // Check common locations, then fall back to PATH lookup
+        let candidates = [
+            "/opt/homebrew/bin/wacli",
+            "/usr/local/bin/wacli",
+            "\(NSHomeDirectory())/.local/bin/wacli"
+        ]
+        for path in candidates {
+            if FileManager.default.fileExists(atPath: path) { return path }
+        }
+        // Try PATH via `which`
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/which")
+        proc.arguments = ["wacli"]
+        let pipe = Pipe()
+        proc.standardOutput = pipe
+        proc.standardError = FileHandle.nullDevice
+        if let _ = try? proc.run() {
+            proc.waitUntilExit()
+            let out = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !out.isEmpty && FileManager.default.fileExists(atPath: out) { return out }
+        }
+        return "/opt/homebrew/bin/wacli" // fallback, will fail with clear error in start()
+    }()
 
     /// Track message IDs sent by osai to avoid responding to our own replies
     private var sentMessageIds: Set<String> = []
@@ -94,7 +117,13 @@ final class WhatsAppAdapter: GatewayAdapter {
         proc.standardOutput = FileHandle.nullDevice
         proc.standardError = FileHandle.nullDevice
         try? proc.run()
-        proc.waitUntilExit()
+
+        // Don't block forever if pkill hangs
+        let deadline = Date().addingTimeInterval(3)
+        while proc.isRunning && Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+        if proc.isRunning { proc.terminate() }
         Thread.sleep(forTimeInterval: 0.3)
     }
 
@@ -268,7 +297,7 @@ final class WhatsAppAdapter: GatewayAdapter {
 
     // MARK: - wacli execution
 
-    private func runWacli(_ args: [String]) -> (success: Bool, output: String) {
+    private func runWacli(_ args: [String], timeout: TimeInterval = 15) -> (success: Bool, output: String) {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: wacliPath)
         process.arguments = args
@@ -280,7 +309,28 @@ final class WhatsAppAdapter: GatewayAdapter {
 
         do {
             try process.run()
+
+            // Timeout guard — kill if wacli hangs
+            let timer = DispatchSource.makeTimerSource()
+            var timedOut = false
+            timer.schedule(deadline: .now() + timeout)
+            timer.setEventHandler { [weak process] in
+                timedOut = true
+                process?.terminate()
+                // Force kill after 2s if still alive
+                DispatchQueue.global().asyncAfter(deadline: .now() + 2) { [weak process] in
+                    if let p = process, p.isRunning { kill(p.processIdentifier, SIGKILL) }
+                }
+            }
+            timer.resume()
+
             process.waitUntilExit()
+            timer.cancel()
+
+            if timedOut {
+                return (false, "wacli timed out after \(Int(timeout))s (args: \(args.joined(separator: " ")))")
+            }
+
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
             let output = String(data: data, encoding: .utf8) ?? ""
             return (process.terminationStatus == 0, output)

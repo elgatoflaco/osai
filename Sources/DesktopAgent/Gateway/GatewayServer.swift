@@ -376,14 +376,15 @@ final class GatewayServer {
     // MARK: - Wait
 
     private func waitForever() async {
-        // Setup signal handlers
+        // Setup signal handlers — use _exit to force-terminate even if threads are blocked
         signal(SIGINT) { _ in
-            print("\n")
-            printColored("  Gateway shutting down...", color: .gray)
-            exit(0)
+            let msg = "\n  Gateway shutting down...\n"
+            // Use write() instead of print() — signal-safe
+            msg.withCString { ptr in _ = write(STDOUT_FILENO, ptr, strlen(ptr)) }
+            _exit(0)
         }
         signal(SIGTERM) { _ in
-            exit(0)
+            _exit(0)
         }
 
         // Keep alive by sleeping in a loop
