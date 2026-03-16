@@ -353,12 +353,38 @@ final class QLCoordinator: NSObject, QLPreviewPanelDataSource {
 private struct ImageOverlayControls: View {
     @Binding var zoomScale: CGFloat
     @Binding var showFullSize: Bool
+    var nsImage: NSImage? = nil
+    @State private var copied = false
+
+    private var dimensionsText: String? {
+        guard let img = nsImage else { return nil }
+        let w = Int(img.size.width)
+        let h = Int(img.size.height)
+        guard w > 0, h > 0 else { return nil }
+        return "\(w) x \(h)"
+    }
 
     var body: some View {
         VStack {
             HStack {
                 Spacer()
                 HStack(spacing: 12) {
+                    // Copy Image button
+                    if nsImage != nil {
+                        Button(action: copyImage) {
+                            HStack(spacing: 4) {
+                                Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                                    .font(.system(size: 12))
+                                Text(copied ? "Copied" : "Copy Image")
+                                    .font(.system(size: 11, weight: .medium))
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundColor(.white.opacity(0.8))
+
+                        Divider().frame(height: 16)
+                    }
+
                     Button(action: { zoomScale = max(0.5, zoomScale - 0.25) }) {
                         Image(systemName: "minus.magnifyingglass")
                             .font(.system(size: 14))
@@ -385,6 +411,7 @@ private struct ImageOverlayControls: View {
                     }
                     .buttonStyle(.plain)
                     .foregroundColor(.white.opacity(0.8))
+                    .keyboardShortcut(.escape, modifiers: [])
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 8)
@@ -393,6 +420,32 @@ private struct ImageOverlayControls: View {
                 .padding()
             }
             Spacer()
+
+            // Dimensions badge at bottom-right
+            if let dims = dimensionsText {
+                HStack {
+                    Spacer()
+                    Text(dims)
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.6))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(.ultraThinMaterial)
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .padding()
+                }
+            }
+        }
+    }
+
+    private func copyImage() {
+        guard let img = nsImage else { return }
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.writeObjects([img])
+        copied = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            copied = false
         }
     }
 }
@@ -519,6 +572,7 @@ struct InlineImageView: View {
     private var imageOverlay: some View {
         ZStack {
             Color.black.opacity(0.85).ignoresSafeArea()
+                .onTapGesture { showFullSize = false }
 
             if let nsImage = nsImage {
                 ScrollView([.horizontal, .vertical], showsIndicators: true) {
@@ -539,7 +593,7 @@ struct InlineImageView: View {
                 )
             }
 
-            ImageOverlayControls(zoomScale: $zoomScale, showFullSize: $showFullSize)
+            ImageOverlayControls(zoomScale: $zoomScale, showFullSize: $showFullSize, nsImage: nsImage)
         }
         .frame(minWidth: 500, minHeight: 400)
     }
@@ -662,6 +716,7 @@ struct RemoteInlineImageView: View {
     private var remoteImageOverlay: some View {
         ZStack {
             Color.black.opacity(0.85).ignoresSafeArea()
+                .onTapGesture { showFullSize = false }
 
             if let nsImage = loadedImage {
                 ScrollView([.horizontal, .vertical], showsIndicators: true) {
@@ -686,7 +741,7 @@ struct RemoteInlineImageView: View {
                     .foregroundColor(.white)
             }
 
-            ImageOverlayControls(zoomScale: $zoomScale, showFullSize: $showFullSize)
+            ImageOverlayControls(zoomScale: $zoomScale, showFullSize: $showFullSize, nsImage: loadedImage)
         }
         .frame(minWidth: 500, minHeight: 400)
     }

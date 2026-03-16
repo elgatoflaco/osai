@@ -56,6 +56,8 @@ struct ChatView: View {
     @State private var newWorkspaceName: String = ""
     @State private var editingWorkspaceId: String? = nil
     @State private var editingWorkspaceName: String = ""
+    @State private var archiveSearchText: String = ""
+    @State private var showDeleteAllArchivedAlert: Bool = false
 
     private var filteredConversations: [Conversation] {
         var sorted = appState.workspaceFilteredConversations(appState.sortedConversations)
@@ -106,6 +108,16 @@ struct ChatView: View {
         }
 
         return titleMatches
+    }
+
+    private var archivedFilteredConversations: [Conversation] {
+        let query = archiveSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return appState.archivedConversations }
+        return appState.archivedConversations.filter { conv in
+            conv.title.localizedCaseInsensitiveContains(query) ||
+            (conv.agentName?.localizedCaseInsensitiveContains(query) ?? false) ||
+            conv.messages.contains(where: { $0.content.localizedCaseInsensitiveContains(query) })
+        }
     }
 
     /// Content search results grouped by conversation, only when actively searching messages
@@ -3490,36 +3502,156 @@ struct ChatView: View {
                             // Archived conversations section
                             if appState.showArchived && !appState.archivedConversations.isEmpty {
                                 Section {
-                                    ForEach(appState.archivedConversations) { conv in
-                                        conversationRowView(for: conv)
-                                            .opacity(0.6)
-                                            .overlay(
-                                                HStack {
-                                                    Spacer()
-                                                    Image(systemName: "archivebox.fill")
-                                                        .font(.system(size: 8))
-                                                        .foregroundColor(AppTheme.textMuted)
-                                                        .padding(4)
-                                                }
-                                                .padding(.trailing, 6)
-                                                .padding(.top, 6),
-                                                alignment: .topTrailing
-                                            )
-                                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                                Button(role: .destructive) {
-                                                    deleteConfirmConversation = conv
-                                                } label: {
-                                                    Label("Delete", systemImage: "trash")
-                                                }
+                                    // Archive search bar
+                                    HStack(spacing: 6) {
+                                        Image(systemName: "magnifyingglass")
+                                            .font(.system(size: 10))
+                                            .foregroundColor(AppTheme.textMuted)
+                                        TextField("Search archived...", text: $archiveSearchText)
+                                            .font(.system(size: 11))
+                                            .textFieldStyle(.plain)
+                                        if !archiveSearchText.isEmpty {
+                                            Button(action: { archiveSearchText = "" }) {
+                                                Image(systemName: "xmark.circle.fill")
+                                                    .font(.system(size: 10))
+                                                    .foregroundColor(AppTheme.textMuted)
                                             }
-                                            .swipeActions(edge: .leading, allowsFullSwipe: true) {
-                                                Button {
-                                                    appState.unarchiveConversation(id: conv.id)
-                                                } label: {
-                                                    Label("Unarchive", systemImage: "tray.and.arrow.up")
-                                                }
-                                                .tint(.blue)
+                                            .buttonStyle(.plain)
+                                        }
+                                    }
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 5)
+                                    .background(AppTheme.bgCard.opacity(0.5))
+                                    .cornerRadius(6)
+                                    .padding(.horizontal, 4)
+                                    .padding(.top, 4)
+
+                                    // Bulk action buttons
+                                    HStack(spacing: 8) {
+                                        Button(action: {
+                                            for conv in appState.archivedConversations {
+                                                appState.unarchiveConversation(id: conv.id)
                                             }
+                                        }) {
+                                            HStack(spacing: 3) {
+                                                Image(systemName: "tray.and.arrow.up")
+                                                    .font(.system(size: 9))
+                                                Text("Unarchive All")
+                                                    .font(.system(size: 9, weight: .medium))
+                                            }
+                                            .foregroundColor(AppTheme.accent)
+                                            .padding(.horizontal, 8)
+                                            .padding(.vertical, 4)
+                                            .background(AppTheme.accent.opacity(0.1))
+                                            .cornerRadius(4)
+                                        }
+                                        .buttonStyle(.plain)
+
+                                        Button(action: { showDeleteAllArchivedAlert = true }) {
+                                            HStack(spacing: 3) {
+                                                Image(systemName: "trash")
+                                                    .font(.system(size: 9))
+                                                Text("Delete All")
+                                                    .font(.system(size: 9, weight: .medium))
+                                            }
+                                            .foregroundColor(AppTheme.error)
+                                            .padding(.horizontal, 8)
+                                            .padding(.vertical, 4)
+                                            .background(AppTheme.error.opacity(0.1))
+                                            .cornerRadius(4)
+                                        }
+                                        .buttonStyle(.plain)
+                                        .alert("Delete All Archived?", isPresented: $showDeleteAllArchivedAlert) {
+                                            Button("Cancel", role: .cancel) {}
+                                            Button("Delete All", role: .destructive) {
+                                                appState.deleteMultipleConversations(appState.archivedConversations)
+                                            }
+                                        } message: {
+                                            Text("This will permanently delete \(appState.archivedConversations.count) archived conversation\(appState.archivedConversations.count == 1 ? "" : "s").")
+                                        }
+
+                                        Spacer()
+                                    }
+                                    .padding(.horizontal, 4)
+                                    .padding(.vertical, 2)
+
+                                    // Group archived conversations by month
+                                    let filtered = archivedFilteredConversations
+                                    let grouped = Dictionary(grouping: filtered) { conv -> String in
+                                        let formatter = DateFormatter()
+                                        formatter.dateFormat = "MMMM yyyy"
+                                        return formatter.string(from: conv.lastUpdated)
+                                    }
+                                    let sortedKeys = grouped.keys.sorted { k1, k2 in
+                                        let formatter = DateFormatter()
+                                        formatter.dateFormat = "MMMM yyyy"
+                                        let d1 = formatter.date(from: k1) ?? Date.distantPast
+                                        let d2 = formatter.date(from: k2) ?? Date.distantPast
+                                        return d1 > d2
+                                    }
+                                    ForEach(sortedKeys, id: \.self) { monthKey in
+                                        VStack(alignment: .leading, spacing: 0) {
+                                            HStack(spacing: 4) {
+                                                Text(monthKey)
+                                                    .font(.system(size: 9, weight: .semibold))
+                                                    .foregroundColor(AppTheme.textMuted)
+                                                    .textCase(.uppercase)
+                                                Text("\(grouped[monthKey]?.count ?? 0)")
+                                                    .font(.system(size: 8, weight: .bold, design: .rounded))
+                                                    .foregroundColor(AppTheme.textMuted)
+                                                    .padding(.horizontal, 4)
+                                                    .padding(.vertical, 1)
+                                                    .background(AppTheme.bgCard.opacity(0.6))
+                                                    .clipShape(Capsule())
+                                                Spacer()
+                                            }
+                                            .padding(.horizontal, 8)
+                                            .padding(.top, 8)
+                                            .padding(.bottom, 2)
+
+                                            ForEach(grouped[monthKey] ?? []) { conv in
+                                                conversationRowView(for: conv)
+                                                    .opacity(0.6)
+                                                    .overlay(
+                                                        HStack {
+                                                            Spacer()
+                                                            Image(systemName: "archivebox.fill")
+                                                                .font(.system(size: 8))
+                                                                .foregroundColor(AppTheme.textMuted)
+                                                                .padding(4)
+                                                        }
+                                                        .padding(.trailing, 6)
+                                                        .padding(.top, 6),
+                                                        alignment: .topTrailing
+                                                    )
+                                                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                                        Button(role: .destructive) {
+                                                            deleteConfirmConversation = conv
+                                                        } label: {
+                                                            Label("Delete", systemImage: "trash")
+                                                        }
+                                                    }
+                                                    .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                                                        Button {
+                                                            appState.unarchiveConversation(id: conv.id)
+                                                        } label: {
+                                                            Label("Unarchive", systemImage: "tray.and.arrow.up")
+                                                        }
+                                                        .tint(.blue)
+                                                    }
+                                            }
+                                        }
+                                    }
+
+                                    if filtered.isEmpty && !archiveSearchText.isEmpty {
+                                        HStack {
+                                            Spacer()
+                                            Text("No archived conversations match \"\(archiveSearchText)\"")
+                                                .font(.system(size: 11))
+                                                .foregroundColor(AppTheme.textMuted)
+                                                .padding(.vertical, 12)
+                                            Spacer()
+                                        }
                                     }
                                 } header: {
                                     HStack(spacing: 4) {
@@ -3530,6 +3662,13 @@ struct ChatView: View {
                                             .font(.system(size: 10, weight: .semibold))
                                             .foregroundColor(AppTheme.textMuted)
                                             .textCase(.uppercase)
+                                        Text("\(appState.archivedConversations.count)")
+                                            .font(.system(size: 9, weight: .bold, design: .rounded))
+                                            .foregroundColor(.white)
+                                            .padding(.horizontal, 5)
+                                            .padding(.vertical, 1)
+                                            .background(AppTheme.accent.opacity(0.7))
+                                            .clipShape(Capsule())
                                         Spacer()
                                     }
                                     .padding(.horizontal, 12)

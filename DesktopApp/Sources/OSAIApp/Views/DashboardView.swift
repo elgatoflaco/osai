@@ -202,6 +202,13 @@ struct DashboardView: View {
                     .environmentObject(appState)
             }
             .frame(maxWidth: 800)
+
+        case .quickActions:
+            CollapsibleSection(section: .quickActions) {
+                QuickActionsContent()
+                    .environmentObject(appState)
+            }
+            .frame(maxWidth: 800)
         }
     }
 
@@ -3796,5 +3803,95 @@ struct TipsAndTricksContent: View {
     private func restartAutoRotate() {
         stopAutoRotate()
         startAutoRotate()
+    }
+}
+
+// MARK: - Quick Actions Content
+
+struct QuickActionsContent: View {
+    @EnvironmentObject var appState: AppState
+    @State private var showClearConfirmation = false
+
+    private let columns = [
+        GridItem(.flexible(), spacing: AppTheme.paddingMd),
+        GridItem(.flexible(), spacing: AppTheme.paddingMd),
+        GridItem(.flexible(), spacing: AppTheme.paddingMd),
+    ]
+
+    var body: some View {
+        LazyVGrid(columns: columns, spacing: AppTheme.paddingMd) {
+            QuickActionCard(icon: "plus.bubble", label: "New Chat") {
+                appState.startNewChat()
+            }
+
+            QuickActionCard(icon: "trash", label: "Clear History", destructive: true) {
+                showClearConfirmation = true
+            }
+
+            QuickActionCard(icon: "power", label: "Toggle Gateway", active: appState.gatewayRunning) {
+                appState.toggleGateway()
+            }
+
+            QuickActionCard(icon: "square.and.arrow.up", label: "Export All") {
+                // Placeholder
+            }
+
+            QuickActionCard(icon: "arrow.clockwise", label: "Check Updates") {
+                // Placeholder
+            }
+
+            QuickActionCard(icon: "folder", label: "Open Config") {
+                let configPath = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".desktop-agent")
+                NSWorkspace.shared.open(configPath)
+            }
+        }
+        .alert("Clear All Conversations?", isPresented: $showClearConfirmation) {
+            Button("Cancel", role: .cancel) {}
+            Button("Clear All", role: .destructive) {
+                appState.clearAllConversations()
+            }
+        } message: {
+            Text("This will permanently delete all conversation history. This action cannot be undone.")
+        }
+    }
+}
+
+struct QuickActionCard: View {
+    let icon: String
+    let label: String
+    var destructive: Bool = false
+    var active: Bool = false
+    let action: () -> Void
+    @State private var isHovered = false
+
+    var accentColor: Color {
+        if destructive { return Color.red }
+        if active { return AppTheme.success }
+        return AppTheme.accent
+    }
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 8) {
+                Image(systemName: icon)
+                    .font(.system(size: 20, weight: .medium))
+                    .foregroundColor(isHovered ? accentColor : AppTheme.textSecondary)
+                Text(label)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(isHovered ? AppTheme.textPrimary : AppTheme.textMuted)
+                    .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: 72)
+            .background(isHovered ? accentColor.opacity(0.08) : AppTheme.bgCard.opacity(0.4))
+            .clipShape(RoundedRectangle(cornerRadius: 14))
+            .overlay(
+                RoundedRectangle(cornerRadius: 14)
+                    .stroke(isHovered ? accentColor.opacity(0.3) : AppTheme.borderGlass, lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+        .accessibilityLabel(label)
     }
 }
