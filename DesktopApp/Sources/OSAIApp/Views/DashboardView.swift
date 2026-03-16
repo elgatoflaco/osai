@@ -141,6 +141,12 @@ struct DashboardView: View {
             }
             .frame(maxWidth: 800)
 
+        case .performance:
+            CollapsibleSection(section: .performance) {
+                PerformanceSection()
+            }
+            .frame(maxWidth: 800)
+
         case .recentActivity:
             CollapsibleSection(section: .recentActivity) {
                 recentActivityContent
@@ -1997,4 +2003,197 @@ func agentColor(_ name: String) -> Color {
     ]
     let hash = abs(name.hashValue)
     return colors[hash % colors.count]
+}
+
+// MARK: - Performance Section
+
+struct PerformanceSection: View {
+    @EnvironmentObject var appState: AppState
+
+    private var avgMs: Double { appState.averageResponseTime }
+
+    private var responseTimeColor: Color {
+        if avgMs <= 0 { return AppTheme.textMuted }
+        if avgMs < 2000 { return AppTheme.success }
+        if avgMs < 5000 { return AppTheme.warning }
+        return AppTheme.error
+    }
+
+    private func colorForMs(_ ms: Int) -> Color {
+        if ms < 2000 { return AppTheme.success }
+        if ms < 5000 { return AppTheme.warning }
+        return AppTheme.error
+    }
+
+    private func formatMs(_ ms: Double) -> String {
+        if ms <= 0 { return "--" }
+        if ms < 1000 { return String(format: "%.0fms", ms) }
+        return String(format: "%.1fs", ms / 1000.0)
+    }
+
+    private func formatMs(_ ms: Int) -> String {
+        formatMs(Double(ms))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            // Primary metric: average response time
+            HStack(alignment: .top, spacing: 20) {
+                // Big average number
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Avg Response Time")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(AppTheme.textMuted)
+
+                    Text(formatMs(avgMs))
+                        .font(.system(size: 32, weight: .bold, design: .rounded))
+                        .foregroundColor(responseTimeColor)
+
+                    if avgMs > 0 {
+                        Text(avgMs < 2000 ? "Fast" : avgMs < 5000 ? "Moderate" : "Slow")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundColor(responseTimeColor)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 2)
+                            .background(responseTimeColor.opacity(0.12))
+                            .clipShape(Capsule())
+                    }
+                }
+
+                Spacer()
+
+                // Fastest / Slowest
+                VStack(alignment: .trailing, spacing: 10) {
+                    VStack(alignment: .trailing, spacing: 2) {
+                        Text("Fastest")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundColor(AppTheme.textMuted)
+                        if let fastest = appState.fastestResponseTime {
+                            Text(formatMs(fastest))
+                                .font(.system(size: 16, weight: .semibold, design: .rounded))
+                                .foregroundColor(colorForMs(fastest))
+                        } else {
+                            Text("--")
+                                .font(.system(size: 16, weight: .semibold, design: .rounded))
+                                .foregroundColor(AppTheme.textMuted)
+                        }
+                    }
+
+                    VStack(alignment: .trailing, spacing: 2) {
+                        Text("Slowest")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundColor(AppTheme.textMuted)
+                        if let slowest = appState.slowestResponseTime {
+                            Text(formatMs(slowest))
+                                .font(.system(size: 16, weight: .semibold, design: .rounded))
+                                .foregroundColor(colorForMs(slowest))
+                        } else {
+                            Text("--")
+                                .font(.system(size: 16, weight: .semibold, design: .rounded))
+                                .foregroundColor(AppTheme.textMuted)
+                        }
+                    }
+                }
+            }
+            .padding()
+            .background(AppTheme.bgCard.opacity(0.6))
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .overlay(RoundedRectangle(cornerRadius: 12).stroke(AppTheme.borderGlass, lineWidth: 0.5))
+
+            // Response time trend chart (last 7 days)
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Response Time Trend (7 days)")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(AppTheme.textSecondary)
+
+                let data = appState.responseTimesLastWeek
+                let maxMs = max(data.map(\.avgMs).max() ?? 1, 1)
+
+                HStack(alignment: .bottom, spacing: 6) {
+                    ForEach(Array(data.enumerated()), id: \.offset) { _, entry in
+                        VStack(spacing: 4) {
+                            if entry.avgMs > 0 {
+                                Text(formatMs(entry.avgMs))
+                                    .font(.system(size: 8, weight: .medium))
+                                    .foregroundColor(AppTheme.textMuted)
+                            }
+
+                            RoundedRectangle(cornerRadius: 4)
+                                .fill(entry.avgMs > 0 ? colorForMs(entry.avgMs) : AppTheme.textMuted.opacity(0.15))
+                                .frame(height: entry.avgMs > 0 ? max(CGFloat(entry.avgMs) / CGFloat(maxMs) * 80, 8) : 4)
+
+                            Text(dayLabel(entry.date))
+                                .font(.system(size: 9))
+                                .foregroundColor(AppTheme.textMuted)
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
+                }
+                .frame(height: 110)
+            }
+            .padding()
+            .background(AppTheme.bgCard.opacity(0.6))
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .overlay(RoundedRectangle(cornerRadius: 12).stroke(AppTheme.borderGlass, lineWidth: 0.5))
+
+            // Activity metrics row
+            HStack(spacing: 12) {
+                perfMetricCard(
+                    title: "Msgs/Hour",
+                    value: String(format: "%.1f", appState.messagesPerHour),
+                    icon: "bubble.left.and.bubble.right",
+                    color: AppTheme.accent
+                )
+
+                perfMetricCard(
+                    title: "Today",
+                    value: "\(appState.conversationsToday)",
+                    subtitle: "conversations",
+                    icon: "calendar",
+                    color: AppTheme.accent
+                )
+
+                perfMetricCard(
+                    title: "This Week",
+                    value: "\(appState.conversationsThisWeek)",
+                    subtitle: "conversations",
+                    icon: "calendar.badge.clock",
+                    color: AppTheme.accent
+                )
+            }
+        }
+    }
+
+    private func perfMetricCard(title: String, value: String, subtitle: String? = nil, icon: String, color: Color) -> some View {
+        VStack(spacing: 6) {
+            Image(systemName: icon)
+                .font(.system(size: 14))
+                .foregroundColor(color)
+
+            Text(value)
+                .font(.system(size: 18, weight: .bold, design: .rounded))
+                .foregroundColor(AppTheme.textPrimary)
+
+            Text(title)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundColor(AppTheme.textMuted)
+
+            if let sub = subtitle {
+                Text(sub)
+                    .font(.system(size: 9))
+                    .foregroundColor(AppTheme.textMuted.opacity(0.7))
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 12)
+        .background(AppTheme.bgCard.opacity(0.6))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(AppTheme.borderGlass, lineWidth: 0.5))
+    }
+
+    private func dayLabel(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "EEE"
+        return formatter.string(from: date)
+    }
 }

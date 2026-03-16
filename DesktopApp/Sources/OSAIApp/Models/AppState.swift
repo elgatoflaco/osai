@@ -131,6 +131,34 @@ enum SidebarItem: String, CaseIterable, Identifiable {
     }
 }
 
+// MARK: - Prompt Template
+
+struct PromptTemplate: Identifiable, Codable, Equatable {
+    let id: String
+    var name: String
+    var content: String
+    var category: String  // "Code", "Writing", "Research", "Custom"
+    var icon: String      // SF Symbol name
+    let createdAt: Date
+
+    static let builtInDefaults: [PromptTemplate] = [
+        PromptTemplate(id: "builtin-code-review", name: "Code review", content: "Please review the following code for bugs, readability, and best practices. Suggest improvements:\n\n", category: "Code", icon: "magnifyingglass.circle", createdAt: Date(timeIntervalSince1970: 0)),
+        PromptTemplate(id: "builtin-eli5", name: "Explain like I'm 5", content: "Explain the following concept in simple terms that a 5-year-old could understand:\n\n", category: "Writing", icon: "face.smiling", createdAt: Date(timeIntervalSince1970: 0)),
+        PromptTemplate(id: "builtin-translate-spanish", name: "Translate to Spanish", content: "Translate the following text to Spanish, preserving tone and meaning:\n\n", category: "Writing", icon: "globe", createdAt: Date(timeIntervalSince1970: 0)),
+        PromptTemplate(id: "builtin-summarize", name: "Summarize this", content: "Provide a concise summary of the following, highlighting the key points:\n\n", category: "Research", icon: "doc.text.magnifyingglass", createdAt: Date(timeIntervalSince1970: 0)),
+        PromptTemplate(id: "builtin-unit-tests", name: "Write unit tests", content: "Write comprehensive unit tests for the following code. Cover edge cases and happy paths:\n\n", category: "Code", icon: "checkmark.shield", createdAt: Date(timeIntervalSince1970: 0)),
+    ]
+
+    static let categories = ["Code", "Writing", "Research", "Custom"]
+
+    static let categoryIcons: [String: String] = [
+        "Code": "chevron.left.forwardslash.chevron.right",
+        "Writing": "pencil",
+        "Research": "magnifyingglass",
+        "Custom": "star",
+    ]
+}
+
 // MARK: - Chat Quick Action
 
 struct ChatQuickAction: Identifiable, Codable, Equatable {
@@ -192,6 +220,7 @@ enum DashboardSection: String, Codable, CaseIterable, Identifiable {
     case tokenStats
     case analytics
     case chatInsights
+    case performance
     case recentActivity
     case systemHealth
 
@@ -205,6 +234,7 @@ enum DashboardSection: String, Codable, CaseIterable, Identifiable {
         case .tokenStats: return "Token & Cost Statistics"
         case .analytics: return "Usage Analytics"
         case .chatInsights: return "Chat Insights"
+        case .performance: return "Performance"
         case .recentActivity: return "Recent Activity"
         case .systemHealth: return "System Health"
         }
@@ -218,13 +248,14 @@ enum DashboardSection: String, Codable, CaseIterable, Identifiable {
         case .tokenStats: return "number.circle"
         case .analytics: return "chart.bar.xaxis"
         case .chatInsights: return "lightbulb"
+        case .performance: return "gauge.with.dots.needle.33percent"
         case .recentActivity: return "clock.arrow.circlepath"
         case .systemHealth: return "server.rack"
         }
     }
 
     static let defaultOrder: [DashboardSection] = [
-        .gateway, .stats, .spending, .tokenStats, .analytics, .chatInsights, .recentActivity, .systemHealth
+        .gateway, .stats, .spending, .tokenStats, .analytics, .chatInsights, .performance, .recentActivity, .systemHealth
     ]
 }
 
@@ -329,6 +360,43 @@ class AppState: ObservableObject {
         }
     }
 
+    /// Saved prompt templates. Persisted to UserDefaults.
+    @Published var promptTemplates: [PromptTemplate] = {
+        if let data = UserDefaults.standard.data(forKey: "promptTemplates"),
+           let decoded = try? JSONDecoder().decode([PromptTemplate].self, from: data) {
+            return decoded
+        }
+        return PromptTemplate.builtInDefaults
+    }() {
+        didSet {
+            if let data = try? JSONEncoder().encode(promptTemplates) {
+                UserDefaults.standard.set(data, forKey: "promptTemplates")
+            }
+        }
+    }
+
+    func savePromptTemplate(name: String, content: String, category: String, icon: String) {
+        let template = PromptTemplate(
+            id: UUID().uuidString,
+            name: name,
+            content: content,
+            category: category,
+            icon: icon,
+            createdAt: Date()
+        )
+        promptTemplates.append(template)
+    }
+
+    func deletePromptTemplate(id: String) {
+        promptTemplates.removeAll { $0.id == id }
+    }
+
+    func updatePromptTemplate(_ template: PromptTemplate) {
+        if let index = promptTemplates.firstIndex(where: { $0.id == template.id }) {
+            promptTemplates[index] = template
+        }
+    }
+
     // MARK: - Window State Persistence
 
     /// Debounce timer for saving window frame
@@ -400,6 +468,8 @@ class AppState: ObservableObject {
     @Published var contextPressurePercent: Int = 0
     @Published var suggestedReplies: [String] = []
     @Published var streamingStartTime: Date?
+    /// Timestamp when the user pressed send, used to compute response time to first token
+    private var messageSendTime: Date?
     @Published var conversationSortOrder: ConversationSortOrder = .recent
     @Published var showArchived: Bool = false
     @Published var filterTag: String?
@@ -442,6 +512,77 @@ class AppState: ObservableObject {
         notifications.filter { !$0.isRead }.count
     }
 
+    // MARK: - Response Time Metrics
+
+    /// All response times across all conversations (ms)
+    private var allResponseTimes: [Int] {
+        conversations.flatMap { conv in
+            conv.messages.compactMap { $0.responseTimeMs }
+        }
+    }
+
+    /// Average response time across all conversations in milliseconds
+    var averageResponseTime: Double {
+        let times = allResponseTimes
+        guard !times.isEmpty else { return 0 }
+        return Double(times.reduce(0, +)) / Double(times.count)
+    }
+
+    /// Fastest response time in milliseconds
+    var fastestResponseTime: Int? {
+        allResponseTimes.min()
+    }
+
+    /// Slowest response time in milliseconds
+    var slowestResponseTime: Int? {
+        allResponseTimes.max()
+    }
+
+    /// Average response times grouped by day for the last 7 days, for charting
+    var responseTimesLastWeek: [(date: Date, avgMs: Int)] {
+        let calendar = Calendar.current
+        let now = Date()
+        var result: [(date: Date, avgMs: Int)] = []
+
+        for daysAgo in (0..<7).reversed() {
+            guard let dayStart = calendar.date(byAdding: .day, value: -daysAgo, to: calendar.startOfDay(for: now)) else { continue }
+            guard let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) else { continue }
+
+            let times: [Int] = conversations.flatMap { conv in
+                conv.messages.compactMap { msg -> Int? in
+                    guard let rt = msg.responseTimeMs,
+                          msg.timestamp >= dayStart && msg.timestamp < dayEnd else { return nil }
+                    return rt
+                }
+            }
+
+            let avg = times.isEmpty ? 0 : times.reduce(0, +) / times.count
+            result.append((date: dayStart, avgMs: avg))
+        }
+        return result
+    }
+
+    /// Messages per hour over the last 24 hours
+    var messagesPerHour: Double {
+        let cutoff = Date().addingTimeInterval(-3600 * 24)
+        let count = conversations.reduce(0) { total, conv in
+            total + conv.messages.filter { $0.timestamp >= cutoff }.count
+        }
+        return Double(count) / 24.0
+    }
+
+    /// Number of conversations created today
+    var conversationsToday: Int {
+        let start = Calendar.current.startOfDay(for: Date())
+        return conversations.filter { $0.createdAt >= start }.count
+    }
+
+    /// Number of conversations created this week
+    var conversationsThisWeek: Int {
+        let calendar = Calendar.current
+        guard let weekStart = calendar.date(from: calendar.dateComponents([.yearForWeekOfYear, .weekOfYear], from: Date())) else { return 0 }
+        return conversations.filter { $0.createdAt >= weekStart }.count
+    }
 
     /// Returns non-archived conversations sorted by the selected sort order, with pinned items always first.
     var sortedConversations: [Conversation] {
@@ -656,6 +797,7 @@ class AppState: ObservableObject {
         let streamingId = assistantMsg.id
         isProcessing = true
         streamingStartTime = Date()
+        messageSendTime = Date()
 
         let streamState = StreamState()
 
@@ -730,6 +872,7 @@ class AppState: ObservableObject {
             }
             isProcessing = false
             streamingStartTime = nil
+            messageSendTime = nil
         }
     }
 
@@ -747,6 +890,12 @@ class AppState: ObservableObject {
 
         switch event {
         case .text(let content):
+            // Record response time on first text token
+            if !state.firstTextReceived, let sendTime = messageSendTime {
+                state.firstTextReceived = true
+                let deltaMs = Int(Date().timeIntervalSince(sendTime) * 1000)
+                activeConversation?.messages[idx].responseTimeMs = deltaMs
+            }
             if state.accumulatedText.isEmpty {
                 state.accumulatedText = content
             } else {
@@ -837,6 +986,7 @@ class AppState: ObservableObject {
         runningProcess = nil
         isProcessing = false
         streamingStartTime = nil
+        messageSendTime = nil
 
         // Mark current streaming message as done
         if let conv = activeConversation {
@@ -1578,6 +1728,149 @@ class AppState: ObservableObject {
         return md
     }
 
+    // MARK: - Sharing Helpers
+
+    /// Formats a single message for sharing (plain text with role label and footer).
+    func formatMessageForSharing(message: ChatMessage) -> String {
+        let label = message.role == .user ? "You:" : "Assistant:"
+        let body = message.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        return "\(label)\n\(body)\n\n\u{2014} Shared from OSAI"
+    }
+
+    /// Formats multiple messages for sharing as a conversation excerpt.
+    func formatMessagesForSharing(messages: [ChatMessage]) -> String {
+        var result = ""
+        for msg in messages {
+            guard msg.role == .user || msg.role == .assistant else { continue }
+            let label = msg.role == .user ? "You:" : "Assistant:"
+            let body = msg.content.trimmingCharacters(in: .whitespacesAndNewlines)
+            result += "\(label)\n\(body)\n\n"
+        }
+        result += "\u{2014} Shared from OSAI"
+        return result
+    }
+
+    /// Converts a message to rich text (NSAttributedString) with basic markdown formatting.
+    func messageAsRichText(message: ChatMessage) -> NSAttributedString {
+        let content = message.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        let result = NSMutableAttributedString()
+
+        // Role label
+        let label = message.role == .user ? "You:" : "Assistant:"
+        let labelAttrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.boldSystemFont(ofSize: 14),
+            .foregroundColor: NSColor.labelColor
+        ]
+        result.append(NSAttributedString(string: "\(label)\n", attributes: labelAttrs))
+
+        // Body — apply basic markdown formatting
+        let bodyFont = NSFont.systemFont(ofSize: 13)
+        let bodyAttrs: [NSAttributedString.Key: Any] = [
+            .font: bodyFont,
+            .foregroundColor: NSColor.labelColor
+        ]
+
+        let boldPattern = #"\*\*(.+?)\*\*"#
+        let codePattern = #"`([^`]+)`"#
+        var processed = content
+
+        // Replace bold markers with a placeholder to track ranges later
+        // For simplicity, build an attributed string by processing segments
+        let segments = parseMarkdownSegments(processed)
+        for segment in segments {
+            switch segment {
+            case .plain(let text):
+                result.append(NSAttributedString(string: text, attributes: bodyAttrs))
+            case .bold(let text):
+                let boldAttrs: [NSAttributedString.Key: Any] = [
+                    .font: NSFont.boldSystemFont(ofSize: 13),
+                    .foregroundColor: NSColor.labelColor
+                ]
+                result.append(NSAttributedString(string: text, attributes: boldAttrs))
+            case .code(let text):
+                let codeAttrs: [NSAttributedString.Key: Any] = [
+                    .font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular),
+                    .foregroundColor: NSColor.secondaryLabelColor,
+                    .backgroundColor: NSColor.quaternaryLabelColor
+                ]
+                result.append(NSAttributedString(string: text, attributes: codeAttrs))
+            }
+        }
+
+        // Footer
+        let footerAttrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 11),
+            .foregroundColor: NSColor.tertiaryLabelColor
+        ]
+        result.append(NSAttributedString(string: "\n\n\u{2014} Shared from OSAI", attributes: footerAttrs))
+
+        _ = processed // suppress unused warning
+        return result
+    }
+
+    /// Strips markdown formatting from text, returning plain text.
+    func stripMarkdown(_ text: String) -> String {
+        var result = text
+        // Remove bold markers
+        result = result.replacingOccurrences(of: #"\*\*(.+?)\*\*"#, with: "$1", options: .regularExpression)
+        // Remove italic markers
+        result = result.replacingOccurrences(of: #"\*(.+?)\*"#, with: "$1", options: .regularExpression)
+        // Remove inline code backticks
+        result = result.replacingOccurrences(of: #"`([^`]+)`"#, with: "$1", options: .regularExpression)
+        // Remove code block fences
+        result = result.replacingOccurrences(of: #"```[\w]*\n?"#, with: "", options: .regularExpression)
+        // Remove heading markers
+        result = result.replacingOccurrences(of: #"^#{1,6}\s+"#, with: "", options: .regularExpression)
+        return result
+    }
+
+    // MARK: - Markdown Segment Parsing (private)
+
+    private enum MarkdownSegment {
+        case plain(String)
+        case bold(String)
+        case code(String)
+    }
+
+    private func parseMarkdownSegments(_ text: String) -> [MarkdownSegment] {
+        // Combined pattern: bold (**text**) or inline code (`text`)
+        let pattern = #"\*\*(.+?)\*\*|`([^`]+)`"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else {
+            return [.plain(text)]
+        }
+
+        var segments: [MarkdownSegment] = []
+        let nsText = text as NSString
+        var lastEnd = 0
+
+        for match in regex.matches(in: text, range: NSRange(location: 0, length: nsText.length)) {
+            let matchRange = match.range
+            // Plain text before this match
+            if matchRange.location > lastEnd {
+                let plainRange = NSRange(location: lastEnd, length: matchRange.location - lastEnd)
+                segments.append(.plain(nsText.substring(with: plainRange)))
+            }
+
+            // Check which capture group matched
+            if match.range(at: 1).location != NSNotFound {
+                // Bold
+                segments.append(.bold(nsText.substring(with: match.range(at: 1))))
+            } else if match.range(at: 2).location != NSNotFound {
+                // Code
+                segments.append(.code(nsText.substring(with: match.range(at: 2))))
+            }
+
+            lastEnd = matchRange.location + matchRange.length
+        }
+
+        // Trailing plain text
+        if lastEnd < nsText.length {
+            segments.append(.plain(nsText.substring(from: lastEnd)))
+        }
+
+        return segments
+    }
+
     func exportAsJSON(conversation conv: Conversation, options: ExportOptions = ExportOptions()) -> String {
         var dict: [String: Any] = [
             "id": conv.id,
@@ -1780,4 +2073,5 @@ class AppState: ObservableObject {
 class StreamState: @unchecked Sendable {
     var activeActivityIds: [String: String] = [:]  // event id -> activity id
     var accumulatedText: String = ""
+    var firstTextReceived: Bool = false
 }

@@ -379,6 +379,9 @@ struct MessageBubble: View {
     var onBranch: (() -> Void)?
     var onEdit: ((String) -> Void)?
     var onBookmark: (() -> Void)?
+    var shareMode: Bool = false
+    var isSelectedForShare: Bool = false
+    var onToggleShareSelection: (() -> Void)?
     @State private var appeared = false
     @State private var copied = false
     @State private var isHovered = false
@@ -388,6 +391,18 @@ struct MessageBubble: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
+            // Share mode checkbox
+            if shareMode {
+                Button(action: { onToggleShareSelection?() }) {
+                    Image(systemName: isSelectedForShare ? "checkmark.circle.fill" : "circle")
+                        .font(.system(size: 18))
+                        .foregroundColor(isSelectedForShare ? AppTheme.accent : AppTheme.textMuted)
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 4)
+                .transition(.scale.combined(with: .opacity))
+            }
+
             if message.role == .user {
                 Spacer(minLength: 60)
                 userBubble
@@ -406,6 +421,141 @@ struct MessageBubble: View {
             insertion: .move(edge: .bottom).combined(with: .opacity),
             removal: .opacity
         ))
+        .contextMenu { messageContextMenu }
+    }
+
+    // MARK: - Context Menu
+
+    @ViewBuilder
+    private var messageContextMenu: some View {
+        if !message.content.isEmpty && !message.isStreaming {
+            Button(action: shareMessage) {
+                Label("Share", systemImage: "square.and.arrow.up")
+            }
+
+            Divider()
+
+            Button(action: copyAsMarkdown) {
+                Label("Copy as Markdown", systemImage: "doc.richtext")
+            }
+
+            Button(action: copyAsRichText) {
+                Label("Copy as Rich Text", systemImage: "doc.text.fill")
+            }
+
+            Button(action: copyAsPlainText) {
+                Label("Copy as Plain Text", systemImage: "doc.plaintext")
+            }
+        }
+    }
+
+    // MARK: - Sharing & Copy Actions
+
+    private func shareMessage() {
+        let label = message.role == .user ? "You:" : "Assistant:"
+        let body = message.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = "\(label)\n\(body)\n\n\u{2014} Shared from OSAI"
+        showSharingPicker(items: [text])
+    }
+
+    private func copyAsMarkdown() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(message.content, forType: .string)
+        copied = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { copied = false }
+    }
+
+    private func copyAsRichText() {
+        let content = message.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        let attrString = buildRichText(from: content, role: message.role)
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        if let rtfData = attrString.rtf(from: NSRange(location: 0, length: attrString.length), documentAttributes: [:]) {
+            pb.setData(rtfData, forType: .rtf)
+        }
+        // Also set plain text fallback
+        pb.setString(attrString.string, forType: .string)
+        copied = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { copied = false }
+    }
+
+    private func copyAsPlainText() {
+        let stripped = stripMarkdownFormatting(message.content)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(stripped, forType: .string)
+        copied = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { copied = false }
+    }
+
+    private func showSharingPicker(items: [Any]) {
+        guard let window = NSApp.keyWindow else { return }
+        let picker = NSSharingServicePicker(items: items)
+        // Position picker relative to the key window's content view
+        if let contentView = window.contentView {
+            let rect = CGRect(x: contentView.bounds.midX, y: contentView.bounds.midY, width: 1, height: 1)
+            picker.show(relativeTo: rect, of: contentView, preferredEdge: .minY)
+        }
+    }
+
+    private func buildRichText(from content: String, role: MessageRole) -> NSAttributedString {
+        let result = NSMutableAttributedString()
+        let label = role == .user ? "You:" : "Assistant:"
+        let labelAttrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.boldSystemFont(ofSize: 14),
+            .foregroundColor: NSColor.labelColor
+        ]
+        result.append(NSAttributedString(string: "\(label)\n", attributes: labelAttrs))
+
+        let bodyFont = NSFont.systemFont(ofSize: 13)
+        let bodyAttrs: [NSAttributedString.Key: Any] = [
+            .font: bodyFont,
+            .foregroundColor: NSColor.labelColor
+        ]
+
+        let pattern = #"\*\*(.+?)\*\*|`([^`]+)`"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else {
+            result.append(NSAttributedString(string: content, attributes: bodyAttrs))
+            return result
+        }
+
+        let nsContent = content as NSString
+        var lastEnd = 0
+        for match in regex.matches(in: content, range: NSRange(location: 0, length: nsContent.length)) {
+            if match.range.location > lastEnd {
+                let plain = nsContent.substring(with: NSRange(location: lastEnd, length: match.range.location - lastEnd))
+                result.append(NSAttributedString(string: plain, attributes: bodyAttrs))
+            }
+            if match.range(at: 1).location != NSNotFound {
+                let boldAttrs: [NSAttributedString.Key: Any] = [
+                    .font: NSFont.boldSystemFont(ofSize: 13),
+                    .foregroundColor: NSColor.labelColor
+                ]
+                result.append(NSAttributedString(string: nsContent.substring(with: match.range(at: 1)), attributes: boldAttrs))
+            } else if match.range(at: 2).location != NSNotFound {
+                let codeAttrs: [NSAttributedString.Key: Any] = [
+                    .font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular),
+                    .foregroundColor: NSColor.secondaryLabelColor,
+                    .backgroundColor: NSColor.quaternaryLabelColor
+                ]
+                result.append(NSAttributedString(string: nsContent.substring(with: match.range(at: 2)), attributes: codeAttrs))
+            }
+            lastEnd = match.range.location + match.range.length
+        }
+        if lastEnd < nsContent.length {
+            result.append(NSAttributedString(string: nsContent.substring(from: lastEnd), attributes: bodyAttrs))
+        }
+
+        return result
+    }
+
+    private func stripMarkdownFormatting(_ text: String) -> String {
+        var result = text
+        result = result.replacingOccurrences(of: #"\*\*(.+?)\*\*"#, with: "$1", options: .regularExpression)
+        result = result.replacingOccurrences(of: #"\*(.+?)\*"#, with: "$1", options: .regularExpression)
+        result = result.replacingOccurrences(of: #"`([^`]+)`"#, with: "$1", options: .regularExpression)
+        result = result.replacingOccurrences(of: #"```[\w]*\n?"#, with: "", options: .regularExpression)
+        result = result.replacingOccurrences(of: #"^#{1,6}\s+"#, with: "", options: .regularExpression)
+        return result
     }
 
     private var userBubble: some View {
@@ -529,6 +679,24 @@ struct MessageBubble: View {
             bookmarkButton
 
             if isHovered {
+                Button(action: shareMessage) {
+                    HStack(spacing: 3) {
+                        Image(systemName: "square.and.arrow.up")
+                            .font(.system(size: 9))
+                        Text("Share")
+                            .font(.system(size: 9))
+                    }
+                    .foregroundColor(AppTheme.textMuted)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(AppTheme.bgCard.opacity(0.9))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(AppTheme.borderGlass, lineWidth: 0.5))
+                }
+                .buttonStyle(.plain)
+                .transition(.opacity)
+                .accessibilityLabel("Share message")
+
                 if onEdit != nil {
                     Button(action: {
                         editText = message.content
@@ -629,10 +797,25 @@ struct MessageBubble: View {
                         }
                     }
 
-                    // Copy, bookmark & retry buttons on hover
+                    // Copy, share, bookmark & retry buttons on hover
                     if message.role == .assistant && !message.content.isEmpty && !message.isStreaming && (isHovered || copied || message.isBookmarked) {
                         HStack(spacing: 4) {
                             bookmarkButton
+
+                            Button(action: shareMessage) {
+                                HStack(spacing: 3) {
+                                    Image(systemName: "square.and.arrow.up").font(.system(size: 9))
+                                    Text("Share").font(.system(size: 9))
+                                }
+                                .foregroundColor(AppTheme.textMuted)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 3)
+                                .background(AppTheme.bgCard.opacity(0.9))
+                                .clipShape(RoundedRectangle(cornerRadius: 6))
+                                .overlay(RoundedRectangle(cornerRadius: 6).stroke(AppTheme.borderGlass, lineWidth: 0.5))
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Share message")
 
                             Button(action: {
                                 NSPasteboard.general.clearContents()
@@ -683,6 +866,12 @@ struct MessageBubble: View {
                     Text(timeString(message.timestamp))
                         .font(.system(size: 9))
                         .foregroundColor(AppTheme.textMuted)
+
+                    if let rtMs = message.responseTimeMs {
+                        Text(responseTimeLabel(rtMs))
+                            .font(.system(size: 9, weight: .medium, design: .rounded))
+                            .foregroundColor(responseTimeColor(rtMs).opacity(0.7))
+                    }
 
                     // Reaction buttons: show on hover or if a reaction is already set
                     if !message.isStreaming && !message.content.isEmpty && (isHovered || message.reaction != nil) {
@@ -743,6 +932,17 @@ struct MessageBubble: View {
 
     private func timeString(_ date: Date) -> String {
         let f = DateFormatter(); f.dateFormat = "HH:mm"; return f.string(from: date)
+    }
+
+    private func responseTimeLabel(_ ms: Int) -> String {
+        if ms < 1000 { return "\(ms)ms" }
+        return String(format: "%.1fs", Double(ms) / 1000.0)
+    }
+
+    private func responseTimeColor(_ ms: Int) -> Color {
+        if ms < 2000 { return AppTheme.success }
+        if ms < 5000 { return AppTheme.warning }
+        return AppTheme.error
     }
 }
 

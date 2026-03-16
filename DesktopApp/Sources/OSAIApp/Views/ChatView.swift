@@ -29,6 +29,8 @@ struct ChatView: View {
     @State private var scrollContentHeight: CGFloat = 0
     @State private var scrollViewHeight: CGFloat = 0
     @State private var showBookmarksPanel: Bool = false
+    @State private var shareMode: Bool = false
+    @State private var selectedShareMessageIds: Set<String> = []
 
     // MARK: - Date grouping
 
@@ -365,6 +367,19 @@ struct ChatView: View {
                     }
 
                     if !focusMode, let conv = appState.activeConversation, !conv.messages.isEmpty {
+                        Button(action: {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                shareMode.toggle()
+                                if !shareMode { selectedShareMessageIds.removeAll() }
+                            }
+                        }) {
+                            Image(systemName: shareMode ? "xmark.circle.fill" : "checkmark.message")
+                                .font(.system(size: 14))
+                                .foregroundColor(shareMode ? AppTheme.accent : AppTheme.textSecondary)
+                        }
+                        .buttonStyle(.plain)
+                        .help(shareMode ? "Exit share mode" : "Select messages to share")
+
                         Button(action: { appState.presentExportSheet(for: conv) }) {
                             Image(systemName: "square.and.arrow.up")
                                 .font(.system(size: 14))
@@ -689,6 +704,12 @@ struct ChatView: View {
                         .padding(.vertical, 8)
                     }
                     .transition(.opacity.animation(.easeIn(duration: 0.3)))
+                }
+
+                // Share mode bottom bar
+                if shareMode && !selectedShareMessageIds.isEmpty {
+                    shareBottomBar
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
 
                 // Input bar
@@ -1032,7 +1053,16 @@ struct ChatView: View {
                 appState.branchConversation(from: conv.id, atMessageIndex: idx)
             } : nil,
             onEdit: editClosure,
-            onBookmark: { appState.toggleBookmark(messageId: msg.id) }
+            onBookmark: { appState.toggleBookmark(messageId: msg.id) },
+            shareMode: shareMode,
+            isSelectedForShare: selectedShareMessageIds.contains(msg.id),
+            onToggleShareSelection: {
+                if selectedShareMessageIds.contains(msg.id) {
+                    selectedShareMessageIds.remove(msg.id)
+                } else {
+                    selectedShareMessageIds.insert(msg.id)
+                }
+            }
         )
         .id(msg.id)
         .transition(.asymmetric(
@@ -1041,6 +1071,71 @@ struct ChatView: View {
         ))
     }
 
+
+    // MARK: - Share Bottom Bar
+
+    @ViewBuilder
+    private var shareBottomBar: some View {
+        HStack(spacing: 12) {
+            Text("\(selectedShareMessageIds.count) message\(selectedShareMessageIds.count == 1 ? "" : "s") selected")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(AppTheme.textSecondary)
+
+            Spacer()
+
+            Button(action: {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    selectedShareMessageIds.removeAll()
+                    shareMode = false
+                }
+            }) {
+                Text("Cancel")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(AppTheme.textMuted)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(AppTheme.bgCard.opacity(0.9))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(AppTheme.borderGlass, lineWidth: 0.5))
+            }
+            .buttonStyle(.plain)
+
+            Button(action: shareSelectedMessages) {
+                HStack(spacing: 4) {
+                    Image(systemName: "square.and.arrow.up")
+                        .font(.system(size: 11))
+                    Text("Share")
+                        .font(.system(size: 12, weight: .semibold))
+                }
+                .foregroundColor(.white)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 6)
+                .background(AppTheme.accent)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, AppTheme.paddingLg)
+        .padding(.vertical, 10)
+        .background(AppTheme.bgSecondary.opacity(0.6))
+        .overlay(alignment: .top) {
+            Divider().background(AppTheme.borderGlass)
+        }
+    }
+
+    private func shareSelectedMessages() {
+        guard let conv = appState.activeConversation else { return }
+        // Collect messages in conversation order
+        let selected = conv.messages.filter { selectedShareMessageIds.contains($0.id) }
+        guard !selected.isEmpty else { return }
+
+        let formatted = appState.formatMessagesForSharing(messages: selected)
+
+        guard let window = NSApp.keyWindow, let contentView = window.contentView else { return }
+        let picker = NSSharingServicePicker(items: [formatted])
+        let rect = CGRect(x: contentView.bounds.midX, y: contentView.bounds.midY, width: 1, height: 1)
+        picker.show(relativeTo: rect, of: contentView, preferredEdge: .minY)
+    }
 
     // MARK: - Bookmarks Panel
 

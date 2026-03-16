@@ -454,6 +454,8 @@ struct ChatInputBar: View {
     @State private var isFocused: Bool = false
     @State private var showSlashMenu = false
     @State private var slashFilter = ""
+    @State private var showTemplatePopover = false
+    @State private var showTemplateManager = false
 
     private let slashCommands: [(command: String, icon: String, description: String)] = [
         ("/new", "plus.circle", "Start new conversation"),
@@ -524,6 +526,24 @@ struct ChatInputBar: View {
                 .help("Attach files")
                 .padding(.bottom, 2)
 
+                Button(action: { showTemplatePopover.toggle() }) {
+                    Image(systemName: "text.book.closed")
+                        .font(.system(size: 15))
+                        .foregroundColor(AppTheme.textSecondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Prompt templates")
+                .help("Prompt templates")
+                .padding(.bottom, 2)
+                .popover(isPresented: $showTemplatePopover, arrowEdge: .top) {
+                    PromptTemplatePopover(
+                        text: $text,
+                        isPresented: $showTemplatePopover,
+                        showManager: $showTemplateManager
+                    )
+                    .environmentObject(appState)
+                }
+
                 GrowingTextEditor(
                     text: $text,
                     font: NSFont.systemFont(ofSize: 14),
@@ -585,6 +605,10 @@ struct ChatInputBar: View {
                 appState.shouldFocusInput = false
             }
         }
+        .sheet(isPresented: $showTemplateManager) {
+            PromptTemplateManagerSheet()
+                .environmentObject(appState)
+        }
     }
 
     private var canSubmit: Bool {
@@ -608,5 +632,392 @@ struct ChatInputBar: View {
                 attachedFiles.append(url)
             }
         }
+    }
+}
+
+// MARK: - Prompt Template Popover
+
+struct PromptTemplatePopover: View {
+    @EnvironmentObject var appState: AppState
+    @Binding var text: String
+    @Binding var isPresented: Bool
+    @Binding var showManager: Bool
+    @State private var searchText = ""
+    @State private var showSaveSheet = false
+    @State private var newTemplateName = ""
+    @State private var newTemplateCategory = "Custom"
+
+    private var filteredTemplates: [PromptTemplate] {
+        if searchText.isEmpty {
+            return appState.promptTemplates
+        }
+        let query = searchText.lowercased()
+        return appState.promptTemplates.filter {
+            $0.name.lowercased().contains(query) ||
+            $0.content.lowercased().contains(query) ||
+            $0.category.lowercased().contains(query)
+        }
+    }
+
+    private var groupedTemplates: [(category: String, templates: [PromptTemplate])] {
+        let grouped = Dictionary(grouping: filteredTemplates, by: { $0.category })
+        return PromptTemplate.categories.compactMap { cat in
+            guard let templates = grouped[cat], !templates.isEmpty else { return nil }
+            return (category: cat, templates: templates)
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Header
+            HStack {
+                Text("Prompt Templates")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(AppTheme.textPrimary)
+                Spacer()
+                Button(action: {
+                    isPresented = false
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                        showManager = true
+                    }
+                }) {
+                    Image(systemName: "gearshape")
+                        .font(.system(size: 12))
+                        .foregroundColor(AppTheme.textSecondary)
+                }
+                .buttonStyle(.plain)
+                .help("Manage templates")
+            }
+            .padding(.horizontal, 14)
+            .padding(.top, 12)
+            .padding(.bottom, 8)
+
+            // Search
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 11))
+                    .foregroundColor(AppTheme.textMuted)
+                TextField("Filter templates...", text: $searchText)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 12))
+                    .foregroundColor(AppTheme.textPrimary)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(AppTheme.bgCard.opacity(0.6))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .padding(.horizontal, 12)
+            .padding(.bottom, 6)
+
+            Divider().background(AppTheme.borderGlass)
+
+            // Templates list
+            ScrollView(.vertical, showsIndicators: true) {
+                VStack(alignment: .leading, spacing: 2) {
+                    if groupedTemplates.isEmpty {
+                        Text("No templates found")
+                            .font(.system(size: 12))
+                            .foregroundColor(AppTheme.textMuted)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 12)
+                    } else {
+                        ForEach(groupedTemplates, id: \.category) { group in
+                            Text(group.category)
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundColor(AppTheme.textMuted)
+                                .textCase(.uppercase)
+                                .padding(.horizontal, 14)
+                                .padding(.top, 10)
+                                .padding(.bottom, 4)
+
+                            ForEach(group.templates) { template in
+                                Button(action: {
+                                    text = template.content
+                                    isPresented = false
+                                }) {
+                                    HStack(spacing: 8) {
+                                        Image(systemName: template.icon)
+                                            .font(.system(size: 11))
+                                            .foregroundColor(AppTheme.accent)
+                                            .frame(width: 16)
+                                        VStack(alignment: .leading, spacing: 1) {
+                                            Text(template.name)
+                                                .font(.system(size: 12, weight: .medium))
+                                                .foregroundColor(AppTheme.textPrimary)
+                                            Text(template.content.prefix(60) + (template.content.count > 60 ? "..." : ""))
+                                                .font(.system(size: 10))
+                                                .foregroundColor(AppTheme.textMuted)
+                                                .lineLimit(1)
+                                        }
+                                        Spacer()
+                                    }
+                                    .padding(.horizontal, 14)
+                                    .padding(.vertical, 6)
+                                    .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+                }
+                .padding(.bottom, 6)
+            }
+
+            // Save current as template
+            if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Divider().background(AppTheme.borderGlass)
+                Button(action: { showSaveSheet = true }) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "plus.circle")
+                            .font(.system(size: 11))
+                            .foregroundColor(AppTheme.accent)
+                        Text("Save current as template")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(AppTheme.accent)
+                        Spacer()
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .frame(width: 300, height: 380)
+        .background(.ultraThinMaterial)
+        .background(AppTheme.bgGlass)
+        .popover(isPresented: $showSaveSheet) {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Save as Template")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(AppTheme.textPrimary)
+
+                TextField("Template name", text: $newTemplateName)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 12))
+
+                Picker("Category", selection: $newTemplateCategory) {
+                    ForEach(PromptTemplate.categories, id: \.self) { cat in
+                        Text(cat).tag(cat)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .font(.system(size: 11))
+
+                HStack {
+                    Spacer()
+                    Button("Cancel") { showSaveSheet = false }
+                        .buttonStyle(.plain)
+                        .foregroundColor(AppTheme.textSecondary)
+                    Button("Save") {
+                        let name = newTemplateName.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !name.isEmpty else { return }
+                        let icon = PromptTemplate.categoryIcons[newTemplateCategory] ?? "star"
+                        appState.savePromptTemplate(name: name, content: text, category: newTemplateCategory, icon: icon)
+                        newTemplateName = ""
+                        showSaveSheet = false
+                        isPresented = false
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(newTemplateName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+            .padding(16)
+            .frame(width: 280)
+        }
+    }
+}
+
+// MARK: - Prompt Template Manager Sheet
+
+struct PromptTemplateManagerSheet: View {
+    @EnvironmentObject var appState: AppState
+    @Environment(\.dismiss) private var dismiss
+    @State private var selectedTemplate: PromptTemplate?
+    @State private var showCreateNew = false
+    @State private var editName = ""
+    @State private var editContent = ""
+    @State private var editCategory = "Custom"
+    @State private var editIcon = "star"
+
+    private let iconOptions = [
+        "star", "magnifyingglass.circle", "doc.text.magnifyingglass",
+        "globe", "face.smiling", "checkmark.shield",
+        "pencil", "lightbulb", "hammer", "terminal",
+        "book", "brain.head.profile", "text.bubble",
+        "arrow.triangle.2.circlepath", "wand.and.stars",
+    ]
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header
+            HStack {
+                Text("Manage Templates")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundColor(AppTheme.textPrimary)
+                Spacer()
+                Button(action: { showCreateNew = true }) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 13))
+                        .foregroundColor(AppTheme.accent)
+                }
+                .buttonStyle(.plain)
+                .help("Create new template")
+                Button("Done") { dismiss() }
+                    .buttonStyle(.plain)
+                    .foregroundColor(AppTheme.accent)
+                    .font(.system(size: 13, weight: .medium))
+            }
+            .padding(16)
+
+            Divider().background(AppTheme.borderGlass)
+
+            // Template list
+            List {
+                ForEach(PromptTemplate.categories, id: \.self) { category in
+                    let templates = appState.promptTemplates.filter { $0.category == category }
+                    if !templates.isEmpty {
+                        Section(header: Text(category).font(.system(size: 11, weight: .semibold)).foregroundColor(AppTheme.textMuted)) {
+                            ForEach(templates) { template in
+                                HStack(spacing: 10) {
+                                    Image(systemName: template.icon)
+                                        .font(.system(size: 13))
+                                        .foregroundColor(AppTheme.accent)
+                                        .frame(width: 20)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(template.name)
+                                            .font(.system(size: 13, weight: .medium))
+                                            .foregroundColor(AppTheme.textPrimary)
+                                        Text(template.content.prefix(80) + (template.content.count > 80 ? "..." : ""))
+                                            .font(.system(size: 11))
+                                            .foregroundColor(AppTheme.textMuted)
+                                            .lineLimit(2)
+                                    }
+                                    Spacer()
+                                    Button(action: {
+                                        selectedTemplate = template
+                                        editName = template.name
+                                        editContent = template.content
+                                        editCategory = template.category
+                                        editIcon = template.icon
+                                    }) {
+                                        Image(systemName: "pencil")
+                                            .font(.system(size: 11))
+                                            .foregroundColor(AppTheme.textSecondary)
+                                    }
+                                    .buttonStyle(.plain)
+                                    Button(action: {
+                                        appState.deletePromptTemplate(id: template.id)
+                                    }) {
+                                        Image(systemName: "trash")
+                                            .font(.system(size: 11))
+                                            .foregroundColor(AppTheme.error)
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                                .padding(.vertical, 4)
+                            }
+                        }
+                    }
+                }
+            }
+            .listStyle(.inset)
+        }
+        .frame(width: 520, height: 480)
+        .background(.ultraThinMaterial)
+        .sheet(item: $selectedTemplate) { template in
+            templateEditorSheet(isNew: false)
+        }
+        .sheet(isPresented: $showCreateNew) {
+            templateEditorSheet(isNew: true)
+        }
+    }
+
+    private func templateEditorSheet(isNew: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(isNew ? "New Template" : "Edit Template")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundColor(AppTheme.textPrimary)
+
+            TextField("Template name", text: $editName)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(size: 13))
+
+            Text("Content")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(AppTheme.textSecondary)
+            TextEditor(text: $editContent)
+                .font(.system(size: 12))
+                .frame(minHeight: 100)
+                .scrollContentBackground(.hidden)
+                .padding(6)
+                .background(AppTheme.bgCard)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(AppTheme.borderGlass, lineWidth: 1))
+
+            Picker("Category", selection: $editCategory) {
+                ForEach(PromptTemplate.categories, id: \.self) { cat in
+                    Text(cat).tag(cat)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            // Icon picker
+            Text("Icon")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(AppTheme.textSecondary)
+            LazyVGrid(columns: Array(repeating: GridItem(.fixed(32), spacing: 6), count: 8), spacing: 6) {
+                ForEach(iconOptions, id: \.self) { icon in
+                    Button(action: { editIcon = icon }) {
+                        Image(systemName: icon)
+                            .font(.system(size: 14))
+                            .foregroundColor(editIcon == icon ? .white : AppTheme.textSecondary)
+                            .frame(width: 28, height: 28)
+                            .background(editIcon == icon ? AppTheme.accent : AppTheme.bgCard)
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+            HStack {
+                Spacer()
+                Button("Cancel") {
+                    selectedTemplate = nil
+                    showCreateNew = false
+                    resetEditor()
+                }
+                .buttonStyle(.plain)
+                .foregroundColor(AppTheme.textSecondary)
+
+                Button(isNew ? "Create" : "Save") {
+                    let name = editName.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !name.isEmpty else { return }
+                    if isNew {
+                        appState.savePromptTemplate(name: name, content: editContent, category: editCategory, icon: editIcon)
+                        showCreateNew = false
+                    } else if var updated = selectedTemplate {
+                        updated.name = name
+                        updated.content = editContent
+                        updated.category = editCategory
+                        updated.icon = editIcon
+                        appState.updatePromptTemplate(updated)
+                        selectedTemplate = nil
+                    }
+                    resetEditor()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(editName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(20)
+        .frame(width: 400, height: 440)
+    }
+
+    private func resetEditor() {
+        editName = ""
+        editContent = ""
+        editCategory = "Custom"
+        editIcon = "star"
     }
 }
