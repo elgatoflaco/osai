@@ -2639,8 +2639,10 @@ struct CodeBlockView: View {
     let code: String
     let language: String
     @State private var copied = false
+    @State private var isExpanded = true
 
     private var lines: [String] { code.components(separatedBy: "\n") }
+    private var lineCount: Int { lines.count }
     private var lineNumberWidth: CGFloat {
         let digits = max(2, String(lines.count).count)
         return CGFloat(digits) * 8 + 12
@@ -2655,18 +2657,27 @@ struct CodeBlockView: View {
                 .fill(langColor.opacity(0.6))
                 .frame(height: 2)
 
-            // Header bar with language badge and copy button
+            // Header bar with language badge, line count, collapse toggle, and copy button
             HStack(spacing: 0) {
+                // Language label (left)
                 Text(displayLang)
                     .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                    .foregroundColor(langColor)
+                    .foregroundColor(AppTheme.accent)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 3)
-                    .background(langColor.opacity(0.12))
+                    .background(AppTheme.accent.opacity(0.12))
                     .clipShape(RoundedRectangle(cornerRadius: 4))
 
                 Spacer()
 
+                // Line count (center)
+                Text("\(lineCount) line\(lineCount == 1 ? "" : "s")")
+                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .foregroundColor(AppTheme.textMuted)
+
+                Spacer()
+
+                // Copy button
                 Button(action: {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(code, forType: .string)
@@ -2690,42 +2701,70 @@ struct CodeBlockView: View {
                     )
                 }
                 .buttonStyle(.plain)
+
+                // Collapse/expand toggle
+                Button(action: {
+                    withAnimation(.easeInOut(duration: 0.25)) {
+                        isExpanded.toggle()
+                    }
+                }) {
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(AppTheme.textMuted)
+                        .frame(width: 24, height: 24)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .padding(.leading, 4)
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
-            .background(Color(red: 20/255, green: 20/255, blue: 28/255).opacity(0.95))
+            .background(AppTheme.bgPrimary)
 
-            Rectangle()
-                .fill(Color.white.opacity(0.06))
-                .frame(height: 1)
+            if isExpanded {
+                Rectangle()
+                    .fill(Color.white.opacity(0.06))
+                    .frame(height: 1)
 
-            // Code area with line numbers
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(alignment: .top, spacing: 0) {
-                    VStack(alignment: .trailing, spacing: 0) {
-                        ForEach(Array(lines.enumerated()), id: \.offset) { idx, _ in
-                            Text("\(idx + 1)")
-                                .font(.system(size: 11, design: .monospaced))
-                                .foregroundColor(Color(red: 0x44/255, green: 0x44/255, blue: 0x55/255))
-                                .frame(height: 18, alignment: .trailing)
+                // Code area with line numbers
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(alignment: .top, spacing: 0) {
+                        VStack(alignment: .trailing, spacing: 0) {
+                            ForEach(Array(lines.enumerated()), id: \.offset) { idx, _ in
+                                Text("\(idx + 1)")
+                                    .font(.system(size: 11, design: .monospaced))
+                                    .foregroundColor(Color(red: 0x44/255, green: 0x44/255, blue: 0x55/255))
+                                    .frame(height: 18, alignment: .trailing)
+                            }
                         }
+                        .frame(width: lineNumberWidth, alignment: .trailing)
+                        .padding(.trailing, 8)
+
+                        Rectangle()
+                            .fill(Color.white.opacity(0.06))
+                            .frame(width: 1)
+                            .padding(.trailing, 10)
+
+                        Text(SyntaxHighlighter.highlight(code, language: language))
+                            .textSelection(.enabled)
+                            .lineSpacing(0)
+                            .fixedSize(horizontal: true, vertical: false)
+                            .frame(minHeight: CGFloat(lines.count) * 18, alignment: .topLeading)
                     }
-                    .frame(width: lineNumberWidth, alignment: .trailing)
-                    .padding(.trailing, 8)
-
-                    Rectangle()
-                        .fill(Color.white.opacity(0.06))
-                        .frame(width: 1)
-                        .padding(.trailing, 10)
-
-                    Text(SyntaxHighlighter.highlight(code, language: language))
-                        .textSelection(.enabled)
-                        .lineSpacing(0)
-                        .fixedSize(horizontal: true, vertical: false)
-                        .frame(minHeight: CGFloat(lines.count) * 18, alignment: .topLeading)
+                    .padding(.vertical, 10)
+                    .padding(.trailing, 10)
                 }
-                .padding(.vertical, 10)
-                .padding(.trailing, 10)
+            } else {
+                // Collapsed state: show hidden line count
+                HStack {
+                    Spacer()
+                    Text("\(lineCount) line\(lineCount == 1 ? "" : "s") hidden")
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .foregroundColor(AppTheme.textMuted.opacity(0.7))
+                        .padding(.vertical, 8)
+                    Spacer()
+                }
+                .background(Color(red: 16/255, green: 16/255, blue: 22/255))
             }
         }
         .background(Color(red: 16/255, green: 16/255, blue: 22/255))
@@ -2734,6 +2773,7 @@ struct CodeBlockView: View {
             RoundedRectangle(cornerRadius: 10)
                 .stroke(Color.white.opacity(0.08), lineWidth: 0.5)
         )
+        .clipped()
     }
 }
 

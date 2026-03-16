@@ -2531,6 +2531,7 @@ struct ConversationRow: View {
                                 .font(.system(size: 12, weight: isActive ? .semibold : .regular))
                                 .foregroundColor(isActive ? AppTheme.textPrimary : AppTheme.textSecondary)
                                 .lineLimit(1)
+                                .onTapGesture(count: 2) { onRename?() }
                         }
                     }
 

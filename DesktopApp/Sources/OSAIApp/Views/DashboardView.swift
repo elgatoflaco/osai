@@ -153,6 +153,12 @@ struct DashboardView: View {
             }
             .frame(maxWidth: 800)
 
+        case .recentConversations:
+            CollapsibleSection(section: .recentConversations) {
+                recentConversationsContent
+            }
+            .frame(maxWidth: 800)
+
         case .recentActivity:
             CollapsibleSection(section: .recentActivity) {
                 recentActivityContent
@@ -305,6 +311,114 @@ struct DashboardView: View {
                 ProgressBar(progress: progress,
                             color: progress > 0.7 ? AppTheme.warning : AppTheme.accent)
                     .frame(height: 6)
+            }
+        }
+    }
+
+    // MARK: - Recent Conversations
+
+    private var recentConversationsContent: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if appState.recentConversationsForDashboard.isEmpty {
+                GlassCard {
+                    HStack {
+                        Image(systemName: "bubble.left.and.bubble.right")
+                            .foregroundColor(AppTheme.textMuted)
+                        Text("No conversations yet. Start chatting!")
+                            .font(AppTheme.fontBody)
+                            .foregroundColor(AppTheme.textSecondary)
+                        Spacer()
+                    }
+                }
+            } else {
+                ForEach(appState.recentConversationsForDashboard) { conv in
+                    Button(action: { appState.openConversation(conv) }) {
+                        HoverGlassCard {
+                            HStack(spacing: 12) {
+                                // Agent icon or default chat icon
+                                if let agent = conv.agentName {
+                                    GhostIcon(size: 24, animate: false, tint: agentColor(agent))
+                                } else {
+                                    Image(systemName: "bubble.left.fill")
+                                        .font(.system(size: 14))
+                                        .foregroundColor(AppTheme.accent.opacity(0.7))
+                                        .frame(width: 24, height: 24)
+                                }
+
+                                // Title and preview
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(conv.title)
+                                        .font(.system(size: 13, weight: .semibold))
+                                        .foregroundColor(AppTheme.textPrimary)
+                                        .lineLimit(1)
+                                    Text(conv.preview)
+                                        .font(.system(size: 11))
+                                        .foregroundColor(AppTheme.textSecondary)
+                                        .lineLimit(1)
+                                }
+
+                                Spacer()
+
+                                // Message count badge
+                                Text("\(conv.messages.count)")
+                                    .font(.system(size: 10, weight: .bold))
+                                    .foregroundColor(AppTheme.accent)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(AppTheme.accent.opacity(0.12))
+                                    .clipShape(Capsule())
+
+                                // Time ago
+                                Text(relativeTime(conv.lastUpdated))
+                                    .font(.system(size: 10))
+                                    .foregroundColor(AppTheme.textMuted)
+                                    .frame(minWidth: 40, alignment: .trailing)
+
+                                // Continue button
+                                Button(action: {
+                                    appState.openConversation(conv)
+                                }) {
+                                    HStack(spacing: 4) {
+                                        Image(systemName: "arrow.right.circle.fill")
+                                            .font(.system(size: 11))
+                                        Text("Continue")
+                                            .font(.system(size: 11, weight: .medium))
+                                    }
+                                    .foregroundColor(AppTheme.accent)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 5)
+                                    .background(AppTheme.accent.opacity(0.1))
+                                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 6)
+                                            .stroke(AppTheme.accent.opacity(0.2), lineWidth: 1)
+                                    )
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                // View all button
+                if appState.conversations.count > 5 {
+                    HStack {
+                        Spacer()
+                        Button(action: { appState.selectedTab = .chat }) {
+                            HStack(spacing: 4) {
+                                Text("View all conversations")
+                                    .font(.system(size: 11, weight: .medium))
+                                Image(systemName: "arrow.right")
+                                    .font(.system(size: 10))
+                            }
+                            .foregroundColor(AppTheme.accent)
+                        }
+                        .buttonStyle(.plain)
+                        Spacer()
+                    }
+                    .padding(.top, 4)
+                }
             }
         }
     }

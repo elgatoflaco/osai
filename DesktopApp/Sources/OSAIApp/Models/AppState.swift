@@ -296,6 +296,7 @@ enum DashboardSection: String, Codable, CaseIterable, Identifiable {
     case chatInsights
     case performance
     case recentActivity
+    case recentConversations
     case systemHealth
 
     var id: String { rawValue }
@@ -311,6 +312,7 @@ enum DashboardSection: String, Codable, CaseIterable, Identifiable {
         case .chatInsights: return "Chat Insights"
         case .performance: return "Performance"
         case .recentActivity: return "Recent Activity"
+        case .recentConversations: return "Recent Conversations"
         case .systemHealth: return "System Health"
         }
     }
@@ -326,12 +328,13 @@ enum DashboardSection: String, Codable, CaseIterable, Identifiable {
         case .chatInsights: return "lightbulb"
         case .performance: return "gauge.with.dots.needle.33percent"
         case .recentActivity: return "clock.arrow.circlepath"
+        case .recentConversations: return "bubble.left.and.text.bubble.right"
         case .systemHealth: return "server.rack"
         }
     }
 
     static let defaultOrder: [DashboardSection] = [
-        .quickStart, .gateway, .stats, .spending, .tokenStats, .analytics, .chatInsights, .performance, .recentActivity, .systemHealth
+        .quickStart, .gateway, .stats, .spending, .recentConversations, .tokenStats, .analytics, .chatInsights, .performance, .recentActivity, .systemHealth
     ]
 }
 
@@ -695,6 +698,15 @@ class AppState: ObservableObject {
     }
     @Published var conversations: [Conversation] = []
     @Published var activeConversation: Conversation?
+
+    /// Last 5 non-archived conversations, sorted by most recent activity, for dashboard display.
+    var recentConversationsForDashboard: [Conversation] {
+        conversations
+            .filter { !$0.isArchived }
+            .sorted { $0.lastUpdated > $1.lastUpdated }
+            .prefix(5)
+            .map { $0 }
+    }
     @Published var gatewayRunning: Bool = false
     @Published var gatewayPID: Int?
     @Published var config: AppConfig = AppConfig()
