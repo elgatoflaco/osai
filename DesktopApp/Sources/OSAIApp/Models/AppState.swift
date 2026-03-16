@@ -880,6 +880,99 @@ class AppState: ObservableObject {
         sendMessage(template.initialMessage)
     }
 
+    // MARK: - Conversation Statistics
+
+    struct ConversationStats {
+        let totalMessages: Int
+        let userMessages: Int
+        let assistantMessages: Int
+        let totalTokens: Int
+        let inputTokens: Int
+        let outputTokens: Int
+        let averageResponseTimeMs: Int?
+        let topTools: [(name: String, count: Int)]
+        let conversationDuration: TimeInterval?
+        let wordsPerMessage: Double
+        let codeBlocksCount: Int
+
+        var formattedDuration: String {
+            guard let duration = conversationDuration else { return "N/A" }
+            if duration < 60 { return "< 1 min" }
+            if duration < 3600 {
+                let mins = Int(duration / 60)
+                return "\(mins) min"
+            }
+            let hours = Int(duration / 3600)
+            let mins = Int(duration.truncatingRemainder(dividingBy: 3600) / 60)
+            return mins > 0 ? "\(hours)h \(mins)m" : "\(hours)h"
+        }
+
+        var formattedAvgResponseTime: String {
+            guard let ms = averageResponseTimeMs else { return "N/A" }
+            if ms < 1000 { return "\(ms) ms" }
+            let seconds = Double(ms) / 1000.0
+            return String(format: "%.1fs", seconds)
+        }
+    }
+
+    func computeStats(for conversation: Conversation) -> ConversationStats {
+        let messages = conversation.messages
+        let userMsgs = messages.filter { $0.role == .user }
+        let assistantMsgs = messages.filter { $0.role == .assistant }
+
+        // Average response time from assistant messages that have it
+        let responseTimes = assistantMsgs.compactMap { $0.responseTimeMs }
+        let avgResponseTime: Int? = responseTimes.isEmpty ? nil : responseTimes.reduce(0, +) / responseTimes.count
+
+        // Tool usage counts
+        var toolCounts: [String: Int] = [:]
+        for msg in messages {
+            for activity in msg.activities where activity.type == .toolCall {
+                toolCounts[activity.label, default: 0] += 1
+            }
+            if let tool = msg.toolName {
+                toolCounts[tool, default: 0] += 1
+            }
+        }
+        let topTools = toolCounts
+            .sorted { $0.value > $1.value }
+            .prefix(5)
+            .map { (name: $0.key, count: $0.value) }
+
+        // Duration
+        var duration: TimeInterval? = nil
+        if let first = messages.first?.timestamp, let last = messages.last?.timestamp, messages.count > 1 {
+            duration = last.timeIntervalSince(first)
+        }
+
+        // Words per message
+        let totalWords = messages.reduce(0) { total, msg in
+            total + msg.content.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }.count
+        }
+        let wordsPerMsg = messages.isEmpty ? 0.0 : Double(totalWords) / Double(messages.count)
+
+        // Code blocks count (``` delimiters)
+        let codeBlocks = messages.reduce(0) { total, msg in
+            let matches = msg.content.components(separatedBy: "```")
+            // Number of code blocks = (number of ``` pairs) / 2
+            return total + max(0, (matches.count - 1) / 2)
+        }
+
+        return ConversationStats(
+            totalMessages: messages.count,
+            userMessages: userMsgs.count,
+            assistantMessages: assistantMsgs.count,
+            totalTokens: conversation.totalInputTokens + conversation.totalOutputTokens,
+            inputTokens: conversation.totalInputTokens,
+            outputTokens: conversation.totalOutputTokens,
+            averageResponseTimeMs: avgResponseTime,
+            topTools: topTools,
+            conversationDuration: duration,
+            wordsPerMessage: wordsPerMsg,
+            codeBlocksCount: codeBlocks
+        )
+    }
+
     // MARK: - Conversation Summary
 
     func generateSummary(for conversation: Conversation) -> String {

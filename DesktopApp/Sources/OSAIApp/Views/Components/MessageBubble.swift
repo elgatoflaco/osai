@@ -2354,8 +2354,8 @@ struct ResponseView: View {
         case .codeBlock(let code, let lang):
             CodeBlockView(code: code, language: lang)
 
-        case .table(let headers, let rows):
-            MarkdownTableView(headers: headers, rows: rows)
+        case .table(let headers, let alignments, let rows):
+            MarkdownTableView(headers: headers, alignments: alignments, rows: rows)
 
         case .blockquote(let lines):
             HStack(alignment: .top, spacing: 0) {
@@ -2489,7 +2489,12 @@ struct StepProgressView: View {
 
 struct MarkdownTableView: View {
     let headers: [String]
+    let alignments: [ColumnAlignment]
     let rows: [[String]]
+
+    private func alignment(for colIdx: Int) -> ColumnAlignment {
+        colIdx < alignments.count ? alignments[colIdx] : .left
+    }
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
@@ -2498,11 +2503,12 @@ struct MarkdownTableView: View {
                 HStack(spacing: 0) {
                     ForEach(Array(headers.enumerated()), id: \.offset) { idx, header in
                         Text(header)
-                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                            .font(.system(size: 12, weight: .bold, design: .monospaced))
                             .foregroundColor(AppTheme.textPrimary)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 7)
-                            .frame(minWidth: 80, alignment: .leading)
+                            .multilineTextAlignment(alignment(for: idx).swiftUIAlignment)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .frame(minWidth: 90, alignment: alignment(for: idx).frameAlignment)
                         if idx < headers.count - 1 {
                             Rectangle()
                                 .fill(AppTheme.borderGlass)
@@ -2510,12 +2516,12 @@ struct MarkdownTableView: View {
                         }
                     }
                 }
-                .background(AppTheme.bgCard.opacity(0.8))
+                .background(AppTheme.bgCard)
 
                 // Header bottom border
                 Rectangle()
-                    .fill(AppTheme.accent.opacity(0.3))
-                    .frame(height: 1)
+                    .fill(AppTheme.accent.opacity(0.4))
+                    .frame(height: 1.5)
 
                 // Data rows
                 ForEach(Array(rows.enumerated()), id: \.offset) { rowIdx, row in
@@ -2524,9 +2530,10 @@ struct MarkdownTableView: View {
                             Text(colIdx < row.count ? row[colIdx] : "")
                                 .font(.system(size: 12, design: .monospaced))
                                 .foregroundColor(AppTheme.textSecondary)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 6)
-                                .frame(minWidth: 80, alignment: .leading)
+                                .multilineTextAlignment(alignment(for: colIdx).swiftUIAlignment)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 7)
+                                .frame(minWidth: 90, alignment: alignment(for: colIdx).frameAlignment)
                             if colIdx < headers.count - 1 {
                                 Rectangle()
                                     .fill(AppTheme.borderGlass.opacity(0.5))
@@ -2534,7 +2541,7 @@ struct MarkdownTableView: View {
                             }
                         }
                     }
-                    .background(rowIdx % 2 == 0 ? Color.clear : AppTheme.bgCard.opacity(0.3))
+                    .background(rowIdx % 2 == 0 ? AppTheme.bgPrimary.opacity(0.3) : AppTheme.bgCard.opacity(0.4))
 
                     if rowIdx < rows.count - 1 {
                         Rectangle()
@@ -2543,8 +2550,8 @@ struct MarkdownTableView: View {
                     }
                 }
             }
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-            .overlay(RoundedRectangle(cornerRadius: 8).stroke(AppTheme.borderGlass, lineWidth: 0.5))
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .overlay(RoundedRectangle(cornerRadius: 10).stroke(AppTheme.borderGlass, lineWidth: 1))
         }
         .textSelection(.enabled)
     }
@@ -3075,6 +3082,122 @@ struct ToolCallCard: View {
     }
 }
 
+// MARK: - Markdown Table Model & Helpers
+
+enum ColumnAlignment {
+    case left, center, right
+
+    var swiftUIAlignment: TextAlignment {
+        switch self {
+        case .left: return .leading
+        case .center: return .center
+        case .right: return .trailing
+        }
+    }
+
+    var frameAlignment: Alignment {
+        switch self {
+        case .left: return .leading
+        case .center: return .center
+        case .right: return .trailing
+        }
+    }
+}
+
+struct MarkdownTable {
+    let headers: [String]
+    let alignments: [ColumnAlignment]
+    let rows: [[String]]
+}
+
+/// Detects whether a block of text contains a markdown table.
+func isMarkdownTable(_ text: String) -> Bool {
+    let lines = text.components(separatedBy: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+    // Need at least 2 lines: header + separator
+    guard lines.count >= 2 else { return false }
+    // Find a pair of consecutive lines where the first is a table row and the second is a separator
+    for i in 0..<(lines.count - 1) {
+        let row = lines[i]
+        let sep = lines[i + 1]
+        if row.hasPrefix("|") && row.filter({ $0 == "|" }).count >= 2 {
+            let inner = sep.replacingOccurrences(of: "|", with: "")
+                          .replacingOccurrences(of: "-", with: "")
+                          .replacingOccurrences(of: ":", with: "")
+                          .trimmingCharacters(in: .whitespaces)
+            if sep.hasPrefix("|") && inner.isEmpty {
+                return true
+            }
+        }
+    }
+    return false
+}
+
+/// Parses a markdown table string into a structured MarkdownTable.
+func parseMarkdownTable(from text: String) -> MarkdownTable? {
+    let lines = text.components(separatedBy: "\n")
+        .map { $0.trimmingCharacters(in: .whitespaces) }
+        .filter { !$0.isEmpty }
+
+    guard lines.count >= 2 else { return nil }
+
+    // Find header + separator pair
+    var headerIdx = -1
+    for i in 0..<(lines.count - 1) {
+        let row = lines[i]
+        let sep = lines[i + 1]
+        if row.hasPrefix("|") && row.filter({ $0 == "|" }).count >= 2 {
+            let inner = sep.replacingOccurrences(of: "|", with: "")
+                          .replacingOccurrences(of: "-", with: "")
+                          .replacingOccurrences(of: ":", with: "")
+                          .trimmingCharacters(in: .whitespaces)
+            if sep.hasPrefix("|") && inner.isEmpty {
+                headerIdx = i
+                break
+            }
+        }
+    }
+
+    guard headerIdx >= 0 else { return nil }
+
+    func parseCells(_ line: String) -> [String] {
+        var trimmed = line.trimmingCharacters(in: .whitespaces)
+        if trimmed.hasPrefix("|") { trimmed = String(trimmed.dropFirst()) }
+        if trimmed.hasSuffix("|") { trimmed = String(trimmed.dropLast()) }
+        return trimmed.components(separatedBy: "|").map { $0.trimmingCharacters(in: .whitespaces) }
+    }
+
+    let headers = parseCells(lines[headerIdx])
+    let separatorCells = parseCells(lines[headerIdx + 1])
+
+    // Parse alignments from separator row
+    var alignments: [ColumnAlignment] = []
+    for cell in separatorCells {
+        let t = cell.trimmingCharacters(in: .whitespaces)
+        let startsColon = t.hasPrefix(":")
+        let endsColon = t.hasSuffix(":")
+        if startsColon && endsColon {
+            alignments.append(.center)
+        } else if endsColon {
+            alignments.append(.right)
+        } else {
+            alignments.append(.left)
+        }
+    }
+
+    // Pad alignments to match header count
+    while alignments.count < headers.count { alignments.append(.left) }
+
+    // Parse data rows
+    var rows: [[String]] = []
+    for i in (headerIdx + 2)..<lines.count {
+        let line = lines[i]
+        guard line.hasPrefix("|") && line.filter({ $0 == "|" }).count >= 2 else { break }
+        rows.append(parseCells(line))
+    }
+
+    return MarkdownTable(headers: headers, alignments: alignments, rows: rows)
+}
+
 // MARK: - Response Parser
 
 enum ResponseSection {
@@ -3085,7 +3208,7 @@ enum ResponseSection {
     case bulletList([String])
     case numberedList([String])
     case codeBlock(String, String)
-    case table(headers: [String], rows: [[String]])
+    case table(headers: [String], alignments: [ColumnAlignment], rows: [[String]])
     case blockquote([String])
     case divider
 }
@@ -3135,13 +3258,32 @@ struct ResponseParser {
                 }
                 if tableLines.count >= 2 {
                     let headerCells = parseTableRow(tableLines[0])
-                    // Skip separator row (|---|---|)
-                    let startRow = isTableSeparator(tableLines.count > 1 ? tableLines[1] : "") ? 2 : 1
+                    // Parse alignments from separator row
+                    let hasSeparator = isTableSeparator(tableLines.count > 1 ? tableLines[1] : "")
+                    var alignments: [ColumnAlignment] = []
+                    if hasSeparator {
+                        let sepCells = parseTableRow(tableLines[1])
+                        for cell in sepCells {
+                            let t = cell.trimmingCharacters(in: .whitespaces)
+                            let startsColon = t.hasPrefix(":")
+                            let endsColon = t.hasSuffix(":")
+                            if startsColon && endsColon {
+                                alignments.append(.center)
+                            } else if endsColon {
+                                alignments.append(.right)
+                            } else {
+                                alignments.append(.left)
+                            }
+                        }
+                    }
+                    // Pad alignments to match header count
+                    while alignments.count < headerCells.count { alignments.append(.left) }
+                    let startRow = hasSeparator ? 2 : 1
                     var dataRows: [[String]] = []
                     for r in startRow..<tableLines.count {
                         dataRows.append(parseTableRow(tableLines[r]))
                     }
-                    sections.append(.table(headers: headerCells, rows: dataRows))
+                    sections.append(.table(headers: headerCells, alignments: alignments, rows: dataRows))
                 } else if tableLines.count == 1 {
                     // Single table line, treat as paragraph
                     sections.append(.paragraph(tableLines[0]))

@@ -36,6 +36,7 @@ struct ChatView: View {
     @State private var calendarSelectedDate: Date? = nil
     @State private var searchFilters = AppState.SearchFilters()
     @State private var showSearchFilters: Bool = false
+    @State private var showStatsSheet: Bool = false
 
 
 
@@ -153,88 +154,204 @@ struct ChatView: View {
         }
     }
 
-    // MARK: - Conversation Starter View
+    // MARK: - Welcome / Empty State
+
+    @State private var welcomeAnimateIn: Bool = false
+
+    private var recentConversations: [Conversation] {
+        Array(appState.sortedConversations.prefix(3))
+    }
+
+    private func startSuggestion(_ prompt: String) {
+        messageText = prompt
+        appState.sendMessage(prompt)
+        messageText = ""
+    }
 
     @ViewBuilder
     private var conversationStarterView: some View {
         ScrollView(.vertical, showsIndicators: false) {
-            VStack(spacing: 24) {
-                Spacer(minLength: 40)
+            VStack(spacing: 28) {
+                Spacer(minLength: 48)
 
-                GhostIcon(size: 72)
+                // Hero section
+                VStack(spacing: 14) {
+                    GhostIcon(size: 72)
+                        .shadow(color: AppTheme.accent.opacity(0.4), radius: 24, x: 0, y: 8)
+                        .opacity(welcomeAnimateIn ? 1 : 0)
+                        .offset(y: welcomeAnimateIn ? 0 : 12)
+                        .animation(.easeOut(duration: 0.5).delay(0.05), value: welcomeAnimateIn)
 
-                VStack(spacing: 8) {
-                    Text("What can I help with?")
-                        .font(AppTheme.fontTitle)
+                    Text("Welcome to OSAI")
+                        .font(.system(size: 32, weight: .bold, design: .rounded))
                         .foregroundColor(AppTheme.textPrimary)
-                    Text("Pick a template to get started, or type anything below.")
+                        .opacity(welcomeAnimateIn ? 1 : 0)
+                        .offset(y: welcomeAnimateIn ? 0 : 10)
+                        .animation(.easeOut(duration: 0.5).delay(0.12), value: welcomeAnimateIn)
+
+                    Text("Your intelligent assistant. Pick a suggestion or type anything below.")
                         .font(AppTheme.fontBody)
                         .foregroundColor(AppTheme.textMuted)
                         .multilineTextAlignment(.center)
                         .frame(maxWidth: 420)
+                        .opacity(welcomeAnimateIn ? 1 : 0)
+                        .offset(y: welcomeAnimateIn ? 0 : 8)
+                        .animation(.easeOut(duration: 0.5).delay(0.18), value: welcomeAnimateIn)
                 }
 
+                // Suggestion cards 2x2
                 LazyVGrid(columns: [
                     GridItem(.flexible(), spacing: 12),
                     GridItem(.flexible(), spacing: 12),
                 ], spacing: 12) {
-                    StarterTemplateCard(
-                        icon: "chevron.left.forwardslash.chevron.right",
-                        title: "Write code",
-                        subtitle: "Help me write, debug, or refactor code"
+                    WelcomeSuggestionCard(
+                        icon: "ladybug",
+                        title: "Help me debug this code",
+                        subtitle: "Find and fix issues in your codebase"
                     ) {
-                        messageText = "Help me write code: "
-                        appState.shouldFocusInput = true
+                        startSuggestion("Help me debug this code")
                     }
-                    StarterTemplateCard(
+                    .opacity(welcomeAnimateIn ? 1 : 0)
+                    .offset(y: welcomeAnimateIn ? 0 : 14)
+                    .animation(.easeOut(duration: 0.45).delay(0.22), value: welcomeAnimateIn)
+
+                    WelcomeSuggestionCard(
+                        icon: "lightbulb",
+                        title: "Explain how this works",
+                        subtitle: "Break down concepts step by step"
+                    ) {
+                        startSuggestion("Explain how this works")
+                    }
+                    .opacity(welcomeAnimateIn ? 1 : 0)
+                    .offset(y: welcomeAnimateIn ? 0 : 14)
+                    .animation(.easeOut(duration: 0.45).delay(0.28), value: welcomeAnimateIn)
+
+                    WelcomeSuggestionCard(
+                        icon: "terminal",
+                        title: "Write a script to...",
+                        subtitle: "Automate tasks with custom scripts"
+                    ) {
+                        startSuggestion("Write a script to ")
+                    }
+                    .opacity(welcomeAnimateIn ? 1 : 0)
+                    .offset(y: welcomeAnimateIn ? 0 : 14)
+                    .animation(.easeOut(duration: 0.45).delay(0.34), value: welcomeAnimateIn)
+
+                    WelcomeSuggestionCard(
                         icon: "magnifyingglass",
-                        title: "Research",
-                        subtitle: "Investigate topics, compare alternatives"
+                        title: "Research about...",
+                        subtitle: "Investigate topics and gather insights"
                     ) {
-                        messageText = "Research this topic for me: "
-                        appState.shouldFocusInput = true
+                        startSuggestion("Research about ")
                     }
-                    StarterTemplateCard(
-                        icon: "gearshape.2",
-                        title: "Automate",
-                        subtitle: "Create workflows, schedule tasks, automate Mac"
-                    ) {
-                        messageText = "Help me automate: "
-                        appState.shouldFocusInput = true
-                    }
-                    StarterTemplateCard(
-                        icon: "doc.text",
-                        title: "Create content",
-                        subtitle: "Write emails, documents, presentations"
-                    ) {
-                        messageText = "Help me write: "
-                        appState.shouldFocusInput = true
-                    }
-                    StarterTemplateCard(
-                        icon: "chart.bar",
-                        title: "Analyze data",
-                        subtitle: "Process files, extract insights, visualize"
-                    ) {
-                        messageText = "Analyze this data: "
-                        appState.shouldFocusInput = true
-                    }
-                    StarterTemplateCard(
-                        icon: "questionmark.bubble",
-                        title: "Quick question",
-                        subtitle: "Ask anything, get instant answers"
-                    ) {
-                        messageText = ""
-                        appState.shouldFocusInput = true
-                    }
+                    .opacity(welcomeAnimateIn ? 1 : 0)
+                    .offset(y: welcomeAnimateIn ? 0 : 14)
+                    .animation(.easeOut(duration: 0.45).delay(0.40), value: welcomeAnimateIn)
                 }
                 .frame(maxWidth: 520)
-                .padding(.top, 4)
+
+                // Recent conversations section
+                if !recentConversations.isEmpty {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Recent")
+                            .font(AppTheme.fontCaption)
+                            .foregroundColor(AppTheme.textMuted)
+                            .textCase(.uppercase)
+                            .padding(.leading, 4)
+
+                        VStack(spacing: 6) {
+                            ForEach(Array(recentConversations.enumerated()), id: \.element.id) { index, conv in
+                                Button(action: {
+                                    appState.openConversation(conv)
+                                }) {
+                                    HStack(spacing: 10) {
+                                        Image(systemName: "bubble.left.and.bubble.right")
+                                            .font(.system(size: 12))
+                                            .foregroundColor(AppTheme.textMuted)
+                                            .frame(width: 20)
+
+                                        Text(conv.title)
+                                            .font(.system(size: 13, weight: .medium))
+                                            .foregroundColor(AppTheme.textPrimary)
+                                            .lineLimit(1)
+
+                                        Spacer()
+
+                                        Text(welcomeRelativeTime(conv.lastUpdated))
+                                            .font(.system(size: 11))
+                                            .foregroundColor(AppTheme.textMuted)
+                                    }
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 8)
+                                    .background(.ultraThinMaterial)
+                                    .background(AppTheme.bgGlass)
+                                    .clipShape(RoundedRectangle(cornerRadius: AppTheme.cornerRadiusSm))
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: AppTheme.cornerRadiusSm)
+                                            .stroke(AppTheme.borderGlass, lineWidth: 1)
+                                    )
+                                }
+                                .buttonStyle(.plain)
+                                .opacity(welcomeAnimateIn ? 1 : 0)
+                                .offset(y: welcomeAnimateIn ? 0 : 10)
+                                .animation(.easeOut(duration: 0.4).delay(0.46 + Double(index) * 0.06), value: welcomeAnimateIn)
+                            }
+                        }
+                    }
+                    .frame(maxWidth: 520)
+                }
+
+                // Keyboard shortcuts hint
+                HStack(spacing: 20) {
+                    welcomeShortcutHint(keys: "Cmd+N", label: "new chat")
+                    welcomeShortcutHint(keys: "Cmd+K", label: "command palette")
+                }
+                .opacity(welcomeAnimateIn ? 1 : 0)
+                .animation(.easeOut(duration: 0.4).delay(0.6), value: welcomeAnimateIn)
+                .padding(.top, 8)
 
                 Spacer(minLength: 40)
             }
             .frame(maxWidth: .infinity)
             .padding(.horizontal, AppTheme.paddingXl)
         }
+        .onAppear {
+            welcomeAnimateIn = false
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                welcomeAnimateIn = true
+            }
+        }
+        .onDisappear {
+            welcomeAnimateIn = false
+        }
+    }
+
+    private func welcomeShortcutHint(keys: String, label: String) -> some View {
+        HStack(spacing: 6) {
+            Text(keys)
+                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                .foregroundColor(AppTheme.textSecondary)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+                .background(AppTheme.bgSecondary.opacity(0.6))
+                .clipShape(RoundedRectangle(cornerRadius: 4))
+            Text(label)
+                .font(.system(size: 11))
+                .foregroundColor(AppTheme.textMuted)
+        }
+    }
+
+    private func welcomeRelativeTime(_ date: Date) -> String {
+        let elapsed = Date().timeIntervalSince(date)
+        if elapsed < 60 { return "just now" }
+        let minutes = Int(elapsed / 60)
+        if minutes < 60 { return "\(minutes)m ago" }
+        let hours = Int(elapsed / 3600)
+        if hours < 24 { return "\(hours)h ago" }
+        let days = Int(elapsed / 86400)
+        if days < 7 { return "\(days)d ago" }
+        let weeks = days / 7
+        return "\(weeks)w ago"
     }
 
     var body: some View {
@@ -418,6 +535,16 @@ struct ChatView: View {
                     }
 
                     if !focusMode, let _ = appState.activeConversation {
+                        Button(action: {
+                            showStatsSheet = true
+                        }) {
+                            Image(systemName: "chart.bar")
+                                .font(.system(size: 14))
+                                .foregroundColor(AppTheme.textSecondary)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Conversation statistics")
+
                         Button(action: {
                             withAnimation(.easeInOut(duration: 0.2)) {
                                 appState.showConversationInfo.toggle()
@@ -988,6 +1115,11 @@ struct ChatView: View {
             if let conv = appState.activeConversation {
                 CodeBlocksSheet(blocks: appState.extractCodeBlocks(from: conv), conversationTitle: conv.title)
                     .environmentObject(appState)
+            }
+        }
+        .sheet(isPresented: $showStatsSheet) {
+            if let conv = appState.activeConversation {
+                ConversationStatsSheet(stats: appState.computeStats(for: conv), conversationTitle: conv.title)
             }
         }
     }
@@ -2755,6 +2887,61 @@ struct StarterTemplateCard: View {
     }
 }
 
+// MARK: - Welcome Suggestion Card
+
+struct WelcomeSuggestionCard: View {
+    let icon: String
+    let title: String
+    let subtitle: String
+    let action: () -> Void
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                Image(systemName: icon)
+                    .font(.system(size: 20, weight: .medium))
+                    .foregroundColor(isHovered ? AppTheme.accent : AppTheme.textSecondary)
+                    .frame(width: 36, height: 36)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(isHovered ? AppTheme.accent.opacity(0.12) : AppTheme.bgSecondary.opacity(0.5))
+                    )
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(AppTheme.textPrimary)
+                        .lineLimit(1)
+
+                    Text(subtitle)
+                        .font(.system(size: 11))
+                        .foregroundColor(AppTheme.textMuted)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 0)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(14)
+            .background(.ultraThinMaterial)
+            .background(isHovered ? AppTheme.accent.opacity(0.05) : AppTheme.bgGlass)
+            .clipShape(RoundedRectangle(cornerRadius: AppTheme.cornerRadiusSm))
+            .overlay(
+                RoundedRectangle(cornerRadius: AppTheme.cornerRadiusSm)
+                    .stroke(isHovered ? AppTheme.accent.opacity(0.3) : AppTheme.borderGlass, lineWidth: 1)
+            )
+            .shadow(color: .black.opacity(isHovered ? 0.25 : 0.15), radius: isHovered ? 12 : 8, x: 0, y: isHovered ? 6 : 4)
+            .scaleEffect(isHovered ? 1.02 : 1.0)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+        .accessibilityHint(subtitle)
+        .animation(.easeOut(duration: 0.2), value: isHovered)
+        .onHover { isHovered = $0 }
+    }
+}
+
 // MARK: - Quick Suggestion
 
 struct QuickSuggestion: View {
@@ -3149,5 +3336,247 @@ struct SearchFilterChip: View {
                 )
         }
         .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Conversation Statistics Sheet
+
+struct ConversationStatsSheet: View {
+    let stats: AppState.ConversationStats
+    let conversationTitle: String
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header
+            HStack {
+                Image(systemName: "chart.bar.fill")
+                    .font(.system(size: 16))
+                    .foregroundColor(AppTheme.accent)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Conversation Statistics")
+                        .font(AppTheme.fontHeadline)
+                        .foregroundColor(AppTheme.textPrimary)
+                    Text(conversationTitle)
+                        .font(AppTheme.fontCaption)
+                        .foregroundColor(AppTheme.textSecondary)
+                        .lineLimit(1)
+                }
+                Spacer()
+                Button(action: { dismiss() }) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 18))
+                        .foregroundColor(AppTheme.textMuted)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(AppTheme.paddingLg)
+
+            ScrollView {
+                VStack(spacing: AppTheme.paddingMd) {
+                    // Messages breakdown
+                    GlassCard(hoverEnabled: false) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            statsSectionHeader(icon: "bubble.left.and.bubble.right.fill", title: "Messages")
+
+                            HStack(spacing: 16) {
+                                statsValueBlock(label: "Total", value: "\(stats.totalMessages)")
+                                statsValueBlock(label: "User", value: "\(stats.userMessages)")
+                                statsValueBlock(label: "Assistant", value: "\(stats.assistantMessages)")
+                            }
+
+                            // Mini bar chart
+                            if stats.totalMessages > 0 {
+                                GeometryReader { geo in
+                                    let userFraction = CGFloat(stats.userMessages) / CGFloat(stats.totalMessages)
+                                    HStack(spacing: 2) {
+                                        RoundedRectangle(cornerRadius: 4)
+                                            .fill(AppTheme.accent)
+                                            .frame(width: max(4, geo.size.width * userFraction))
+                                        RoundedRectangle(cornerRadius: 4)
+                                            .fill(AppTheme.accent.opacity(0.4))
+                                            .frame(width: max(4, geo.size.width * (1 - userFraction)))
+                                    }
+                                }
+                                .frame(height: 12)
+
+                                HStack {
+                                    HStack(spacing: 4) {
+                                        Circle().fill(AppTheme.accent).frame(width: 8, height: 8)
+                                        Text("User").font(.system(size: 10)).foregroundColor(AppTheme.textMuted)
+                                    }
+                                    HStack(spacing: 4) {
+                                        Circle().fill(AppTheme.accent.opacity(0.4)).frame(width: 8, height: 8)
+                                        Text("Assistant").font(.system(size: 10)).foregroundColor(AppTheme.textMuted)
+                                    }
+                                    Spacer()
+                                }
+                            }
+                        }
+                    }
+
+                    // Tokens breakdown
+                    if stats.totalTokens > 0 {
+                        GlassCard(hoverEnabled: false) {
+                            VStack(alignment: .leading, spacing: 10) {
+                                statsSectionHeader(icon: "number.circle.fill", title: "Tokens")
+
+                                HStack(spacing: 16) {
+                                    statsValueBlock(label: "Total", value: abbreviatedCount(stats.totalTokens))
+                                    statsValueBlock(label: "Input", value: abbreviatedCount(stats.inputTokens))
+                                    statsValueBlock(label: "Output", value: abbreviatedCount(stats.outputTokens))
+                                }
+
+                                // Token bar
+                                GeometryReader { geo in
+                                    let inputFraction = stats.totalTokens > 0
+                                        ? CGFloat(stats.inputTokens) / CGFloat(stats.totalTokens)
+                                        : 0.5
+                                    HStack(spacing: 2) {
+                                        RoundedRectangle(cornerRadius: 4)
+                                            .fill(Color.blue.opacity(0.7))
+                                            .frame(width: max(4, geo.size.width * inputFraction))
+                                        RoundedRectangle(cornerRadius: 4)
+                                            .fill(Color.purple.opacity(0.6))
+                                            .frame(width: max(4, geo.size.width * (1 - inputFraction)))
+                                    }
+                                }
+                                .frame(height: 12)
+
+                                HStack {
+                                    HStack(spacing: 4) {
+                                        Circle().fill(Color.blue.opacity(0.7)).frame(width: 8, height: 8)
+                                        Text("Input").font(.system(size: 10)).foregroundColor(AppTheme.textMuted)
+                                    }
+                                    HStack(spacing: 4) {
+                                        Circle().fill(Color.purple.opacity(0.6)).frame(width: 8, height: 8)
+                                        Text("Output").font(.system(size: 10)).foregroundColor(AppTheme.textMuted)
+                                    }
+                                    Spacer()
+                                }
+                            }
+                        }
+                    }
+
+                    // Timing & general stats
+                    GlassCard(hoverEnabled: false) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            statsSectionHeader(icon: "clock.fill", title: "Timing & General")
+
+                            LazyVGrid(columns: [
+                                GridItem(.flexible(), spacing: 8),
+                                GridItem(.flexible(), spacing: 8),
+                            ], spacing: 10) {
+                                statsCard(icon: "clock.arrow.circlepath", label: "Duration", value: stats.formattedDuration)
+                                statsCard(icon: "bolt.fill", label: "Avg Response", value: stats.formattedAvgResponseTime)
+                                statsCard(icon: "textformat.size", label: "Words/Message", value: String(format: "%.1f", stats.wordsPerMessage))
+                                statsCard(icon: "chevron.left.forwardslash.chevron.right", label: "Code Blocks", value: "\(stats.codeBlocksCount)")
+                            }
+                        }
+                    }
+
+                    // Top tools
+                    if !stats.topTools.isEmpty {
+                        GlassCard(hoverEnabled: false) {
+                            VStack(alignment: .leading, spacing: 10) {
+                                statsSectionHeader(icon: "wrench.and.screwdriver.fill", title: "Most Used Tools")
+
+                                let maxCount = stats.topTools.first?.count ?? 1
+                                ForEach(Array(stats.topTools.enumerated()), id: \.offset) { index, tool in
+                                    HStack(spacing: 8) {
+                                        Text("\(index + 1).")
+                                            .font(.system(size: 11, weight: .bold, design: .rounded))
+                                            .foregroundColor(AppTheme.textMuted)
+                                            .frame(width: 18, alignment: .trailing)
+
+                                        Text(tool.name)
+                                            .font(.system(size: 12, weight: .medium, design: .monospaced))
+                                            .foregroundColor(AppTheme.textPrimary)
+                                            .lineLimit(1)
+
+                                        Spacer()
+
+                                        // Usage bar
+                                        GeometryReader { geo in
+                                            let fraction = CGFloat(tool.count) / CGFloat(max(1, maxCount))
+                                            HStack(spacing: 0) {
+                                                Spacer()
+                                                RoundedRectangle(cornerRadius: 3)
+                                                    .fill(AppTheme.accent.opacity(0.6))
+                                                    .frame(width: max(8, geo.size.width * fraction))
+                                            }
+                                        }
+                                        .frame(width: 80, height: 10)
+
+                                        Text("\(tool.count)")
+                                            .font(.system(size: 11, weight: .semibold, design: .rounded))
+                                            .foregroundColor(AppTheme.accent)
+                                            .frame(width: 30, alignment: .trailing)
+                                    }
+                                    .padding(.vertical, 2)
+                                }
+                            }
+                        }
+                    }
+                }
+                .padding(AppTheme.paddingLg)
+            }
+        }
+        .frame(minWidth: 420, idealWidth: 480, minHeight: 460, idealHeight: 560)
+        .background(AppTheme.bgPrimary)
+    }
+
+    // MARK: - Helpers
+
+    @ViewBuilder
+    private func statsSectionHeader(icon: String, title: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: icon)
+                .font(.system(size: 13))
+                .foregroundColor(AppTheme.accent)
+            Text(title)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundColor(AppTheme.textPrimary)
+        }
+    }
+
+    @ViewBuilder
+    private func statsValueBlock(label: String, value: String) -> some View {
+        VStack(spacing: 2) {
+            Text(value)
+                .font(.system(size: 18, weight: .bold, design: .rounded))
+                .foregroundColor(AppTheme.textPrimary)
+            Text(label)
+                .font(.system(size: 10))
+                .foregroundColor(AppTheme.textMuted)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    @ViewBuilder
+    private func statsCard(icon: String, label: String, value: String) -> some View {
+        VStack(spacing: 4) {
+            Image(systemName: icon)
+                .font(.system(size: 14))
+                .foregroundColor(AppTheme.accent.opacity(0.8))
+            Text(value)
+                .font(.system(size: 15, weight: .semibold, design: .rounded))
+                .foregroundColor(AppTheme.textPrimary)
+            Text(label)
+                .font(.system(size: 10))
+                .foregroundColor(AppTheme.textMuted)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 8)
+        .background(AppTheme.bgCard.opacity(0.5))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func abbreviatedCount(_ count: Int) -> String {
+        if count < 1000 { return "\(count)" }
+        if count < 1_000_000 {
+            return String(format: "%.1fk", Double(count) / 1000.0)
+        }
+        return String(format: "%.2fM", Double(count) / 1_000_000.0)
     }
 }
