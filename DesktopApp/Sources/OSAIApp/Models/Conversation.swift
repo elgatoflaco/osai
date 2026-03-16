@@ -76,6 +76,11 @@ struct Conversation: Identifiable {
         totalInputTokens + totalOutputTokens
     }
 
+    /// The date of the most recent message, or createdAt if no messages exist.
+    var lastUpdated: Date {
+        messages.last?.timestamp ?? createdAt
+    }
+
     var lastMessage: String {
         messages.last?.content ?? ""
     }

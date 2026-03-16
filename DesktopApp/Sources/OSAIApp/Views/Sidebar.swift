@@ -76,6 +76,59 @@ struct Sidebar: View {
                 .padding(.horizontal, 16)
                 .padding(.bottom, 12)
 
+            // Notification bell
+            Button(action: {
+                withAnimation(.easeOut(duration: 0.2)) {
+                    appState.showNotificationPanel.toggle()
+                }
+            }) {
+                HStack(spacing: 8) {
+                    ZStack(alignment: .topTrailing) {
+                        Image(systemName: "bell.fill")
+                            .font(.system(size: 14))
+                            .foregroundColor(AppTheme.textSecondary)
+                            .frame(width: 24, height: 24)
+
+                        if appState.unreadNotificationCount > 0 {
+                            Text("\(min(appState.unreadNotificationCount, 99))")
+                                .font(.system(size: 8, weight: .bold))
+                                .foregroundColor(.white)
+                                .frame(minWidth: 14, minHeight: 14)
+                                .background(AppTheme.error)
+                                .clipShape(Circle())
+                                .offset(x: 4, y: -4)
+                        }
+                    }
+
+                    if !appState.sidebarCollapsed {
+                        Text("Notifications")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(AppTheme.textSecondary)
+
+                        Spacer()
+
+                        if appState.unreadNotificationCount > 0 {
+                            Text("\(appState.unreadNotificationCount)")
+                                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                                .foregroundColor(AppTheme.accent)
+                        }
+                    }
+                }
+                .padding(.horizontal, appState.sidebarCollapsed ? 0 : 12)
+                .padding(.vertical, 6)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Notifications")
+            .accessibilityValue(appState.unreadNotificationCount > 0 ? "\(appState.unreadNotificationCount) unread" : "No unread")
+            .help("Notifications")
+            .padding(.horizontal, 16)
+            .padding(.bottom, 4)
+            .popover(isPresented: $appState.showNotificationPanel, arrowEdge: .trailing) {
+                NotificationPanelView()
+                    .environmentObject(appState)
+            }
+
             // Gateway status (clickable)
             Button(action: {
                 appState.toggleGateway()

@@ -4,6 +4,51 @@ import Combine
 import UniformTypeIdentifiers
 import UserNotifications
 
+// MARK: - App Notification
+
+enum NotificationType {
+    case info, success, warning, error
+
+    var icon: String {
+        switch self {
+        case .info: return "info.circle.fill"
+        case .success: return "checkmark.circle.fill"
+        case .warning: return "exclamationmark.triangle.fill"
+        case .error: return "xmark.circle.fill"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .info: return Color.blue
+        case .success: return AppTheme.success
+        case .warning: return AppTheme.warning
+        case .error: return AppTheme.error
+        }
+    }
+}
+
+struct AppNotification: Identifiable {
+    let id = UUID()
+    let timestamp: Date
+    let title: String
+    let message: String
+    let type: NotificationType
+    var isRead: Bool = false
+
+    /// Returns a human-readable relative timestamp string.
+    var relativeTime: String {
+        let elapsed = Date().timeIntervalSince(timestamp)
+        if elapsed < 60 { return "just now" }
+        let minutes = Int(elapsed / 60)
+        if minutes < 60 { return "\(minutes)m ago" }
+        let hours = Int(elapsed / 3600)
+        if hours < 24 { return "\(hours)h ago" }
+        let days = Int(elapsed / 86400)
+        return "\(days)d ago"
+    }
+}
+
 // MARK: - Toast
 
 enum ToastType {
@@ -33,6 +78,26 @@ struct Toast: Identifiable, Equatable {
 
     static func == (lhs: Toast, rhs: Toast) -> Bool {
         lhs.id == rhs.id
+    }
+}
+
+enum ConversationSortOrder: String, CaseIterable, Identifiable {
+    case recent = "Recent"
+    case oldest = "Oldest first"
+    case mostMessages = "Most messages"
+    case mostTokens = "Most tokens"
+    case alphabetical = "Alphabetical"
+
+    var id: String { rawValue }
+
+    var icon: String {
+        switch self {
+        case .recent: return "clock"
+        case .oldest: return "clock.arrow.circlepath"
+        case .mostMessages: return "bubble.left.and.bubble.right"
+        case .mostTokens: return "number"
+        case .alphabetical: return "textformat.abc"
+        }
     }
 }
 
@@ -97,6 +162,39 @@ class AppState: ObservableObject {
     @Published var showSidebarOverlay: Bool = false
     @Published var contextPressurePercent: Int = 0
     @Published var suggestedReplies: [String] = []
+    @Published var conversationSortOrder: ConversationSortOrder = .recent
+    @Published var notifications: [AppNotification] = []
+    @Published var showNotificationPanel: Bool = false
+
+    var unreadNotificationCount: Int {
+        notifications.filter { !$0.isRead }.count
+    }
+
+
+    /// Returns conversations sorted by the selected sort order, with pinned items always first.
+    var sortedConversations: [Conversation] {
+        let pinned = conversations.filter { $0.isPinned }
+        let unpinned = conversations.filter { !$0.isPinned }
+        let sortedPinned = sortConversations(pinned)
+        let sortedUnpinned = sortConversations(unpinned)
+        return sortedPinned + sortedUnpinned
+    }
+
+    private func sortConversations(_ convs: [Conversation]) -> [Conversation] {
+        switch conversationSortOrder {
+        case .recent:
+            return convs.sorted { $0.lastUpdated > $1.lastUpdated }
+        case .oldest:
+            return convs.sorted { $0.lastUpdated < $1.lastUpdated }
+        case .mostMessages:
+            return convs.sorted { $0.messages.count > $1.messages.count }
+        case .mostTokens:
+            return convs.sorted { $0.totalTokens > $1.totalTokens }
+        case .alphabetical:
+            return convs.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+        }
+    }
+
     private(set) var runningProcess: Process?
 
     let service = OSAIService()
@@ -134,6 +232,25 @@ class AppState: ObservableObject {
         }
     }
 
+    func addNotification(title: String, message: String, type: NotificationType) {
+        let notification = AppNotification(timestamp: Date(), title: title, message: message, type: type)
+        notifications.insert(notification, at: 0)
+        // Auto-trim to 50
+        if notifications.count > 50 {
+            notifications = Array(notifications.prefix(50))
+        }
+    }
+
+    func markAllRead() {
+        for i in notifications.indices {
+            notifications[i].isRead = true
+        }
+    }
+
+    func clearNotifications() {
+        notifications.removeAll()
+    }
+
     func loadAll() {
         requestNotificationPermission()
         isLoading = true
@@ -168,6 +285,7 @@ class AppState: ObservableObject {
         if wasRunning && !gatewayRunning {
             sendNotification(title: "OSAI", body: "Gateway stopped unexpectedly")
             showToast("Gateway stopped unexpectedly", type: .error)
+            addNotification(title: "Gateway Stopped", message: "Gateway stopped unexpectedly", type: .error)
         }
     }
 
@@ -289,6 +407,10 @@ class AppState: ObservableObject {
                     self.generateSuggestedReplies(from: lastAssistant.content)
                 }
 
+                // Add in-app notification for completed response
+                let agentLabel = activeConversation?.agentName ?? "Chat"
+                addNotification(title: "Response Complete", message: "\(agentLabel) finished responding", type: .success)
+
                 // Send notification if app is in the background
                 if let app = NSApp, !app.isActive {
                     let title = activeConversation?.agentName ?? "OSAI"
@@ -362,6 +484,7 @@ class AppState: ObservableObject {
                 startTime: Date()
             )
             activeConversation?.messages[idx].activities.append(activity)
+            addNotification(title: "Agent Routed", message: "Routed to \(agent)", type: .info)
 
         case .status(let message):
             let activity = ActivityItem(
@@ -390,6 +513,7 @@ class AppState: ObservableObject {
             }
             activeConversation?.messages[idx].content = state.accumulatedText
             showToast(message, type: .error)
+            addNotification(title: "Error", message: message, type: .error)
 
         case .done:
             activeConversation?.messages[idx].isStreaming = false
@@ -615,7 +739,9 @@ class AppState: ObservableObject {
             }
             try? await Task.sleep(for: .seconds(1))
             refreshStatus()
-            showToast(wasRunning ? "Gateway stopped" : "Gateway started", type: .success)
+            let gwMsg = wasRunning ? "Gateway stopped" : "Gateway started"
+            showToast(gwMsg, type: .success)
+            addNotification(title: "Gateway", message: gwMsg, type: wasRunning ? .warning : .success)
         }
     }
 

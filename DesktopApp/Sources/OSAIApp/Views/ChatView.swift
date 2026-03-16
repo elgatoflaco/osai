@@ -18,6 +18,9 @@ struct ChatView: View {
     @State private var selectedConversationIds: Set<String> = []
     @State private var scrollToMessageId: String? = nil
     @State private var searchIncludesMessages = false
+    @State private var renamingConversationId: String? = nil
+    @State private var renamingText: String = ""
+    @State private var deleteConfirmConversation: Conversation? = nil
 
     // MARK: - Date grouping
 
@@ -38,11 +41,12 @@ struct ChatView: View {
     }
 
     private var filteredConversations: [Conversation] {
+        let sorted = appState.sortedConversations
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return appState.conversations }
+        guard !query.isEmpty else { return sorted }
 
         // Title/agent matches
-        let titleMatches = appState.conversations.filter { conv in
+        let titleMatches = sorted.filter { conv in
             conv.title.localizedCaseInsensitiveContains(query) ||
             (conv.agentName?.localizedCaseInsensitiveContains(query) ?? false)
         }
@@ -111,6 +115,90 @@ struct ChatView: View {
     /// Hide conversation list when window is narrow or focus mode is toggled
     private var effectiveFocusMode: Bool {
         focusMode || appState.sidebarHidden
+    }
+
+    // MARK: - Conversation Starter View
+
+    @ViewBuilder
+    private var conversationStarterView: some View {
+        ScrollView(.vertical, showsIndicators: false) {
+            VStack(spacing: 24) {
+                Spacer(minLength: 40)
+
+                GhostIcon(size: 72)
+
+                VStack(spacing: 8) {
+                    Text("What can I help with?")
+                        .font(AppTheme.fontTitle)
+                        .foregroundColor(AppTheme.textPrimary)
+                    Text("Pick a template to get started, or type anything below.")
+                        .font(AppTheme.fontBody)
+                        .foregroundColor(AppTheme.textMuted)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: 420)
+                }
+
+                LazyVGrid(columns: [
+                    GridItem(.flexible(), spacing: 12),
+                    GridItem(.flexible(), spacing: 12),
+                ], spacing: 12) {
+                    StarterTemplateCard(
+                        icon: "chevron.left.forwardslash.chevron.right",
+                        title: "Write code",
+                        subtitle: "Help me write, debug, or refactor code"
+                    ) {
+                        messageText = "Help me write code: "
+                        appState.shouldFocusInput = true
+                    }
+                    StarterTemplateCard(
+                        icon: "magnifyingglass",
+                        title: "Research",
+                        subtitle: "Investigate topics, compare alternatives"
+                    ) {
+                        messageText = "Research this topic for me: "
+                        appState.shouldFocusInput = true
+                    }
+                    StarterTemplateCard(
+                        icon: "gearshape.2",
+                        title: "Automate",
+                        subtitle: "Create workflows, schedule tasks, automate Mac"
+                    ) {
+                        messageText = "Help me automate: "
+                        appState.shouldFocusInput = true
+                    }
+                    StarterTemplateCard(
+                        icon: "doc.text",
+                        title: "Create content",
+                        subtitle: "Write emails, documents, presentations"
+                    ) {
+                        messageText = "Help me write: "
+                        appState.shouldFocusInput = true
+                    }
+                    StarterTemplateCard(
+                        icon: "chart.bar",
+                        title: "Analyze data",
+                        subtitle: "Process files, extract insights, visualize"
+                    ) {
+                        messageText = "Analyze this data: "
+                        appState.shouldFocusInput = true
+                    }
+                    StarterTemplateCard(
+                        icon: "questionmark.bubble",
+                        title: "Quick question",
+                        subtitle: "Ask anything, get instant answers"
+                    ) {
+                        messageText = ""
+                        appState.shouldFocusInput = true
+                    }
+                }
+                .frame(maxWidth: 520)
+                .padding(.top, 4)
+
+                Spacer(minLength: 40)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, AppTheme.paddingXl)
+        }
     }
 
     var body: some View {
@@ -205,6 +293,36 @@ struct ChatView: View {
                 .padding(.top, 8)
                 .padding(.bottom, 4)
 
+                // Sort order selector
+                HStack(spacing: 4) {
+                    Menu {
+                        ForEach(ConversationSortOrder.allCases) { order in
+                            Button(action: { appState.conversationSortOrder = order }) {
+                                Label {
+                                    Text(order.rawValue)
+                                } icon: {
+                                    Image(systemName: order.icon)
+                                }
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: 3) {
+                            Image(systemName: "arrow.up.arrow.down")
+                                .font(.system(size: 9))
+                            Text(appState.conversationSortOrder.rawValue)
+                                .font(.system(size: 10))
+                        }
+                        .foregroundColor(AppTheme.textMuted)
+                    }
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                    .fixedSize()
+
+                    Spacer()
+                }
+                .padding(.horizontal, 12)
+                .padding(.bottom, 2)
+
                 // "Search in messages" toggle when there's a query
                 if !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     HStack(spacing: 4) {
@@ -258,11 +376,37 @@ struct ChatView: View {
                                             ConversationRow(
                                                 conv: conv,
                                                 isActive: appState.activeConversation?.id == conv.id,
+                                                isRenaming: renamingConversationId == conv.id,
+                                                renamingText: renamingConversationId == conv.id ? $renamingText : .constant(""),
                                                 onSelect: { isSelecting ? toggleSelection(conv.id) : appState.openConversation(conv) },
-                                                onDelete: { appState.deleteConversation(conv) },
+                                                onDelete: { deleteConfirmConversation = conv },
                                                 onExport: { appState.exportAndSave(conv) },
-                                                onTogglePin: { appState.togglePin(conv) }
+                                                onTogglePin: { appState.togglePin(conv) },
+                                                onRename: {
+                                                    renamingText = conv.title
+                                                    renamingConversationId = conv.id
+                                                },
+                                                onCommitRename: {
+                                                    appState.renameConversation(conv, to: renamingText)
+                                                    renamingConversationId = nil
+                                                },
+                                                onCancelRename: { renamingConversationId = nil }
                                             )
+                                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                                Button(role: .destructive) {
+                                                    deleteConfirmConversation = conv
+                                                } label: {
+                                                    Label("Delete", systemImage: "trash")
+                                                }
+                                            }
+                                            .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                                                Button {
+                                                    appState.togglePin(conv)
+                                                } label: {
+                                                    Label(conv.isPinned ? "Unpin" : "Pin", systemImage: conv.isPinned ? "pin.slash" : "pin")
+                                                }
+                                                .tint(.yellow)
+                                            }
                                         }
                                     }
                                 } header: {
@@ -295,11 +439,37 @@ struct ChatView: View {
                                             ConversationRow(
                                                 conv: conv,
                                                 isActive: appState.activeConversation?.id == conv.id,
+                                                isRenaming: renamingConversationId == conv.id,
+                                                renamingText: renamingConversationId == conv.id ? $renamingText : .constant(""),
                                                 onSelect: { isSelecting ? toggleSelection(conv.id) : appState.openConversation(conv) },
-                                                onDelete: { appState.deleteConversation(conv) },
+                                                onDelete: { deleteConfirmConversation = conv },
                                                 onExport: { appState.exportAndSave(conv) },
-                                                onTogglePin: { appState.togglePin(conv) }
+                                                onTogglePin: { appState.togglePin(conv) },
+                                                onRename: {
+                                                    renamingText = conv.title
+                                                    renamingConversationId = conv.id
+                                                },
+                                                onCommitRename: {
+                                                    appState.renameConversation(conv, to: renamingText)
+                                                    renamingConversationId = nil
+                                                },
+                                                onCancelRename: { renamingConversationId = nil }
                                             )
+                                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                                Button(role: .destructive) {
+                                                    deleteConfirmConversation = conv
+                                                } label: {
+                                                    Label("Delete", systemImage: "trash")
+                                                }
+                                            }
+                                            .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                                                Button {
+                                                    appState.togglePin(conv)
+                                                } label: {
+                                                    Label(conv.isPinned ? "Unpin" : "Pin", systemImage: conv.isPinned ? "pin.slash" : "pin")
+                                                }
+                                                .tint(.yellow)
+                                            }
                                         }
                                     }
                                 } header: {
@@ -455,6 +625,20 @@ struct ChatView: View {
             }
             .frame(width: 220)
             .background(AppTheme.bgSecondary.opacity(0.3))
+            .alert("Delete Conversation", isPresented: Binding(
+                get: { deleteConfirmConversation != nil },
+                set: { if !$0 { deleteConfirmConversation = nil } }
+            )) {
+                Button("Cancel", role: .cancel) { deleteConfirmConversation = nil }
+                Button("Delete", role: .destructive) {
+                    if let conv = deleteConfirmConversation {
+                        appState.deleteConversation(conv)
+                    }
+                    deleteConfirmConversation = nil
+                }
+            } message: {
+                Text("Are you sure you want to delete \"\(deleteConfirmConversation?.title ?? "")\"? This cannot be undone.")
+            }
 
             Divider().background(AppTheme.borderGlass)
             } // end focusMode
@@ -758,49 +942,7 @@ struct ChatView: View {
                         }
                     }
                 } else {
-                    // Empty state
-                    VStack(spacing: 20) {
-                        Spacer()
-                        GhostIcon(size: 80)
-                        Text("Start a conversation")
-                            .font(AppTheme.fontHeadline)
-                            .foregroundColor(AppTheme.textSecondary)
-                        Text("Ask anything — osai will route to the best agent automatically.")
-                            .font(AppTheme.fontBody)
-                            .foregroundColor(AppTheme.textMuted)
-                            .multilineTextAlignment(.center)
-                            .frame(maxWidth: 400)
-
-                        // Quick suggestions
-                        LazyVGrid(columns: [
-                            GridItem(.flexible()),
-                            GridItem(.flexible()),
-                        ], spacing: 8) {
-                            QuickSuggestion(text: "Check my emails", icon: "envelope") {
-                                messageText = "Check my emails"
-                            }
-                            QuickSuggestion(text: "What's on my calendar?", icon: "calendar") {
-                                messageText = "What's on my calendar?"
-                            }
-                            QuickSuggestion(text: "Noticias de hoy", icon: "newspaper") {
-                                messageText = "Dame un briefing de las noticias de hoy"
-                            }
-                            QuickSuggestion(text: "Help me code", icon: "terminal") {
-                                messageText = "Help me code"
-                            }
-                            QuickSuggestion(text: "Organiza mis tareas", icon: "checklist") {
-                                messageText = "Organiza mis tareas pendientes"
-                            }
-                            QuickSuggestion(text: "Redacta un email", icon: "pencil.line") {
-                                messageText = "Redacta un email profesional"
-                            }
-                        }
-                        .frame(maxWidth: 450)
-                        .padding(.top, 8)
-
-                        Spacer()
-                    }
-                    .padding(AppTheme.paddingXl)
+                    conversationStarterView
                 }
 
                 // Quick reply suggestions
@@ -1092,12 +1234,16 @@ struct HighlightedText: View {
 struct ConversationRow: View {
     let conv: Conversation
     let isActive: Bool
+    var isRenaming: Bool = false
+    var renamingText: Binding<String> = .constant("")
     let onSelect: () -> Void
     let onDelete: () -> Void
     var onExport: (() -> Void)? = nil
     var onTogglePin: (() -> Void)? = nil
+    var onRename: (() -> Void)? = nil
+    var onCommitRename: (() -> Void)? = nil
+    var onCancelRename: (() -> Void)? = nil
     @State private var isHovered = false
-    @State private var showDelete = false
 
     var body: some View {
         Button(action: onSelect) {
@@ -1109,10 +1255,23 @@ struct ConversationRow: View {
                                 .font(.system(size: 8))
                                 .foregroundColor(AppTheme.accent.opacity(0.7))
                         }
-                        Text(conv.title)
-                            .font(.system(size: 12, weight: isActive ? .semibold : .regular))
-                            .foregroundColor(isActive ? AppTheme.textPrimary : AppTheme.textSecondary)
-                            .lineLimit(1)
+                        if isRenaming {
+                            TextField("Title", text: renamingText)
+                                .textFieldStyle(.plain)
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundColor(AppTheme.textPrimary)
+                                .padding(.horizontal, 4)
+                                .padding(.vertical, 1)
+                                .background(AppTheme.bgCard.opacity(0.6))
+                                .clipShape(RoundedRectangle(cornerRadius: 4))
+                                .onSubmit { onCommitRename?() }
+                                .onExitCommand { onCancelRename?() }
+                        } else {
+                            Text(conv.title)
+                                .font(.system(size: 12, weight: isActive ? .semibold : .regular))
+                                .foregroundColor(isActive ? AppTheme.textPrimary : AppTheme.textSecondary)
+                                .lineLimit(1)
+                        }
                     }
 
                     HStack(spacing: 4) {
@@ -1166,6 +1325,9 @@ struct ConversationRow: View {
         .accessibilityAddTraits(isActive ? .isSelected : [])
         .onHover { isHovered = $0 }
         .contextMenu {
+            Button(action: { onRename?() }) {
+                Label("Rename", systemImage: "pencil")
+            }
             Button(action: { onTogglePin?() }) {
                 Label(conv.isPinned ? "Unpin" : "Pin", systemImage: conv.isPinned ? "pin.slash" : "pin")
             }
@@ -1202,6 +1364,54 @@ private struct ScrollOffsetPreferenceKey: PreferenceKey {
     static var defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         value = nextValue()
+    }
+}
+
+// MARK: - Starter Template Card
+
+struct StarterTemplateCard: View {
+    let icon: String
+    let title: String
+    let subtitle: String
+    let action: () -> Void
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 8) {
+                Image(systemName: icon)
+                    .font(.system(size: 20, weight: .medium))
+                    .foregroundColor(isHovered ? AppTheme.accent : AppTheme.textSecondary)
+                    .frame(width: 32, height: 32)
+
+                Text(title)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(isHovered ? AppTheme.textPrimary : AppTheme.textPrimary)
+                    .lineLimit(1)
+
+                Text(subtitle)
+                    .font(.system(size: 11))
+                    .foregroundColor(AppTheme.textMuted)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(14)
+            .background(.ultraThinMaterial)
+            .background(isHovered ? AppTheme.accent.opacity(0.05) : AppTheme.bgGlass)
+            .clipShape(RoundedRectangle(cornerRadius: AppTheme.cornerRadiusSm))
+            .overlay(
+                RoundedRectangle(cornerRadius: AppTheme.cornerRadiusSm)
+                    .stroke(isHovered ? AppTheme.accent.opacity(0.3) : AppTheme.borderGlass, lineWidth: 1)
+            )
+            .shadow(color: .black.opacity(isHovered ? 0.25 : 0.15), radius: isHovered ? 12 : 8, x: 0, y: isHovered ? 6 : 4)
+            .scaleEffect(isHovered ? 1.02 : 1.0)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+        .accessibilityHint(subtitle)
+        .animation(.easeOut(duration: 0.2), value: isHovered)
+        .onHover { isHovered = $0 }
     }
 }
 
