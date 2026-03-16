@@ -210,6 +210,50 @@ let allModelDefinitions: [ModelDefinition] = [
     ModelDefinition(id: "claude-code", displayName: "Claude Code", shortName: "Claude Code", provider: "Local", providerKey: "claude-code", tag: "Local", icon: "terminal"),
 ]
 
+// MARK: - Code Block
+
+struct CodeBlock: Identifiable {
+    let id = UUID()
+    let language: String
+    let code: String
+    let messageIndex: Int
+
+    /// File extension inferred from the language identifier.
+    var fileExtension: String {
+        switch language.lowercased() {
+        case "swift": return ".swift"
+        case "python", "py": return ".py"
+        case "javascript", "js": return ".js"
+        case "typescript", "ts": return ".ts"
+        case "bash", "sh", "shell", "zsh": return ".sh"
+        case "html": return ".html"
+        case "css": return ".css"
+        case "json": return ".json"
+        case "rust", "rs": return ".rs"
+        case "go", "golang": return ".go"
+        case "ruby", "rb": return ".rb"
+        case "yaml", "yml": return ".yml"
+        case "c": return ".c"
+        case "cpp", "c++": return ".cpp"
+        case "java": return ".java"
+        case "sql": return ".sql"
+        case "xml": return ".xml"
+        case "toml": return ".toml"
+        case "markdown", "md": return ".md"
+        default: return ".txt"
+        }
+    }
+
+    var preview: String {
+        let lines = code.components(separatedBy: "\n")
+        return lines.prefix(3).joined(separator: "\n")
+    }
+
+    var lineCount: Int {
+        code.components(separatedBy: "\n").count
+    }
+}
+
 @MainActor
 // MARK: - Dashboard Section
 
@@ -1543,6 +1587,110 @@ class AppState: ObservableObject {
         showToast("Agent \"\(name)\" deleted", type: .success)
     }
 
+    // MARK: - Agent Import/Export
+
+    /// Returns the raw .md content for the named agent.
+    func exportAgent(name: String) -> String {
+        let path = NSHomeDirectory() + "/.desktop-agent/agents/\(name).md"
+        return (try? String(contentsOfFile: path, encoding: .utf8)) ?? ""
+    }
+
+    /// Copies an agent .md file into ~/.desktop-agent/agents/ and reloads.
+    @discardableResult
+    func importAgent(from url: URL) -> Bool {
+        guard let content = try? String(contentsOf: url, encoding: .utf8) else {
+            showToast("Failed to read agent file", type: .error)
+            return false
+        }
+        let result = validateAgentFile(content: content)
+        guard result.valid, let agentName = result.name else {
+            showToast(result.error ?? "Invalid agent file", type: .error)
+            return false
+        }
+        let agentsDir = NSHomeDirectory() + "/.desktop-agent/agents"
+        try? FileManager.default.createDirectory(atPath: agentsDir, withIntermediateDirectories: true)
+        let destPath = "\(agentsDir)/\(agentName).md"
+        do {
+            try content.write(toFile: destPath, atomically: true, encoding: .utf8)
+        } catch {
+            showToast("Failed to write agent file: \(error.localizedDescription)", type: .error)
+            return false
+        }
+        agents = service.loadAgents()
+        showToast("Agent \"\(agentName)\" imported", type: .success)
+        return true
+    }
+
+    /// Imports agent content with an optional name override (for rename on conflict).
+    @discardableResult
+    func importAgentContent(_ content: String, overrideName: String? = nil) -> Bool {
+        var finalContent = content
+        if let newName = overrideName {
+            finalContent = content.replacingOccurrences(
+                of: "(?m)^name:.*$",
+                with: "name: \(newName)",
+                options: .regularExpression
+            )
+        }
+        let result = validateAgentFile(content: finalContent)
+        guard result.valid, let agentName = result.name else {
+            showToast(result.error ?? "Invalid agent file", type: .error)
+            return false
+        }
+        let agentsDir = NSHomeDirectory() + "/.desktop-agent/agents"
+        try? FileManager.default.createDirectory(atPath: agentsDir, withIntermediateDirectories: true)
+        let destPath = "\(agentsDir)/\(agentName).md"
+        do {
+            try finalContent.write(toFile: destPath, atomically: true, encoding: .utf8)
+        } catch {
+            showToast("Failed to write agent file: \(error.localizedDescription)", type: .error)
+            return false
+        }
+        agents = service.loadAgents()
+        showToast("Agent \"\(agentName)\" imported", type: .success)
+        return true
+    }
+
+    /// Validates agent markdown content. Returns validity, parsed name, and error message.
+    func validateAgentFile(content: String) -> (valid: Bool, name: String?, error: String?) {
+        let lines = content.components(separatedBy: "\n")
+        var name: String?
+        var model: String?
+        var frontmatterCount = 0
+        var hasFrontmatter = false
+
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed == "---" {
+                frontmatterCount += 1
+                if frontmatterCount >= 2 { hasFrontmatter = true; break }
+                continue
+            }
+            if frontmatterCount == 1 {
+                if trimmed.hasPrefix("name:") {
+                    name = trimmed.replacingOccurrences(of: "name:", with: "").trimmingCharacters(in: .whitespaces)
+                } else if trimmed.hasPrefix("model:") {
+                    model = trimmed.replacingOccurrences(of: "model:", with: "").trimmingCharacters(in: .whitespaces)
+                }
+            }
+        }
+
+        guard hasFrontmatter else {
+            return (false, nil, "File is missing YAML frontmatter (--- delimiters)")
+        }
+        guard let agentName = name, !agentName.isEmpty else {
+            return (false, nil, "Agent file is missing a 'name' field")
+        }
+        if let m = model, !m.isEmpty {
+            let validPrefixes = ["anthropic/", "google/", "openrouter/", "openai/", "claude-code"]
+            let hasValidFormat = validPrefixes.contains(where: { m.hasPrefix($0) }) || m.contains("/")
+            if !hasValidFormat {
+                return (false, agentName, "Model format '\(m)' may be invalid. Expected provider/model or 'claude-code'.")
+            }
+        }
+        return (true, agentName, nil)
+    }
+
     // MARK: - Task CRUD
 
     func createTask(id: String, description: String, command: String, scheduleType: String,
@@ -2045,6 +2193,35 @@ class AppState: ObservableObject {
         }
 
         return md
+    }
+
+    // MARK: - Code Block Extraction
+
+    func extractCodeBlocks(from conversation: Conversation) -> [CodeBlock] {
+        var blocks: [CodeBlock] = []
+        let pattern = "```(\\w*)\\n([\\s\\S]*?)```"
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return blocks }
+
+        for (index, message) in conversation.messages.enumerated() {
+            guard message.role == .assistant else { continue }
+            let content = message.content
+            let nsContent = content as NSString
+            let matches = regex.matches(in: content, range: NSRange(location: 0, length: nsContent.length))
+            for match in matches {
+                let langRange = match.range(at: 1)
+                let codeRange = match.range(at: 2)
+                let language = langRange.location != NSNotFound ? nsContent.substring(with: langRange) : ""
+                let code = codeRange.location != NSNotFound ? nsContent.substring(with: codeRange) : ""
+                let trimmedCode = code.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmedCode.isEmpty else { continue }
+                blocks.append(CodeBlock(
+                    language: language.isEmpty ? "text" : language,
+                    code: trimmedCode,
+                    messageIndex: index
+                ))
+            }
+        }
+        return blocks
     }
 
     func exportAndSave(_ conv: Conversation) {

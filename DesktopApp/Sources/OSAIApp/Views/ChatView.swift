@@ -31,6 +31,9 @@ struct ChatView: View {
     @State private var showBookmarksPanel: Bool = false
     @State private var shareMode: Bool = false
     @State private var selectedShareMessageIds: Set<String> = []
+    @State private var showCodeBlocksSheet: Bool = false
+    @State private var showCalendarBrowser: Bool = false
+    @State private var calendarSelectedDate: Date? = nil
 
     // MARK: - Date grouping
 
@@ -379,6 +382,14 @@ struct ChatView: View {
                         }
                         .buttonStyle(.plain)
                         .help(shareMode ? "Exit share mode" : "Select messages to share")
+
+                        Button(action: { showCodeBlocksSheet = true }) {
+                            Image(systemName: "curlybraces")
+                                .font(.system(size: 14))
+                                .foregroundColor(AppTheme.textSecondary)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Extract code blocks")
 
                         Button(action: { appState.presentExportSheet(for: conv) }) {
                             Image(systemName: "square.and.arrow.up")
@@ -849,6 +860,12 @@ struct ChatView: View {
                     .environmentObject(appState)
             }
         }
+        .sheet(isPresented: $showCodeBlocksSheet) {
+            if let conv = appState.activeConversation {
+                CodeBlocksSheet(blocks: appState.extractCodeBlocks(from: conv), conversationTitle: conv.title)
+                    .environmentObject(appState)
+            }
+        }
     }
 
     // MARK: - Conversation Row Builder
@@ -1268,6 +1285,19 @@ struct ChatView: View {
                     .buttonStyle(.plain)
                     .accessibilityLabel("New chat")
 
+                    Button(action: {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            showCalendarBrowser.toggle()
+                            if !showCalendarBrowser { calendarSelectedDate = nil }
+                        }
+                    }) {
+                        Image(systemName: showCalendarBrowser ? "list.bullet" : "calendar")
+                            .font(.system(size: 13))
+                            .foregroundColor(showCalendarBrowser ? AppTheme.accent : AppTheme.textSecondary)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(showCalendarBrowser ? "Show list view" : "Show calendar view")
+
                     Menu {
                         Button(action: {
                             isSelecting.toggle()
@@ -1408,7 +1438,10 @@ struct ChatView: View {
                     tagFilterBar
                 }
 
-                if filteredConversations.isEmpty && contentSearchResults.isEmpty {
+                if showCalendarBrowser {
+                    CalendarBrowserView(selectedDate: $calendarSelectedDate)
+                        .environmentObject(appState)
+                } else if filteredConversations.isEmpty && contentSearchResults.isEmpty {
                     VStack(spacing: 8) {
                         Spacer()
                         Image(systemName: searchText.isEmpty ? "bubble.left.and.bubble.right" : "magnifyingglass")
@@ -2329,6 +2362,233 @@ struct AttachmentPill: View {
                     thumbnail = thumb
                 }
             }
+        }
+    }
+}
+
+// MARK: - Code Blocks Sheet
+
+struct CodeBlocksSheet: View {
+    @EnvironmentObject var appState: AppState
+    @Environment(\.dismiss) private var dismiss
+    let blocks: [CodeBlock]
+    let conversationTitle: String
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header
+            HStack {
+                Image(systemName: "curlybraces")
+                    .font(.system(size: 16))
+                    .foregroundColor(AppTheme.accent)
+                Text("Code Blocks")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundColor(AppTheme.textPrimary)
+                Text("(\(blocks.count))")
+                    .font(.system(size: 13))
+                    .foregroundColor(AppTheme.textMuted)
+                Spacer()
+                if !blocks.isEmpty {
+                    Button("Copy All") { copyAllBlocks() }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(AppTheme.accent)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(AppTheme.accent.opacity(0.1))
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+
+                    Button("Save All") { saveAllBlocks() }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(AppTheme.accent)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(AppTheme.accent.opacity(0.1))
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                }
+                Button(action: { dismiss() }) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 16))
+                        .foregroundColor(AppTheme.textMuted)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding()
+
+            Divider().background(AppTheme.borderGlass)
+
+            if blocks.isEmpty {
+                Spacer()
+                VStack(spacing: 8) {
+                    Image(systemName: "doc.text")
+                        .font(.system(size: 32))
+                        .foregroundColor(AppTheme.textMuted)
+                    Text("No code blocks found")
+                        .font(.system(size: 14))
+                        .foregroundColor(AppTheme.textSecondary)
+                    Text("Code blocks in assistant messages will appear here.")
+                        .font(.system(size: 12))
+                        .foregroundColor(AppTheme.textMuted)
+                }
+                Spacer()
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 12) {
+                        ForEach(blocks) { block in
+                            codeBlockRow(block)
+                        }
+                    }
+                    .padding()
+                }
+            }
+        }
+        .frame(minWidth: 560, minHeight: 400)
+        .frame(maxWidth: 700, maxHeight: 600)
+        .background(AppTheme.bgPrimary)
+    }
+
+    @ViewBuilder
+    private func codeBlockRow(_ block: CodeBlock) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(block.language)
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(languageColor(block.language))
+                    .clipShape(RoundedRectangle(cornerRadius: 4))
+
+                Text("\(block.lineCount) lines")
+                    .font(.system(size: 11))
+                    .foregroundColor(AppTheme.textMuted)
+
+                Text("msg #\(block.messageIndex + 1)")
+                    .font(.system(size: 11))
+                    .foregroundColor(AppTheme.textMuted)
+
+                Spacer()
+
+                Button(action: { copyBlock(block) }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "doc.on.doc")
+                            .font(.system(size: 11))
+                        Text("Copy")
+                            .font(.system(size: 11))
+                    }
+                    .foregroundColor(AppTheme.textSecondary)
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+                .background(AppTheme.bgCard.opacity(0.6))
+                .clipShape(RoundedRectangle(cornerRadius: 4))
+
+                Button(action: { saveBlock(block) }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "square.and.arrow.down")
+                            .font(.system(size: 11))
+                        Text("Save")
+                            .font(.system(size: 11))
+                    }
+                    .foregroundColor(AppTheme.textSecondary)
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+                .background(AppTheme.bgCard.opacity(0.6))
+                .clipShape(RoundedRectangle(cornerRadius: 4))
+            }
+
+            Text(block.preview)
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundColor(AppTheme.textSecondary)
+                .lineLimit(3)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(10)
+                .background(AppTheme.bgSecondary.opacity(0.5))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+        }
+        .padding(12)
+        .background(AppTheme.bgCard.opacity(0.4))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(AppTheme.borderGlass, lineWidth: 1))
+    }
+
+    private func languageColor(_ lang: String) -> Color {
+        switch lang.lowercased() {
+        case "swift": return .orange
+        case "python", "py": return .blue
+        case "javascript", "js": return .yellow.opacity(0.8)
+        case "typescript", "ts": return .blue.opacity(0.7)
+        case "rust", "rs": return .orange.opacity(0.7)
+        case "go", "golang": return .cyan
+        case "ruby", "rb": return .red.opacity(0.7)
+        case "bash", "sh", "shell", "zsh": return .green.opacity(0.7)
+        case "html": return .red.opacity(0.6)
+        case "css": return .purple.opacity(0.7)
+        case "json": return .gray
+        case "yaml", "yml": return .pink.opacity(0.7)
+        default: return AppTheme.accent.opacity(0.7)
+        }
+    }
+
+    private func copyBlock(_ block: CodeBlock) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(block.code, forType: .string)
+        appState.showToast("Code copied", type: .success)
+    }
+
+    private func saveBlock(_ block: CodeBlock) {
+        let panel = NSSavePanel()
+        panel.title = "Save Code Block"
+        panel.nameFieldStringValue = "code_block_\(block.messageIndex + 1)\(block.fileExtension)"
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try block.code.write(to: url, atomically: true, encoding: .utf8)
+            appState.showToast("Code block saved", type: .success)
+        } catch {
+            appState.showToast("Save failed: \(error.localizedDescription)", type: .error)
+        }
+    }
+
+    private func copyAllBlocks() {
+        let separator = "\n\n// ────────────────────────────────────────\n\n"
+        let combined = blocks.map { block in
+            "// \(block.language) (message #\(block.messageIndex + 1))\n\(block.code)"
+        }.joined(separator: separator)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(combined, forType: .string)
+        appState.showToast("All code blocks copied", type: .success)
+    }
+
+    private func saveAllBlocks() {
+        let panel = NSOpenPanel()
+        panel.title = "Choose Folder for Code Blocks"
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.prompt = "Save Here"
+        guard panel.runModal() == .OK, let baseURL = panel.url else { return }
+
+        let safeName = conversationTitle
+            .replacingOccurrences(of: "[^a-zA-Z0-9_ -]", with: "", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let folderName = String(safeName.prefix(40)).trimmingCharacters(in: .whitespacesAndNewlines)
+        let folderURL = baseURL.appendingPathComponent(folderName.isEmpty ? "code_blocks" : folderName)
+
+        do {
+            try FileManager.default.createDirectory(at: folderURL, withIntermediateDirectories: true)
+            for (i, block) in blocks.enumerated() {
+                let fileName = "block_\(i + 1)_\(block.language)\(block.fileExtension)"
+                let fileURL = folderURL.appendingPathComponent(fileName)
+                try block.code.write(to: fileURL, atomically: true, encoding: .utf8)
+            }
+            appState.showToast("Saved \(blocks.count) code blocks", type: .success)
+        } catch {
+            appState.showToast("Save failed: \(error.localizedDescription)", type: .error)
         }
     }
 }
