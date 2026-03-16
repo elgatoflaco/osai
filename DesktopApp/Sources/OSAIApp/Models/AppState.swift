@@ -670,6 +670,7 @@ class AppState: ObservableObject {
     @AppStorage("sidebarCollapsed") var sidebarCollapsed: Bool = false
     @AppStorage("hasCompletedOnboarding") var hasCompletedOnboarding: Bool = false
     @AppStorage("globalHotkeyEnabled") var globalHotkeyEnabled: Bool = true
+    @AppStorage("yoloMode") var yoloMode: Bool = false
     @AppStorage("notificationsEnabled") var notificationsEnabled: Bool = true
     @AppStorage("notificationSound") var notificationSound: String = "default"
     @AppStorage("notifyOnTaskComplete") var notifyOnTaskComplete: Bool = true
@@ -2856,15 +2857,18 @@ class AppState: ObservableObject {
         let streamState = StreamState()
 
         // Build CLI args — agent model takes priority, then selected model
-        var args = [fullText]
+        var args = [String]()
+        if yoloMode {
+            args.append("--yolo")
+        }
         if let agentName = activeConversation?.agentName,
            let agent = agents.first(where: { $0.name == agentName }),
            !agent.model.isEmpty {
-            args = ["--model", agent.model, fullText]
+            args += ["--model", agent.model]
         } else if selectedModel != config.activeModel {
-            // Use the chat-level selected model when it differs from config default
-            args = ["--model", selectedModel, fullText]
+            args += ["--model", selectedModel]
         }
+        args.append(fullText)
 
         Task { @MainActor [weak self] in
             guard let self else { return }

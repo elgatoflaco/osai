@@ -148,7 +148,10 @@ struct SettingsView: View {
                     // 5. Appearance
                     if matched.contains(.appearance) { appearanceSection }
 
-                    // 5b. Notifications
+                    // 5b. Behavior (YOLO mode)
+                    behaviorSection
+
+                    // 5c. Notifications
                     if matched.contains(.notifications) { notificationsSection }
 
                     // 5c. Backup & Restore
@@ -1352,6 +1355,43 @@ struct SettingsView: View {
     }
 
     // MARK: - Notifications
+
+    private var behaviorSection: some View {
+        SettingsSection(title: "Behavior", icon: "bolt.fill") {
+            VStack(spacing: 14) {
+                // YOLO mode
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("YOLO Mode")
+                            .font(AppTheme.fontBody)
+                            .foregroundColor(AppTheme.textPrimary)
+                        Text("Skip confirmation dialogs for dangerous actions (delete files, system changes). The agent will execute everything without asking.")
+                            .font(.system(size: 11))
+                            .foregroundColor(AppTheme.textMuted)
+                    }
+                    Spacer()
+                    Toggle("YOLO Mode", isOn: $appState.yoloMode)
+                        .toggleStyle(.switch)
+                        .tint(AppTheme.warning)
+                        .labelsHidden()
+                }
+
+                if appState.yoloMode {
+                    HStack(spacing: 6) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundColor(AppTheme.warning)
+                            .font(.system(size: 12))
+                        Text("YOLO mode is active — the agent will not ask for confirmation before destructive actions.")
+                            .font(.system(size: 11))
+                            .foregroundColor(AppTheme.warning)
+                    }
+                    .padding(8)
+                    .background(AppTheme.warning.opacity(0.1))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                }
+            }
+        }
+    }
 
     private var notificationsSection: some View {
         SettingsSection(title: "Notifications", icon: "bell") {
