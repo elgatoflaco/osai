@@ -4011,7 +4011,22 @@ struct CodeBlockView: View {
         return CGFloat(digits) * 8 + 12
     }
     private var langColor: Color { SyntaxHighlighter.languageColor(for: language) }
-    private var displayLang: String { language.isEmpty ? "code" : language.lowercased() }
+    private var displayLang: String {
+        guard !language.isEmpty else { return "code" }
+        let langMap: [String: String] = [
+            "swift": "Swift", "py": "Python", "python": "Python",
+            "js": "JavaScript", "javascript": "JavaScript",
+            "ts": "TypeScript", "typescript": "TypeScript",
+            "rb": "Ruby", "ruby": "Ruby", "go": "Go",
+            "rs": "Rust", "rust": "Rust", "java": "Java",
+            "cpp": "C++", "c++": "C++", "html": "HTML",
+            "css": "CSS", "json": "JSON",
+            "yaml": "YAML", "yml": "YAML",
+            "sh": "Shell", "bash": "Shell", "zsh": "Shell",
+            "sql": "SQL", "md": "Markdown", "markdown": "Markdown",
+        ]
+        return langMap[language.lowercased()] ?? language.lowercased()
+    }
     private var isRunnable: Bool { CodeRunner.isRunnable(language) }
 
     var body: some View {
@@ -4023,14 +4038,24 @@ struct CodeBlockView: View {
 
             // Header bar with language badge, line count, run, collapse toggle, and copy button
             HStack(spacing: 0) {
-                // Language label (left)
+                // Language badge pill (left)
                 Text(displayLang)
                     .font(.system(size: 10, weight: .semibold, design: .monospaced))
                     .foregroundColor(AppTheme.accent)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 3)
-                    .background(AppTheme.accent.opacity(0.12))
+                    .background(AppTheme.bgSecondary)
                     .clipShape(RoundedRectangle(cornerRadius: 4))
+
+                // Line count indicator
+                Text("\(lineCount) line\(lineCount == 1 ? "" : "s")")
+                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .foregroundColor(AppTheme.textMuted)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(AppTheme.bgSecondary)
+                    .clipShape(RoundedRectangle(cornerRadius: 4))
+                    .padding(.leading, 4)
 
                 // Run button (only for supported languages)
                 if isRunnable {
@@ -4109,13 +4134,6 @@ struct CodeBlockView: View {
                         .background(AppTheme.bgCard)
                     }
                 }
-
-                Spacer()
-
-                // Line count (center)
-                Text("\(lineCount) line\(lineCount == 1 ? "" : "s")")
-                    .font(.system(size: 10, weight: .medium, design: .monospaced))
-                    .foregroundColor(AppTheme.textMuted)
 
                 Spacer()
 

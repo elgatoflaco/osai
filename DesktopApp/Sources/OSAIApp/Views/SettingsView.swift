@@ -5,9 +5,54 @@ struct SettingsView: View {
     private let configService = ConfigService()
     @State private var showResetConfirmation = false
     @State private var showChangelog = false
+    @State private var searchText = ""
 
     // Well-known providers to always show status for
     private let knownProviders = ["anthropic", "openai", "google", "openrouter", "xai", "deepseek"]
+
+    // MARK: - Searchable Sections
+
+    private enum SettingsSectionID: String, CaseIterable {
+        case apiKeys, activeModel, gateway, spending, budget, usageStatistics
+        case appearance, notifications, backupRestore, paths, about
+
+        var keywords: [String] {
+            switch self {
+            case .apiKeys:
+                return ["api", "key", "keys", "provider", "anthropic", "openai", "google", "openrouter", "xai", "deepseek", "token", "secret", "credential"]
+            case .activeModel:
+                return ["model", "active", "claude", "gpt", "gemini", "grok", "deepseek", "sonnet", "haiku", "cpu", "llm", "ai"]
+            case .gateway:
+                return ["gateway", "server", "network", "start", "stop", "login", "auto-start", "pid", "running", "background"]
+            case .spending:
+                return ["spending", "usage", "cost", "daily", "monthly", "limit", "tokens", "dollar", "money", "session", "warning"]
+            case .budget:
+                return ["budget", "daily", "monthly", "cost", "spending", "alert", "limit", "dollar", "money", "reset"]
+            case .usageStatistics:
+                return ["usage", "statistics", "chart", "tokens", "input", "output", "weekly", "graph", "analytics"]
+            case .appearance:
+                return ["appearance", "theme", "dark", "light", "mode", "font", "size", "color", "accent", "sidebar", "compact", "density", "code", "syntax", "window", "opacity", "float", "smart", "paste", "speech", "tts", "timestamp", "preset"]
+            case .notifications:
+                return ["notification", "notifications", "sound", "alert", "bell", "task", "agent", "route", "ping", "pop", "glass"]
+            case .backupRestore:
+                return ["backup", "restore", "export", "import", "reset", "settings", "save", "load", "json"]
+            case .paths:
+                return ["path", "paths", "folder", "config", "agents", "tasks", "conversations", "binary", "doctor", "finder", "directory", "file"]
+            case .about:
+                return ["about", "version", "info", "swift", "macos", "github", "bug", "documentation", "changelog", "credits"]
+            }
+        }
+    }
+
+    private var visibleSections: Set<SettingsSectionID> {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else {
+            return Set(SettingsSectionID.allCases)
+        }
+        return Set(SettingsSectionID.allCases.filter { section in
+            section.keywords.contains { $0.localizedCaseInsensitiveContains(query) }
+        })
+    }
 
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
@@ -33,43 +78,94 @@ struct SettingsView: View {
                     .buttonStyle(.plain)
                 }
 
-                // 1. API Keys
-                apiKeysSection
+                // Search bar
+                HStack(spacing: 10) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 14))
+                        .foregroundColor(searchText.isEmpty ? AppTheme.textMuted : AppTheme.accent)
 
-                // 2. Active Model
-                activeModelSection
+                    TextField("Search settings...", text: $searchText)
+                        .font(AppTheme.fontBody)
+                        .foregroundColor(AppTheme.textPrimary)
+                        .textFieldStyle(.plain)
 
-                // 3. Gateway
-                gatewaySection
+                    if !searchText.isEmpty {
+                        Button(action: { searchText = "" }) {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 14))
+                                .foregroundColor(AppTheme.textMuted)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Clear search")
+                    }
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(.ultraThinMaterial)
+                .background(AppTheme.bgGlass)
+                .clipShape(RoundedRectangle(cornerRadius: AppTheme.cornerRadiusSm))
+                .overlay(
+                    RoundedRectangle(cornerRadius: AppTheme.cornerRadiusSm)
+                        .stroke(searchText.isEmpty ? AppTheme.borderGlass : AppTheme.accent.opacity(0.4), lineWidth: 1)
+                )
 
-                // 4. Usage & Spending
-                spendingSection
+                if visibleSections.isEmpty {
+                    // Empty state
+                    VStack(spacing: 12) {
+                        Image(systemName: "magnifyingglass")
+                            .font(.system(size: 32))
+                            .foregroundColor(AppTheme.textMuted)
+                        Text("No settings match \"\(searchText)\"")
+                            .font(AppTheme.fontBody)
+                            .foregroundColor(AppTheme.textSecondary)
+                        Text("Try a different search term")
+                            .font(AppTheme.fontCaption)
+                            .foregroundColor(AppTheme.textMuted)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 60)
+                } else {
+                    let matched = visibleSections
 
-                // 4a. Budget
-                budgetSection
+                    // 1. API Keys
+                    if matched.contains(.apiKeys) { apiKeysSection }
 
-                // 4b. Token Usage Chart
-                usageStatisticsSection
+                    // 2. Active Model
+                    if matched.contains(.activeModel) { activeModelSection }
 
-                // 5. Appearance
-                appearanceSection
+                    // 3. Gateway
+                    if matched.contains(.gateway) { gatewaySection }
 
-                // 5b. Notifications
-                notificationsSection
+                    // 4. Usage & Spending
+                    if matched.contains(.spending) { spendingSection }
 
-                // 5c. Backup & Restore
-                backupRestoreSection
+                    // 4a. Budget
+                    if matched.contains(.budget) { budgetSection }
 
-                // 6. Quick Actions & Paths
-                pathsSection
+                    // 4b. Token Usage Chart
+                    if matched.contains(.usageStatistics) { usageStatisticsSection }
 
-                // 7. About
-                aboutSection
+                    // 5. Appearance
+                    if matched.contains(.appearance) { appearanceSection }
+
+                    // 5b. Notifications
+                    if matched.contains(.notifications) { notificationsSection }
+
+                    // 5c. Backup & Restore
+                    if matched.contains(.backupRestore) { backupRestoreSection }
+
+                    // 6. Quick Actions & Paths
+                    if matched.contains(.paths) { pathsSection }
+
+                    // 7. About
+                    if matched.contains(.about) { aboutSection }
+                }
 
                 Spacer(minLength: 40)
             }
             .padding(.horizontal, AppTheme.paddingXl)
             .padding(.vertical, AppTheme.paddingLg)
+            .animation(.easeInOut(duration: 0.2), value: searchText)
         }
     }
 

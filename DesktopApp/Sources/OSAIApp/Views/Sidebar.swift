@@ -1,8 +1,14 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct Sidebar: View {
     @EnvironmentObject var appState: AppState
     @State private var hoveredItem: SidebarItem?
+    @State private var hoveredConversationId: String?
+    @State private var draggedConversationId: String?
+    @State private var dropTargetConversationId: String?
+    @State private var dropTargetIsAbove: Bool = true
+    @State private var showConversationList: Bool = true
 
     /// Returns the badge count for a given sidebar item.
     private func badgeCount(for item: SidebarItem) -> Int {
@@ -79,6 +85,30 @@ struct Sidebar: View {
                 }
                 .buttonStyle(.plain)
                 .help("Toggle calendar")
+                .padding(.top, 8)
+            }
+
+            // Conversation list
+            if !appState.sidebarCollapsed {
+                SidebarConversationList(
+                    conversations: appState.sortedConversations,
+                    activeConversationId: appState.activeConversation?.id,
+                    isCustomSort: appState.conversationSortOrder == .custom,
+                    showList: $showConversationList,
+                    hoveredId: $hoveredConversationId,
+                    draggedId: $draggedConversationId,
+                    dropTargetId: $dropTargetConversationId,
+                    dropTargetIsAbove: $dropTargetIsAbove,
+                    onSelect: { conv in
+                        appState.openConversation(conv)
+                        appState.selectedTab = .chat
+                    },
+                    onReorder: { fromIndex, toIndex in
+                        appState.moveConversation(fromIndex: fromIndex, toIndex: toIndex)
+                    },
+                    appState: appState
+                )
+                .padding(.horizontal, 12)
                 .padding(.top, 8)
             }
 
@@ -846,4 +876,307 @@ private struct DayCell: Identifiable {
     let id: Int
     let day: Int
     let isBlank: Bool
+}
+
+// MARK: - Sidebar Conversation List
+
+struct SidebarConversationList: View {
+    let conversations: [Conversation]
+    let activeConversationId: String?
+    let isCustomSort: Bool
+    @Binding var showList: Bool
+    @Binding var hoveredId: String?
+    @Binding var draggedId: String?
+    @Binding var dropTargetId: String?
+    @Binding var dropTargetIsAbove: Bool
+    let onSelect: (Conversation) -> Void
+    let onReorder: (Int, Int) -> Void
+    let appState: AppState
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Toggle header
+            Button(action: {
+                withAnimation(.easeOut(duration: 0.2)) {
+                    showList.toggle()
+                }
+            }) {
+                HStack(spacing: 6) {
+                    Image(systemName: "bubble.left.and.bubble.right")
+                        .font(.system(size: 12))
+                        .foregroundColor(AppTheme.textSecondary)
+
+                    Text("Conversations")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(AppTheme.textSecondary)
+
+                    if isCustomSort {
+                        Text("CUSTOM")
+                            .font(.system(size: 7, weight: .bold, design: .monospaced))
+                            .foregroundColor(AppTheme.accent)
+                            .padding(.horizontal, 3)
+                            .padding(.vertical, 1)
+                            .background(AppTheme.accent.opacity(0.12))
+                            .clipShape(Capsule())
+                    }
+
+                    Spacer()
+
+                    Text("\(conversations.count)")
+                        .font(.system(size: 9, weight: .medium, design: .monospaced))
+                        .foregroundColor(AppTheme.textMuted)
+
+                    Image(systemName: showList ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundColor(AppTheme.textMuted)
+                }
+                .padding(.vertical, 6)
+                .padding(.horizontal, 8)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Toggle conversation list")
+            .accessibilityValue(showList ? "expanded" : "collapsed")
+
+            if showList {
+                ScrollView(.vertical, showsIndicators: false) {
+                    LazyVStack(spacing: 2) {
+                        ForEach(conversations) { conv in
+                            VStack(spacing: 0) {
+                                // Drop indicator above
+                                if isCustomSort,
+                                   dropTargetId == conv.id,
+                                   dropTargetIsAbove {
+                                    Rectangle()
+                                        .fill(AppTheme.accent)
+                                        .frame(height: 2)
+                                        .padding(.horizontal, 4)
+                                        .transition(.opacity)
+                                }
+
+                                SidebarConversationRow(
+                                    conv: conv,
+                                    isActive: activeConversationId == conv.id,
+                                    isHovered: hoveredId == conv.id,
+                                    showDragHandle: isCustomSort && hoveredId == conv.id,
+                                    onSelect: { onSelect(conv) }
+                                )
+                                .onHover { hovering in
+                                    withAnimation(.easeOut(duration: 0.1)) {
+                                        hoveredId = hovering ? conv.id : nil
+                                    }
+                                }
+
+                                // Drop indicator below
+                                if isCustomSort,
+                                   dropTargetId == conv.id,
+                                   !dropTargetIsAbove {
+                                    Rectangle()
+                                        .fill(AppTheme.accent)
+                                        .frame(height: 2)
+                                        .padding(.horizontal, 4)
+                                        .transition(.opacity)
+                                }
+                            }
+                            .onDrag {
+                                guard isCustomSort else { return NSItemProvider() }
+                                draggedId = conv.id
+                                return NSItemProvider(object: conv.id as NSString)
+                            }
+                            .onDrop(of: [UTType.text], delegate: SidebarConversationDropDelegate(
+                                conversationId: conv.id,
+                                appState: appState,
+                                draggedId: $draggedId,
+                                dropTargetId: $dropTargetId,
+                                dropTargetIsAbove: $dropTargetIsAbove,
+                                onReorder: onReorder
+                            ))
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+                .frame(maxHeight: 260)
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(AppTheme.bgCard.opacity(0.3))
+                )
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+    }
+}
+
+// MARK: - Sidebar Conversation Row
+
+private struct SidebarConversationRow: View {
+    let conv: Conversation
+    let isActive: Bool
+    let isHovered: Bool
+    let showDragHandle: Bool
+    let onSelect: () -> Void
+
+    var body: some View {
+        Button(action: onSelect) {
+            HStack(spacing: 4) {
+                // Drag handle (grip dots) - visible on hover when custom sort
+                if showDragHandle {
+                    Image(systemName: "line.3.horizontal")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundColor(AppTheme.textMuted)
+                        .frame(width: 14, height: 14)
+                        .transition(.opacity)
+                } else {
+                    // Color label dot or spacer to maintain alignment
+                    if let labelColor = AppState.colorForLabel(conv.colorLabel) {
+                        Circle()
+                            .fill(labelColor)
+                            .frame(width: 6, height: 6)
+                            .frame(width: 14)
+                    } else if conv.isPinned {
+                        Image(systemName: "pin.fill")
+                            .font(.system(size: 7))
+                            .foregroundColor(AppTheme.accent.opacity(0.6))
+                            .frame(width: 14)
+                    } else {
+                        Color.clear.frame(width: 14)
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(conv.title)
+                        .font(.system(size: 11, weight: isActive ? .semibold : .regular))
+                        .foregroundColor(isActive ? AppTheme.textPrimary : AppTheme.textSecondary)
+                        .lineLimit(1)
+
+                    HStack(spacing: 3) {
+                        if let agent = conv.agentName {
+                            Text(agent)
+                                .font(.system(size: 8))
+                                .foregroundColor(AppTheme.accent.opacity(0.8))
+                        }
+                        Text(sidebarTimeLabel(conv.lastUpdated))
+                            .font(.system(size: 8))
+                            .foregroundColor(AppTheme.textMuted)
+                    }
+                }
+
+                Spacer(minLength: 2)
+
+                if conv.messages.count > 0 {
+                    Text("\(conv.messages.count)")
+                        .font(.system(size: 8, weight: .medium, design: .rounded))
+                        .foregroundColor(AppTheme.textMuted)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        .background(AppTheme.bgCard.opacity(0.6))
+                        .clipShape(Capsule())
+                }
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 5)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(isActive ? AppTheme.accent.opacity(0.12) :
+                          (isHovered ? AppTheme.bgCard.opacity(0.5) : .clear))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(isActive ? AppTheme.accent.opacity(0.2) : .clear, lineWidth: 1)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(conv.isPinned ? "Pinned: " : "")\(conv.title)")
+        .accessibilityValue("\(conv.messages.count) messages")
+        .accessibilityAddTraits(isActive ? .isSelected : [])
+    }
+
+    private func sidebarTimeLabel(_ date: Date) -> String {
+        let cal = Calendar.current
+        if cal.isDateInToday(date) {
+            let formatter = DateFormatter()
+            formatter.dateFormat = "h:mm a"
+            return formatter.string(from: date)
+        } else if cal.isDateInYesterday(date) {
+            return "Yesterday"
+        } else {
+            let formatter = DateFormatter()
+            formatter.dateFormat = "MMM d"
+            return formatter.string(from: date)
+        }
+    }
+}
+
+// MARK: - Sidebar Conversation Drop Delegate
+
+struct SidebarConversationDropDelegate: DropDelegate {
+    let conversationId: String
+    let appState: AppState
+    @Binding var draggedId: String?
+    @Binding var dropTargetId: String?
+    @Binding var dropTargetIsAbove: Bool
+    let onReorder: (Int, Int) -> Void
+
+    func dropEntered(info: DropInfo) {
+        guard appState.conversationSortOrder == .custom,
+              let draggedId = draggedId,
+              draggedId != conversationId else { return }
+
+        let draggedConv = appState.conversations.first { $0.id == draggedId }
+        let targetConv = appState.conversations.first { $0.id == conversationId }
+        guard let dc = draggedConv, let tc = targetConv, dc.isPinned == tc.isPinned else { return }
+
+        withAnimation(.easeInOut(duration: 0.15)) {
+            dropTargetId = conversationId
+            dropTargetIsAbove = true
+        }
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        return DropProposal(operation: .move)
+    }
+
+    func dropExited(info: DropInfo) {
+        if dropTargetId == conversationId {
+            withAnimation(.easeInOut(duration: 0.15)) {
+                dropTargetId = nil
+            }
+        }
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        guard appState.conversationSortOrder == .custom,
+              let draggedId = draggedId,
+              draggedId != conversationId else {
+            resetState()
+            return false
+        }
+
+        let draggedConv = appState.conversations.first { $0.id == draggedId }
+        let targetConv = appState.conversations.first { $0.id == conversationId }
+        guard let dc = draggedConv, let tc = targetConv, dc.isPinned == tc.isPinned else {
+            resetState()
+            return false
+        }
+
+        appState.syncCustomOrder()
+
+        guard let fromIndex = appState.customConversationOrder.firstIndex(of: draggedId),
+              let toIndex = appState.customConversationOrder.firstIndex(of: conversationId) else {
+            resetState()
+            return false
+        }
+
+        withAnimation(.easeInOut(duration: 0.2)) {
+            onReorder(fromIndex, toIndex)
+        }
+
+        resetState()
+        return true
+    }
+
+    private func resetState() {
+        draggedId = nil
+        dropTargetId = nil
+    }
 }
