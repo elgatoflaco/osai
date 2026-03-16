@@ -49,6 +49,8 @@ struct Sidebar: View {
             .accessibilityElement(children: .combine)
             .accessibilityLabel("OSAI")
             .accessibilityAddTraits(.isHeader)
+            .accessibilityIdentifier("sidebar_branding")
+            .accessibilitySortPriority(100)
 
             // Navigation
             VStack(spacing: 4) {
@@ -75,7 +77,10 @@ struct Sidebar: View {
                 }
             }
             .padding(.horizontal, 12)
+            .accessibilityElement(children: .contain)
             .accessibilityLabel("Navigation")
+            .accessibilityIdentifier("sidebar_navigation")
+            .accessibilitySortPriority(90)
 
             // Mini Calendar Widget
             if !appState.sidebarCollapsed {
@@ -97,6 +102,10 @@ struct Sidebar: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Calendar")
+                .accessibilityValue(appState.showSidebarCalendar ? "Shown" : "Hidden")
+                .accessibilityHint("Double tap to toggle calendar display")
+                .accessibilityIdentifier("sidebar_calendar_toggle")
                 .help("Toggle calendar")
                 .padding(.top, 8)
             }
@@ -146,6 +155,8 @@ struct Sidebar: View {
                 .padding(.vertical, 6)
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel("Stats: \(appState.conversations.count) conversations, \(appState.conversations.reduce(0) { $0 + $1.messages.count }) messages")
+                .accessibilityIdentifier("sidebar_stats")
+                .accessibilitySortPriority(40)
             }
 
             // Processing status bar
@@ -227,6 +238,8 @@ struct Sidebar: View {
             .accessibilityLabel("Notifications")
             .accessibilityValue(appState.unreadNotificationCount > 0 ? "\(appState.unreadNotificationCount) unread" : "No unread")
             .accessibilityHint("Double tap to \(appState.showNotificationPanel ? "close" : "open") notification panel")
+            .accessibilityIdentifier("sidebar_notifications")
+            .accessibilitySortPriority(30)
             .help("Notifications")
             .padding(.horizontal, 16)
             .padding(.bottom, 4)
@@ -268,6 +281,8 @@ struct Sidebar: View {
             .accessibilityLabel("Gateway")
             .accessibilityValue(appState.gatewayRunning ? "Running" : "Stopped")
             .accessibilityHint("Double tap to toggle gateway")
+            .accessibilityIdentifier("sidebar_gateway")
+            .accessibilitySortPriority(20)
             .help("Toggle gateway")
             .padding(.horizontal, 16)
             .padding(.bottom, 8)
@@ -287,6 +302,9 @@ struct Sidebar: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(appState.isDarkMode ? "Switch to light mode" : "Switch to dark mode")
+                .accessibilityValue(appState.isDarkMode ? "Dark mode" : "Light mode")
+                .accessibilityHint("Double tap to toggle appearance")
+                .accessibilityIdentifier("sidebar_theme_toggle")
                 .help(appState.isDarkMode ? "Switch to light mode" : "Switch to dark mode")
 
                 if !appState.sidebarCollapsed {
@@ -321,7 +339,9 @@ struct Sidebar: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(appState.sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar")
+                .accessibilityValue(appState.sidebarCollapsed ? "Collapsed" : "Expanded")
                 .accessibilityHint(appState.sidebarCollapsed ? "Double tap to expand the sidebar" : "Double tap to collapse the sidebar")
+                .accessibilityIdentifier("sidebar_collapse_toggle")
                 .help(appState.sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar")
             }
             .padding(.horizontal, 16)
@@ -345,6 +365,8 @@ struct Sidebar: View {
         .frame(width: appState.sidebarCollapsed ? 64 : appState.sidebarWidth)
         .background(AppTheme.bgSecondary.opacity(0.5))
         .background(.ultraThinMaterial)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("sidebar")
         .animation(.spring(response: 0.35, dampingFraction: 0.8), value: appState.sidebarCollapsed)
         .animation(.easeOut(duration: 0.25), value: appState.isProcessing)
         .animation(.easeOut(duration: 0.25), value: appState.contextPressurePercent > 75)
@@ -518,6 +540,7 @@ struct SidebarButton: View {
     @State private var ringRotation: Double = 0
     @State private var dotPulse: Bool = false
     @State private var badgeVisible: Bool = false
+    @FocusState private var isFocused: Bool
 
     var body: some View {
         Button(action: action) {
@@ -627,12 +650,41 @@ struct SidebarButton: View {
             .animation(.easeOut(duration: 0.2), value: isSelected)
         }
         .buttonStyle(.plain)
+        .focused($isFocused)
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .strokeBorder(AppTheme.accent, lineWidth: 2)
+                .opacity(isFocused ? 1 : 0)
+                .animation(.easeOut(duration: 0.15), value: isFocused)
+        )
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(item.rawValue) tab\(badgeCount > 0 ? ", \(badgeCount) items" : "")")
-        .accessibilityValue(isSelected ? "selected" : "")
-        .accessibilityHint(isProcessing ? "Processing" : (contextPressureHigh ? "Context pressure high" : "Double tap to navigate"))
+        .accessibilityLabel(accessibilityLabelText)
+        .accessibilityValue(accessibilityValueText)
+        .accessibilityHint(isProcessing ? "Currently processing a request" : (contextPressureHigh ? "Context pressure is high" : "Double tap to navigate to \(item.rawValue)"))
         .accessibilityAddTraits(isSelected ? .isSelected : [])
+        .accessibilityIdentifier("sidebar_tab_\(item.rawValue.lowercased())")
         .help(isCollapsed ? item.rawValue : "")
+    }
+
+    private var accessibilityLabelText: String {
+        var label = item.rawValue
+        if isProcessing { label += ", processing" }
+        if contextPressureHigh { label += ", context pressure high" }
+        return label
+    }
+
+    private var accessibilityValueText: String {
+        var parts: [String] = []
+        if isSelected { parts.append("selected") }
+        if badgeCount > 0 {
+            switch item {
+            case .chat: parts.append("\(badgeCount) unread")
+            case .tasks: parts.append("\(badgeCount) active")
+            case .agents: parts.append("\(badgeCount) available")
+            default: parts.append("\(badgeCount)")
+            }
+        }
+        return parts.isEmpty ? "" : parts.joined(separator: ", ")
     }
 }
 

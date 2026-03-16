@@ -228,14 +228,70 @@ struct DashboardView: View {
 
     // MARK: - Section Content
 
+    // MARK: - Template Helpers
+
+    /// Emoji displayed prominently on each template card, derived from its icon name.
+    private func templateEmoji(for icon: String) -> String {
+        switch icon {
+        case "magnifyingglass.circle": return "\u{1F50D}"   // magnifying glass
+        case "ladybug":                return "\u{1F41B}"   // bug
+        case "doc.text.magnifyingglass": return "\u{1F4D6}" // open book
+        case "checkmark.shield":       return "\u{2705}"    // check mark
+        case "brain.head.profile":     return "\u{1F4A1}"   // light bulb
+        case "books.vertical":         return "\u{1F4DA}"   // books
+        case "pencil.line":            return "\u{270F}\u{FE0F}" // pencil
+        default:                       return "\u{2728}"    // sparkles
+        }
+    }
+
+    /// Gradient colors based on the template's category string.
+    private func templateGradient(for category: String) -> LinearGradient {
+        switch category {
+        case "Development":
+            return LinearGradient(
+                colors: [Color(red: 0x3B/255, green: 0x82/255, blue: 0xF6/255).opacity(0.25),
+                         Color(red: 0x8B/255, green: 0x5C/255, blue: 0xF6/255).opacity(0.10)],
+                startPoint: .topLeading, endPoint: .bottomTrailing)
+        case "Writing":
+            return LinearGradient(
+                colors: [Color(red: 0xEC/255, green: 0x48/255, blue: 0x99/255).opacity(0.25),
+                         Color(red: 0xF5/255, green: 0x9E/255, blue: 0x0B/255).opacity(0.10)],
+                startPoint: .topLeading, endPoint: .bottomTrailing)
+        case "Research":
+            return LinearGradient(
+                colors: [Color(red: 0x10/255, green: 0xB9/255, blue: 0x81/255).opacity(0.25),
+                         Color(red: 80/255, green: 200/255, blue: 200/255).opacity(0.10)],
+                startPoint: .topLeading, endPoint: .bottomTrailing)
+        default:
+            return LinearGradient(
+                colors: [AppTheme.accent.opacity(0.20),
+                         AppTheme.accent.opacity(0.05)],
+                startPoint: .topLeading, endPoint: .bottomTrailing)
+        }
+    }
+
+    /// Count how many conversations were started from a given template (by matching title).
+    private func templateUseCount(_ template: ConversationTemplate) -> Int {
+        appState.conversations.filter { $0.title == template.name }.count
+    }
+
+    /// The template ID with the highest use count among the current filtered list.
+    private func mostUsedTemplateId(in templates: [ConversationTemplate]) -> UUID? {
+        templates.max(by: { templateUseCount($0) < templateUseCount($1) })
+            .flatMap { templateUseCount($0) > 0 ? $0.id : nil }
+    }
+
+    // MARK: - Quick Start Content
+
     private var quickStartContent: some View {
         let columns = [
             GridItem(.flexible(), spacing: AppTheme.paddingMd),
             GridItem(.flexible(), spacing: AppTheme.paddingMd),
         ]
         let filteredTemplates = appState.templates(for: selectedTemplateCategory, searchQuery: templateSearchQuery)
+        let topTemplateId = mostUsedTemplateId(in: filteredTemplates)
 
-        return VStack(spacing: 12) {
+        return VStack(spacing: 14) {
             // Search bar
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
@@ -263,9 +319,9 @@ struct DashboardView: View {
                     .stroke(AppTheme.borderGlass, lineWidth: 0.5)
             )
 
-            // Category filter tabs
+            // Category filter pills
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
+                HStack(spacing: 8) {
                     ForEach(TemplateCategory.allCases) { category in
                         Button(action: {
                             withAnimation(.easeInOut(duration: 0.2)) {
@@ -276,17 +332,21 @@ struct DashboardView: View {
                                 Image(systemName: category.icon)
                                     .font(.system(size: 10))
                                 Text(category.rawValue)
-                                    .font(.system(size: 11, weight: .medium))
+                                    .font(.system(size: 11, weight: .semibold))
                             }
-                            .foregroundColor(selectedTemplateCategory == category ? AppTheme.accent : AppTheme.textSecondary)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 5)
-                            .background(selectedTemplateCategory == category ? AppTheme.accent.opacity(0.12) : AppTheme.bgCard.opacity(0.4))
-                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                            .foregroundColor(selectedTemplateCategory == category ? .white : AppTheme.textSecondary)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(
+                                selectedTemplateCategory == category
+                                    ? AnyShapeStyle(AppTheme.accent)
+                                    : AnyShapeStyle(AppTheme.bgCard.opacity(0.4))
+                            )
+                            .clipShape(Capsule())
                             .overlay(
-                                RoundedRectangle(cornerRadius: 8)
+                                Capsule()
                                     .stroke(
-                                        selectedTemplateCategory == category ? AppTheme.accent.opacity(0.3) : AppTheme.borderGlass,
+                                        selectedTemplateCategory == category ? AppTheme.accent.opacity(0.5) : AppTheme.borderGlass,
                                         lineWidth: 1
                                     )
                             )
@@ -298,83 +358,91 @@ struct DashboardView: View {
 
             // Template grid
             LazyVGrid(columns: columns, spacing: AppTheme.paddingMd) {
-                // Create Template card
-                Button(action: {
-                    editingTemplate = nil
-                    showTemplateEditor = true
-                }) {
-                    GlassCard(padding: AppTheme.paddingMd) {
-                        HStack(spacing: 12) {
-                            Image(systemName: "plus")
-                                .font(.system(size: 22, weight: .medium))
-                                .foregroundColor(AppTheme.accent)
-                                .frame(width: 36, height: 36)
-                                .background(AppTheme.accent.opacity(0.12))
-                                .clipShape(RoundedRectangle(cornerRadius: AppTheme.cornerRadiusSm))
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: AppTheme.cornerRadiusSm)
-                                        .stroke(AppTheme.accent.opacity(0.3), lineWidth: 1)
-                                        .strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [4]))
-                                )
-
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text("Create Template")
-                                    .font(.system(size: 13, weight: .semibold))
-                                    .foregroundColor(AppTheme.accent)
-                                Text("Add your own starter")
-                                    .font(AppTheme.fontCaption)
-                                    .foregroundColor(AppTheme.textSecondary)
-                                    .lineLimit(1)
-                            }
-
-                            Spacer()
-                        }
-                    }
-                }
-                .buttonStyle(.plain)
-
                 ForEach(filteredTemplates) { template in
+                    let useCount = templateUseCount(template)
+                    let isPopular = topTemplateId == template.id
+
                     Button(action: {
                         appState.startFromTemplate(template)
                     }) {
-                        GlassCard(padding: AppTheme.paddingMd) {
-                            HStack(spacing: 12) {
-                                Image(systemName: template.icon)
-                                    .font(.system(size: 22))
-                                    .foregroundColor(AppTheme.accent)
-                                    .frame(width: 36, height: 36)
-                                    .background(AppTheme.accent.opacity(0.12))
-                                    .clipShape(RoundedRectangle(cornerRadius: AppTheme.cornerRadiusSm))
+                        VStack(alignment: .leading, spacing: 0) {
+                            // Top: gradient header with emoji
+                            ZStack(alignment: .topTrailing) {
+                                templateGradient(for: template.category)
+                                    .frame(height: 56)
+                                    .overlay(
+                                        Text(templateEmoji(for: template.icon))
+                                            .font(.system(size: 28))
+                                            .shadow(color: .black.opacity(0.15), radius: 4, x: 0, y: 2)
+                                    )
 
-                                VStack(alignment: .leading, spacing: 3) {
-                                    HStack(spacing: 4) {
-                                        Text(template.name)
-                                            .font(.system(size: 13, weight: .semibold))
-                                            .foregroundColor(AppTheme.textPrimary)
-                                            .lineLimit(1)
-                                        if !template.isBuiltIn {
-                                            Image(systemName: "person.fill")
-                                                .font(.system(size: 8))
-                                                .foregroundColor(AppTheme.textMuted)
-                                        }
-                                    }
-                                    Text(template.description)
-                                        .font(AppTheme.fontCaption)
-                                        .foregroundColor(AppTheme.textSecondary)
+                                if isPopular {
+                                    Text("Popular")
+                                        .font(.system(size: 9, weight: .bold))
+                                        .foregroundColor(.white)
+                                        .padding(.horizontal, 7)
+                                        .padding(.vertical, 3)
+                                        .background(
+                                            Capsule().fill(AppTheme.accent)
+                                        )
+                                        .padding(8)
+                                }
+                            }
+
+                            // Bottom: info section
+                            VStack(alignment: .leading, spacing: 6) {
+                                HStack(spacing: 4) {
+                                    Image(systemName: template.icon)
+                                        .font(.system(size: 11))
+                                        .foregroundColor(AppTheme.accent)
+                                    Text(template.name)
+                                        .font(.system(size: 13, weight: .semibold))
+                                        .foregroundColor(AppTheme.textPrimary)
                                         .lineLimit(1)
+                                    if !template.isBuiltIn {
+                                        Image(systemName: "person.fill")
+                                            .font(.system(size: 8))
+                                            .foregroundColor(AppTheme.textMuted)
+                                    }
                                 }
 
-                                Spacer()
+                                Text(template.description)
+                                    .font(AppTheme.fontCaption)
+                                    .foregroundColor(AppTheme.textSecondary)
+                                    .lineLimit(2)
+                                    .fixedSize(horizontal: false, vertical: true)
 
-                                Text(template.category)
-                                    .font(.system(size: 9, weight: .medium))
+                                HStack {
+                                    Text(template.category)
+                                        .font(.system(size: 9, weight: .medium))
+                                        .foregroundColor(AppTheme.textMuted)
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 2)
+                                        .background(AppTheme.bgCard.opacity(0.5))
+                                        .clipShape(Capsule())
+
+                                    Spacer()
+
+                                    HStack(spacing: 3) {
+                                        Image(systemName: "arrow.counterclockwise")
+                                            .font(.system(size: 8))
+                                        Text("\(useCount) used")
+                                            .font(.system(size: 9, weight: .medium))
+                                    }
                                     .foregroundColor(AppTheme.textMuted)
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 2)
-                                    .background(AppTheme.bgCard.opacity(0.5))
-                                    .clipShape(Capsule())
+                                }
                             }
+                            .padding(.horizontal, AppTheme.paddingSm + 4)
+                            .padding(.vertical, AppTheme.paddingSm + 2)
                         }
+                        .background(.ultraThinMaterial)
+                        .background(AppTheme.bgGlass)
+                        .clipShape(RoundedRectangle(cornerRadius: AppTheme.cornerRadius))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: AppTheme.cornerRadius)
+                                .stroke(AppTheme.borderGlass, lineWidth: 1)
+                        )
+                        .shadow(color: .black.opacity(0.15), radius: 12, x: 0, y: 6)
                     }
                     .buttonStyle(.plain)
                     .contextMenu {
@@ -402,6 +470,36 @@ struct DashboardView: View {
                         }
                     }
                 }
+
+                // Create new template card (dashed border + plus icon)
+                Button(action: {
+                    editingTemplate = nil
+                    showTemplateEditor = true
+                }) {
+                    VStack(spacing: 10) {
+                        Spacer()
+                        Image(systemName: "plus.circle")
+                            .font(.system(size: 28, weight: .light))
+                            .foregroundColor(AppTheme.accent.opacity(0.7))
+                        Text("Create Template")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundColor(AppTheme.accent)
+                        Text("Add your own starter")
+                            .font(AppTheme.fontCaption)
+                            .foregroundColor(AppTheme.textSecondary)
+                        Spacer()
+                    }
+                    .frame(maxWidth: .infinity)
+                    .frame(minHeight: 130)
+                    .background(AppTheme.bgCard.opacity(0.2))
+                    .clipShape(RoundedRectangle(cornerRadius: AppTheme.cornerRadius))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: AppTheme.cornerRadius)
+                            .strokeBorder(style: StrokeStyle(lineWidth: 1.5, dash: [8, 5]))
+                            .foregroundColor(AppTheme.accent.opacity(0.35))
+                    )
+                }
+                .buttonStyle(.plain)
             }
 
             if filteredTemplates.isEmpty && !templateSearchQuery.isEmpty {

@@ -8,6 +8,7 @@ struct AgentsView: View {
     @State private var showImportPreview = false
     @State private var importPreviewContent = ""
     @State private var importPreviewURL: URL?
+    @State private var testingAgent: AgentInfo?
 
     private let columns = [
         GridItem(.flexible(), spacing: 16),
@@ -164,7 +165,7 @@ struct AgentsView: View {
                             }, onCopyToClipboard: {
                                 copyAgentToClipboard(agent)
                             }, onTestAgent: {
-                                testAgent(agent)
+                                testingAgent = agent
                             }, onDuplicate: {
                                 appState.duplicateAgent(name: agent.name)
                             },
@@ -209,21 +210,9 @@ struct AgentsView: View {
                 sourceURL: importPreviewURL
             )
         }
-    }
-
-    private func testAgent(_ agent: AgentInfo) {
-        appState.recordAgentUsage(agentName: agent.name)
-        let conv = Conversation(
-            id: UUID().uuidString,
-            title: "Test: \(agent.name)",
-            messages: [],
-            createdAt: Date(),
-            agentName: agent.name
-        )
-        appState.activeConversation = conv
-        appState.conversations.insert(conv, at: 0)
-        appState.selectedTab = .chat
-        appState.sendMessage("Hello! This is a quick test message to verify you are working correctly. Please respond with a brief confirmation and describe your role.")
+        .sheet(item: $testingAgent) { agent in
+            TestAgentSheet(appState: appState, agent: agent)
+        }
     }
 
     private func startChatWith(_ agent: AgentInfo) {
@@ -1214,6 +1203,428 @@ struct ImportAgentPreviewSheet: View {
         }
         appState.importAgentContent(content, overrideName: newName)
         dismiss()
+    }
+}
+
+// MARK: - Test Agent Sheet
+
+struct TestAgentSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject var appState: AppState
+    let agent: AgentInfo
+
+    enum TestStatus: Equatable {
+        case idle
+        case connecting
+        case thinking
+        case received
+    }
+
+    @State private var testMessage = ""
+    @State private var testStatus: TestStatus = .idle
+    @State private var mockResponse = ""
+    @State private var elapsedTime: TimeInterval = 0
+    @State private var timer: Timer?
+
+    private var suggestedPrompts: [String] {
+        var prompts: [String] = []
+        for trigger in agent.triggers.prefix(3) {
+            prompts.append("Help me with \(trigger)")
+        }
+        if prompts.isEmpty {
+            prompts.append("Hello, what can you do?")
+            prompts.append("Describe your capabilities")
+            prompts.append("Give me an example of your work")
+        }
+        // Always include a general test prompt
+        if prompts.count < 4 {
+            prompts.append("Run a quick self-check and confirm you are working")
+        }
+        return Array(prompts.prefix(4))
+    }
+
+    private var statusLabel: String {
+        switch testStatus {
+        case .idle: return "Ready"
+        case .connecting: return "Connecting..."
+        case .thinking: return "Thinking..."
+        case .received: return "Response received"
+        }
+    }
+
+    private var statusColor: Color {
+        switch testStatus {
+        case .idle: return AppTheme.textMuted
+        case .connecting: return AppTheme.warning
+        case .thinking: return AppTheme.accent
+        case .received: return AppTheme.success
+        }
+    }
+
+    private var statusIcon: String {
+        switch testStatus {
+        case .idle: return "circle"
+        case .connecting: return "antenna.radiowaves.left.and.right"
+        case .thinking: return "brain"
+        case .received: return "checkmark.circle.fill"
+        }
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 8) {
+                        GhostIcon(size: 24, animate: false, tint: agentColor(agent.name))
+                        Text("Test Agent")
+                            .font(AppTheme.fontHeadline)
+                            .foregroundColor(AppTheme.textPrimary)
+                    }
+                    Text(agent.name.capitalized)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(AppTheme.textMuted)
+                }
+                Spacer()
+
+                // Status indicator
+                HStack(spacing: 6) {
+                    Image(systemName: statusIcon)
+                        .font(.system(size: 11))
+                        .foregroundColor(statusColor)
+                    Text(statusLabel)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(statusColor)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(statusColor.opacity(0.1))
+                .clipShape(Capsule())
+
+                Button(action: { stopTimer(); dismiss() }) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 18))
+                        .foregroundColor(AppTheme.textMuted)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(20)
+
+            Divider().background(AppTheme.borderGlass)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    // Agent info summary
+                    GlassCard {
+                        HStack(spacing: 12) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack(spacing: 6) {
+                                    Image(systemName: "cpu")
+                                        .font(.system(size: 10))
+                                        .foregroundColor(AppTheme.accent)
+                                    Text(agent.displayModel)
+                                        .font(.system(size: 11, design: .monospaced))
+                                        .foregroundColor(AppTheme.textSecondary)
+                                }
+                                if !agent.triggers.isEmpty {
+                                    HStack(spacing: 6) {
+                                        Image(systemName: "tag")
+                                            .font(.system(size: 10))
+                                            .foregroundColor(AppTheme.textMuted)
+                                        Text(agent.triggers.joined(separator: ", "))
+                                            .font(.system(size: 11))
+                                            .foregroundColor(AppTheme.textMuted)
+                                            .lineLimit(1)
+                                    }
+                                }
+                            }
+                            Spacer()
+                            VStack(alignment: .trailing, spacing: 2) {
+                                Text(agent.backendLabel)
+                                    .font(.system(size: 10, weight: .medium))
+                                    .foregroundColor(AppTheme.textMuted)
+                                Image(systemName: agent.backendIcon)
+                                    .font(.system(size: 14))
+                                    .foregroundColor(AppTheme.textMuted)
+                            }
+                        }
+                    }
+
+                    // Suggested prompts
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Suggested test prompts")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundColor(AppTheme.textSecondary)
+
+                        FlowLayout(spacing: 6) {
+                            ForEach(suggestedPrompts, id: \.self) { prompt in
+                                Button(action: {
+                                    testMessage = prompt
+                                }) {
+                                    Text(prompt)
+                                        .font(.system(size: 11, weight: .medium))
+                                        .foregroundColor(agentColor(agent.name))
+                                        .padding(.horizontal, 10)
+                                        .padding(.vertical, 6)
+                                        .background(agentColor(agent.name).opacity(0.08))
+                                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 8)
+                                                .stroke(agentColor(agent.name).opacity(0.2), lineWidth: 0.5)
+                                        )
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+
+                    // Input area
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Test message")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(AppTheme.textSecondary)
+
+                        HStack(spacing: 8) {
+                            TextField("Type a test message...", text: $testMessage)
+                                .textFieldStyle(.plain)
+                                .font(AppTheme.fontBody)
+                                .padding(10)
+                                .background(AppTheme.bgPrimary.opacity(0.5))
+                                .clipShape(RoundedRectangle(cornerRadius: 8))
+                                .onSubmit {
+                                    if !testMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                        runTest()
+                                    }
+                                }
+
+                            Button(action: runTest) {
+                                HStack(spacing: 5) {
+                                    Image(systemName: "paperplane.fill")
+                                        .font(.system(size: 11))
+                                    Text("Send Test")
+                                        .font(.system(size: 12, weight: .semibold))
+                                }
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 10)
+                                .background(testMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || testStatus == .connecting || testStatus == .thinking
+                                    ? Color.gray.opacity(0.5)
+                                    : agentColor(agent.name))
+                                .clipShape(RoundedRectangle(cornerRadius: 8))
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(testMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || testStatus == .connecting || testStatus == .thinking)
+                        }
+                    }
+
+                    // Timer
+                    if testStatus != .idle {
+                        HStack(spacing: 8) {
+                            Image(systemName: "stopwatch")
+                                .font(.system(size: 11))
+                                .foregroundColor(AppTheme.textMuted)
+                            Text(String(format: "%.1fs", elapsedTime))
+                                .font(.system(size: 12, weight: .medium, design: .monospaced))
+                                .foregroundColor(AppTheme.textSecondary)
+
+                            Spacer()
+
+                            // Status steps
+                            HStack(spacing: 12) {
+                                TestStatusStep(label: "Connect", isActive: testStatus == .connecting, isComplete: testStatus == .thinking || testStatus == .received)
+                                TestStatusStep(label: "Think", isActive: testStatus == .thinking, isComplete: testStatus == .received)
+                                TestStatusStep(label: "Respond", isActive: false, isComplete: testStatus == .received)
+                            }
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(AppTheme.bgPrimary.opacity(0.3))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                    }
+
+                    // Response area
+                    if !mockResponse.isEmpty || testStatus == .thinking || testStatus == .connecting {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Response")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundColor(AppTheme.textSecondary)
+
+                            VStack(alignment: .leading, spacing: 0) {
+                                if testStatus == .connecting || testStatus == .thinking {
+                                    HStack(spacing: 8) {
+                                        ProgressView()
+                                            .scaleEffect(0.7)
+                                            .frame(width: 14, height: 14)
+                                        Text(testStatus == .connecting ? "Establishing connection to \(agent.backendLabel)..." : "Agent is processing your message...")
+                                            .font(.system(size: 12))
+                                            .foregroundColor(AppTheme.textMuted)
+                                    }
+                                    .padding(12)
+                                }
+
+                                if !mockResponse.isEmpty {
+                                    Text(mockResponse)
+                                        .font(AppTheme.fontBody)
+                                        .foregroundColor(AppTheme.textPrimary)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .textSelection(.enabled)
+                                        .padding(12)
+                                }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(AppTheme.bgPrimary.opacity(0.5))
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .stroke(testStatus == .received ? AppTheme.success.opacity(0.3) : AppTheme.borderGlass, lineWidth: 1)
+                            )
+                        }
+                    }
+                }
+                .padding(20)
+            }
+
+            Divider().background(AppTheme.borderGlass)
+
+            // Footer
+            HStack {
+                Button("Close") { stopTimer(); dismiss() }
+                    .foregroundColor(AppTheme.textSecondary)
+                    .buttonStyle(.plain)
+
+                Spacer()
+
+                if testStatus == .received {
+                    Button(action: openInChat) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "bubble.left.fill")
+                                .font(.system(size: 11))
+                            Text("Open in Chat")
+                                .font(.system(size: 13, weight: .semibold))
+                        }
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 9)
+                        .background(agentColor(agent.name))
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(20)
+        }
+        .frame(width: 560, height: 620)
+        .background(AppTheme.bgSecondary)
+    }
+
+    private func runTest() {
+        let trimmed = testMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        // Reset state
+        mockResponse = ""
+        elapsedTime = 0
+        testStatus = .connecting
+
+        // Start timer
+        timer?.invalidate()
+        timer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
+            elapsedTime += 0.1
+        }
+
+        // Simulate connecting phase (0.5s)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            guard testStatus == .connecting else { return }
+            testStatus = .thinking
+        }
+
+        // Simulate thinking + response (1.5-2.5s total)
+        let responseDelay = Double.random(in: 1.5...2.5)
+        DispatchQueue.main.asyncAfter(deadline: .now() + responseDelay) {
+            guard testStatus == .thinking else { return }
+            mockResponse = generateMockResponse(for: trimmed)
+            testStatus = .received
+            stopTimer()
+        }
+    }
+
+    private func stopTimer() {
+        timer?.invalidate()
+        timer = nil
+    }
+
+    private func generateMockResponse(for message: String) -> String {
+        let name = agent.name.capitalized
+        let role = agent.description.isEmpty ? "an AI assistant" : agent.description.lowercased()
+
+        // Build a response that references the agent's identity
+        var lines: [String] = []
+        lines.append("Hello! I'm \(name), \(role).")
+        lines.append("")
+
+        if message.lowercased().contains("self-check") || message.lowercased().contains("working") {
+            lines.append("Systems check: All operational. Model: \(agent.displayModel), Backend: \(agent.backendLabel).")
+            lines.append("")
+            lines.append("I'm ready to assist you. My capabilities are triggered by keywords such as: \(agent.triggers.prefix(3).joined(separator: ", ")).")
+        } else if message.lowercased().contains("capabilities") || message.lowercased().contains("what can you do") {
+            lines.append("I specialize in tasks related to: \(agent.triggers.joined(separator: ", ")).")
+            lines.append("")
+            lines.append("I use the \(agent.displayModel) model via \(agent.backendLabel) to process your requests.")
+        } else {
+            lines.append("I received your message: \"\(message)\"")
+            lines.append("")
+            lines.append("In a live session, I would process this using the \(agent.displayModel) model and provide a complete response based on my system prompt and capabilities.")
+        }
+
+        lines.append("")
+        lines.append("[This is a simulated test response. Use \"Open in Chat\" for a live conversation.]")
+
+        return lines.joined(separator: "\n")
+    }
+
+    private func openInChat() {
+        stopTimer()
+        appState.recordAgentUsage(agentName: agent.name)
+        let conv = Conversation(
+            id: UUID().uuidString,
+            title: "Test: \(agent.name)",
+            messages: [],
+            createdAt: Date(),
+            agentName: agent.name
+        )
+        appState.activeConversation = conv
+        appState.conversations.insert(conv, at: 0)
+        appState.selectedTab = .chat
+        if !testMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            appState.sendMessage(testMessage)
+        }
+        dismiss()
+    }
+}
+
+// MARK: - Test Status Step Indicator
+
+struct TestStatusStep: View {
+    let label: String
+    let isActive: Bool
+    let isComplete: Bool
+
+    var body: some View {
+        HStack(spacing: 4) {
+            ZStack {
+                Circle()
+                    .fill(isComplete ? AppTheme.success : (isActive ? AppTheme.accent : AppTheme.textMuted.opacity(0.3)))
+                    .frame(width: 8, height: 8)
+                if isActive {
+                    Circle()
+                        .fill(AppTheme.accent.opacity(0.3))
+                        .frame(width: 14, height: 14)
+                }
+            }
+            Text(label)
+                .font(.system(size: 10, weight: isActive ? .semibold : .regular))
+                .foregroundColor(isComplete ? AppTheme.success : (isActive ? AppTheme.accent : AppTheme.textMuted))
+        }
     }
 }
 
