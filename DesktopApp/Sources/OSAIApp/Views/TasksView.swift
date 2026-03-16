@@ -238,13 +238,16 @@ struct TaskCardImproved: View {
 
                     // Toggle + actions
                     VStack(alignment: .trailing, spacing: 10) {
-                        Toggle("", isOn: Binding(
+                        Toggle("Enable task", isOn: Binding(
                             get: { task.enabled },
                             set: { _ in onToggle() }
                         ))
                         .toggleStyle(.switch)
                         .controlSize(.small)
                         .tint(AppTheme.accent)
+                        .labelsHidden()
+                        .accessibilityLabel("Enable task \(task.id)")
+                        .accessibilityValue(task.enabled ? "On" : "Off")
 
                         HStack(spacing: 6) {
                             Button(action: {
@@ -259,6 +262,7 @@ struct TaskCardImproved: View {
                                     .clipShape(RoundedRectangle(cornerRadius: 6))
                             }
                             .buttonStyle(.plain)
+                            .accessibilityLabel("View log for \(task.id)")
                             .help("View Log")
 
                             Button(action: onDelete) {
@@ -270,6 +274,7 @@ struct TaskCardImproved: View {
                                     .clipShape(RoundedRectangle(cornerRadius: 6))
                             }
                             .buttonStyle(.plain)
+                            .accessibilityLabel("Delete task \(task.id)")
                             .help("Delete Task")
                         }
                     }
@@ -278,6 +283,9 @@ struct TaskCardImproved: View {
             }
         }
         .opacity(task.enabled ? 1.0 : 0.7)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Task: \(task.id)")
+        .accessibilityValue("\(task.enabled ? "Enabled" : "Disabled"), \(task.schedule.displayLabel), \(task.runCount) runs")
         .sheet(isPresented: $showLog) {
             TaskLogSheet(taskId: task.id, content: logContent)
         }

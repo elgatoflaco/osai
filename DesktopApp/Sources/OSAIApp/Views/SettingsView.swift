@@ -264,7 +264,7 @@ struct SettingsView: View {
                             .foregroundColor(AppTheme.textMuted)
                     }
                     Spacer()
-                    Toggle("", isOn: Binding(
+                    Toggle("Start on Login", isOn: Binding(
                         get: { appState.isGatewayAutoStart },
                         set: { enable in
                             if enable {
@@ -276,6 +276,9 @@ struct SettingsView: View {
                     ))
                     .toggleStyle(.switch)
                     .tint(AppTheme.accent)
+                    .labelsHidden()
+                    .accessibilityLabel("Start gateway on login")
+                    .accessibilityValue(appState.isGatewayAutoStart ? "On" : "Off")
                 }
 
                 // Gateway integrations
@@ -391,9 +394,12 @@ struct SettingsView: View {
                         .font(AppTheme.fontBody)
                         .foregroundColor(AppTheme.textPrimary)
                     Spacer()
-                    Toggle("", isOn: $appState.isDarkMode)
+                    Toggle("Dark Mode", isOn: $appState.isDarkMode)
                         .toggleStyle(.switch)
                         .tint(AppTheme.accent)
+                        .labelsHidden()
+                        .accessibilityLabel("Dark Mode")
+                        .accessibilityValue(appState.isDarkMode ? "On" : "Off")
                 }
 
                 HStack {
@@ -401,9 +407,12 @@ struct SettingsView: View {
                         .font(AppTheme.fontBody)
                         .foregroundColor(AppTheme.textPrimary)
                     Spacer()
-                    Toggle("", isOn: $appState.sidebarCollapsed)
+                    Toggle("Sidebar collapsed", isOn: $appState.sidebarCollapsed)
                         .toggleStyle(.switch)
                         .tint(AppTheme.accent)
+                        .labelsHidden()
+                        .accessibilityLabel("Sidebar collapsed")
+                        .accessibilityValue(appState.sidebarCollapsed ? "On" : "Off")
                 }
             }
         }
@@ -587,6 +596,8 @@ struct SpendingRow: View {
                 .font(AppTheme.fontMono)
                 .foregroundColor(AppTheme.textPrimary)
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(label): \(String(format: "$%.0f", value))")
     }
 }
 
@@ -628,6 +639,7 @@ struct SettingsActionButton: View {
             .overlay(Capsule().stroke(AppTheme.accent.opacity(0.2), lineWidth: 1))
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(label)
         .onHover { isHovered = $0 }
     }
 }

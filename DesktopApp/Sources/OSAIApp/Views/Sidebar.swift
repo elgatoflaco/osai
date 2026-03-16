@@ -8,7 +8,7 @@ struct Sidebar: View {
         VStack(spacing: 0) {
             // Ghost branding
             VStack(spacing: 8) {
-                GhostIcon(size: appState.sidebarCollapsed ? 32 : 44)
+                GhostIcon(size: appState.sidebarCollapsed ? 32 : 44, isProcessing: appState.isProcessing)
 
                 if !appState.sidebarCollapsed {
                     Text("osai")
@@ -103,6 +103,10 @@ struct Sidebar: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Gateway")
+            .accessibilityValue(appState.gatewayRunning ? "Running" : "Stopped")
+            .accessibilityHint("Double tap to toggle gateway")
             .help("Toggle gateway")
             .padding(.horizontal, 16)
             .padding(.bottom, 8)
@@ -121,6 +125,7 @@ struct Sidebar: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel(appState.isDarkMode ? "Switch to light mode" : "Switch to dark mode")
                 .help(appState.isDarkMode ? "Switch to light mode" : "Switch to dark mode")
 
                 if !appState.sidebarCollapsed {
@@ -138,6 +143,7 @@ struct Sidebar: View {
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel("Collapse sidebar")
                     .help("Collapse sidebar")
                 }
             }
@@ -178,7 +184,7 @@ struct ProcessingStatusBar: View {
         if isCollapsed {
             // Compact: just the animated ghost
             VStack(spacing: 4) {
-                GhostIcon(size: 18, animate: true, tint: AppTheme.accent)
+                GhostIcon(size: 18, animate: true, isProcessing: true, tint: AppTheme.accent)
                     .opacity(pulseOpacity)
 
                 Button(action: onCancel) {
@@ -190,6 +196,7 @@ struct ProcessingStatusBar: View {
                         .clipShape(Circle())
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Cancel processing")
                 .help("Cancel")
             }
             .onAppear {
@@ -200,7 +207,7 @@ struct ProcessingStatusBar: View {
         } else {
             VStack(spacing: 6) {
                 HStack(spacing: 8) {
-                    GhostIcon(size: 16, animate: true, tint: AppTheme.accent)
+                    GhostIcon(size: 16, animate: true, isProcessing: true, tint: AppTheme.accent)
                         .opacity(pulseOpacity)
 
                     Text("Processing...")
@@ -218,6 +225,7 @@ struct ProcessingStatusBar: View {
                             .clipShape(Circle())
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel("Cancel processing")
                     .help("Cancel processing")
                 }
 
@@ -274,6 +282,7 @@ struct ContextPressureBar: View {
             Circle()
                 .fill(pressureColor)
                 .frame(width: 6, height: 6)
+                .accessibilityLabel("Context pressure \(percent) percent")
                 .help("Context: \(percent)%")
         } else {
             HStack(spacing: 4) {
@@ -289,6 +298,8 @@ struct ContextPressureBar: View {
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 4)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Context pressure \(percent) percent")
         }
     }
 
@@ -393,6 +404,11 @@ struct SidebarButton: View {
             .animation(.easeOut(duration: 0.2), value: isSelected)
         }
         .buttonStyle(.plain)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(item.rawValue) tab")
+        .accessibilityValue(isSelected ? "selected" : "")
+        .accessibilityHint(isProcessing ? "Processing" : (contextPressureHigh ? "Context pressure high" : "Double tap to navigate"))
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
         .help(isCollapsed ? item.rawValue : "")
     }
 }

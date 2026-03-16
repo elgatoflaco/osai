@@ -619,6 +619,18 @@ struct ContentView: View {
                 Button("") { showCommandPalette.toggle() }
                     .keyboardShortcut("k", modifiers: .command)
                     .hidden()
+                Button("") { appState.closeCurrentConversation() }
+                    .keyboardShortcut("w", modifiers: .command)
+                    .hidden()
+                Button("") { appState.copyLastAssistantMessage() }
+                    .keyboardShortcut("c", modifiers: [.command, .shift])
+                    .hidden()
+                Button("") { appState.navigateConversation(direction: -1) }
+                    .keyboardShortcut("[", modifiers: .command)
+                    .hidden()
+                Button("") { appState.navigateConversation(direction: 1) }
+                    .keyboardShortcut("]", modifiers: .command)
+                    .hidden()
             }
         )
     }

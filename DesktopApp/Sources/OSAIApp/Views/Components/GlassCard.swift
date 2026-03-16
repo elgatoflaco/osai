@@ -3,9 +3,13 @@ import SwiftUI
 struct GlassCard<Content: View>: View {
     let content: Content
     var padding: CGFloat = AppTheme.paddingMd
+    var hoverEnabled: Bool = true
 
-    init(padding: CGFloat = AppTheme.paddingMd, @ViewBuilder content: () -> Content) {
+    @State private var isHovered = false
+
+    init(padding: CGFloat = AppTheme.paddingMd, hoverEnabled: Bool = true, @ViewBuilder content: () -> Content) {
         self.padding = padding
+        self.hoverEnabled = hoverEnabled
         self.content = content()
     }
 
@@ -17,9 +21,17 @@ struct GlassCard<Content: View>: View {
             .clipShape(RoundedRectangle(cornerRadius: AppTheme.cornerRadius))
             .overlay(
                 RoundedRectangle(cornerRadius: AppTheme.cornerRadius)
-                    .stroke(AppTheme.borderGlass, lineWidth: 1)
+                    .stroke(
+                        hoverEnabled && isHovered ? AppTheme.accent.opacity(0.25) : AppTheme.borderGlass,
+                        lineWidth: hoverEnabled && isHovered ? 1.5 : 1
+                    )
             )
-            .shadow(color: .black.opacity(0.2), radius: 16, x: 0, y: 8)
+            .shadow(color: .black.opacity(isHovered && hoverEnabled ? 0.3 : 0.2), radius: isHovered && hoverEnabled ? 20 : 16, x: 0, y: isHovered && hoverEnabled ? 10 : 8)
+            .scaleEffect(isHovered && hoverEnabled ? 1.02 : 1.0)
+            .animation(.easeOut(duration: 0.2), value: isHovered)
+            .onHover { hovering in
+                isHovered = hovering
+            }
     }
 }
 

@@ -22,10 +22,14 @@ struct MessageBubble: View {
             }
         }
         .opacity(appeared ? 1 : 0)
-        .offset(y: appeared ? 0 : 5)
+        .offset(y: appeared ? 0 : 12)
         .onAppear {
-            withAnimation(.easeOut(duration: 0.2)) { appeared = true }
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) { appeared = true }
         }
+        .transition(.asymmetric(
+            insertion: .move(edge: .bottom).combined(with: .opacity),
+            removal: .opacity
+        ))
     }
 
     private var userBubble: some View {
@@ -50,13 +54,18 @@ struct MessageBubble: View {
             Image(systemName: "person.circle.fill")
                 .font(.system(size: 26))
                 .foregroundColor(AppTheme.textSecondary)
+                .accessibilityHidden(true)
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("You said: \(message.content)")
+        .accessibilityValue("at \(timeString(message.timestamp))")
     }
 
     private var assistantBubble: some View {
         HStack(alignment: .top, spacing: 10) {
-            GhostIcon(size: 26, animate: message.isStreaming)
+            GhostIcon(size: 26, animate: message.isStreaming, isProcessing: message.isStreaming)
                 .padding(.top, 2)
+                .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 6) {
                 // Agent badge
@@ -102,6 +111,7 @@ struct MessageBubble: View {
                                 .overlay(RoundedRectangle(cornerRadius: 6).stroke(AppTheme.borderGlass, lineWidth: 0.5))
                             }
                             .buttonStyle(.plain)
+                            .accessibilityLabel(copied ? "Copied to clipboard" : "Copy response")
 
                             if isLastAssistantMessage, let onRetry = onRetry {
                                 Button(action: onRetry) {
@@ -117,6 +127,7 @@ struct MessageBubble: View {
                                     .overlay(RoundedRectangle(cornerRadius: 6).stroke(AppTheme.borderGlass, lineWidth: 0.5))
                                 }
                                 .buttonStyle(.plain)
+                                .accessibilityLabel("Retry response")
                             }
                         }
                         .transition(.opacity)
@@ -146,11 +157,14 @@ struct MessageBubble: View {
                             .clipShape(Capsule())
                         }
                         .buttonStyle(.plain)
+                        .accessibilityLabel("Stop generating response")
                     }
                 }
                 .padding(.top, 4)
             }
         }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(message.isStreaming ? "Assistant is responding" : "Assistant said")
     }
 
     private func timeString(_ date: Date) -> String {
@@ -216,6 +230,10 @@ struct ActivityStrip: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Activity strip: \(summaryText)")
+            .accessibilityHint(expanded ? "Double tap to collapse" : "Double tap to expand")
+            .accessibilityValue(expanded ? "expanded" : "collapsed")
 
             // Expanded list
             if expanded {
@@ -262,6 +280,9 @@ struct ActivityRow: View {
     let activity: ActivityItem
     let isOutputExpanded: Bool
     let onToggleOutput: () -> Void
+
+    @State private var shimmerPhase: CGFloat = 0
+    @State private var statusAppeared = false
 
     private var hasExpandableContent: Bool {
         activity.output != nil || !activity.detail.isEmpty
@@ -334,7 +355,35 @@ struct ActivityRow: View {
             .onTapGesture {
                 if hasExpandableContent { onToggleOutput() }
             }
-            .background(isOutputExpanded ? AppTheme.bgPrimary.opacity(0.3) : .clear)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("\(activity.label)\(activity.isComplete ? (activity.success == false ? ", failed" : ", completed") : ", in progress")")
+            .accessibilityValue(activity.detail.isEmpty ? "" : activity.detail)
+            .accessibilityHint(hasExpandableContent ? "Double tap to toggle details" : "")
+            .background(
+                ZStack {
+                    if isOutputExpanded {
+                        AppTheme.bgPrimary.opacity(0.3)
+                    }
+                    // Subtle shimmer overlay while activity is in progress
+                    if !activity.isComplete {
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(
+                                LinearGradient(
+                                    colors: [.clear, AppTheme.accent.opacity(0.06), .clear],
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                )
+                            )
+                            .offset(x: shimmerPhase)
+                            .onAppear {
+                                withAnimation(.easeInOut(duration: 1.5).repeatForever(autoreverses: false)) {
+                                    shimmerPhase = 200
+                                }
+                            }
+                            .clipped()
+                    }
+                }
+            )
             .clipShape(RoundedRectangle(cornerRadius: 6))
 
             // Expanded detail + output
@@ -375,10 +424,24 @@ struct ActivityRow: View {
                 Image(systemName: success ? "checkmark.circle.fill" : "xmark.circle.fill")
                     .font(.system(size: 12))
                     .foregroundColor(success ? AppTheme.success : AppTheme.error)
+                    .scaleEffect(statusAppeared ? 1.0 : 0.01)
+                    .opacity(statusAppeared ? 1 : 0)
+                    .onAppear {
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) {
+                            statusAppeared = true
+                        }
+                    }
             } else {
                 Image(systemName: "checkmark.circle.fill")
                     .font(.system(size: 12))
                     .foregroundColor(AppTheme.success)
+                    .scaleEffect(statusAppeared ? 1.0 : 0.01)
+                    .opacity(statusAppeared ? 1 : 0)
+                    .onAppear {
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) {
+                            statusAppeared = true
+                        }
+                    }
             }
         } else {
             Circle()

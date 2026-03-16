@@ -96,6 +96,7 @@ struct ChatView: View {
                             .foregroundColor(AppTheme.accent)
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel("New chat")
 
                     Menu {
                         Button(action: {
@@ -160,6 +161,7 @@ struct ChatView: View {
                                 .foregroundColor(AppTheme.textMuted)
                         }
                         .buttonStyle(.plain)
+                        .accessibilityLabel("Clear search")
                     }
                 }
                 .padding(.horizontal, 10)
@@ -517,7 +519,12 @@ struct ChatView: View {
                                             onRetry: msg.id == lastAssistantId && !msg.isStreaming ? { appState.retryLastMessage() } : nil
                                         )
                                         .id(msg.id)
+                                        .transition(.asymmetric(
+                                            insertion: .move(edge: .bottom).combined(with: .opacity),
+                                            removal: .opacity
+                                        ))
                                     }
+                                    .animation(.spring(response: 0.35, dampingFraction: 0.85), value: conv.messages.count)
 
                                     // Invisible anchor at the very bottom
                                     Color.clear.frame(height: 1).id("scroll_bottom_anchor")
@@ -584,6 +591,7 @@ struct ChatView: View {
                                         .shadow(color: .black.opacity(0.3), radius: 4, y: 2)
                                 }
                                 .buttonStyle(.plain)
+                                .accessibilityLabel("Scroll to bottom")
                                 .padding(.trailing, 16)
                                 .padding(.bottom, 16)
                                 .transition(.opacity.combined(with: .scale))
@@ -703,12 +711,18 @@ struct ChatView: View {
                         }
                     }
 
-                    ChatInputBar(text: $messageText, attachedFiles: $attachedFiles, isDisabled: appState.isProcessing) {
+                    ChatInputBar(text: $messageText, attachedFiles: $attachedFiles, isDisabled: appState.isProcessing, onUpArrowInEmptyInput: {
+                        if let lastContent = appState.lastUserMessageContent() {
+                            messageText = lastContent
+                        }
+                    }) {
                         guard !messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
                         let files = attachedFiles
                         appState.sendMessage(messageText, attachments: files)
                         messageText = ""
                         attachedFiles = []
+                        // Re-focus the input after sending
+                        appState.shouldFocusInput = true
                     }
                     .padding(AppTheme.paddingMd)
                 }
@@ -907,6 +921,10 @@ struct ConversationRow: View {
             )
         }
         .buttonStyle(.plain)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(conv.isPinned ? "Pinned: " : "")\(conv.title)")
+        .accessibilityValue("\(conv.messages.count) messages\(conv.agentName.map { ", agent: \($0)" } ?? "")")
+        .accessibilityAddTraits(isActive ? .isSelected : [])
         .onHover { isHovered = $0 }
         .contextMenu {
             Button(action: { onTogglePin?() }) {
@@ -978,6 +996,8 @@ struct QuickSuggestion: View {
             )
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(text)
+        .accessibilityHint("Double tap to use this suggestion")
         .onHover { isHovered = $0 }
     }
 }

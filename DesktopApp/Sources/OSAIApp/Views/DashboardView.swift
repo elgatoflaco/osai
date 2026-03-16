@@ -85,8 +85,11 @@ struct DashboardView: View {
                             )
                         }
                         .buttonStyle(.plain)
+                        .accessibilityLabel(appState.gatewayRunning ? "Stop gateway" : "Start gateway")
                     }
                 }
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel("Gateway status")
                 .frame(maxWidth: 800)
 
                 // Stats grid
@@ -349,6 +352,8 @@ struct QuickAction: View {
             )
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(label)
+        .accessibilityHint("Double tap to navigate")
         .onHover { isHovered = $0 }
     }
 }
@@ -390,6 +395,9 @@ struct StatCard: View {
             RoundedRectangle(cornerRadius: 14)
                 .stroke(AppTheme.borderGlass, lineWidth: 0.5)
         )
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(label): \(value)")
+        .accessibilityValue(progress != nil ? "\(Int((progress ?? 0) * 100)) percent of limit" : "")
     }
 }
 
@@ -454,6 +462,10 @@ struct MiniTaskRow: View {
             )
         }
         .buttonStyle(.plain)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Task: \(task.id)")
+        .accessibilityValue("\(task.schedule.displayLabel), \(task.runCount) runs")
+        .accessibilityHint("Double tap to view tasks")
         .onHover { isHovered = $0 }
     }
 }
@@ -471,6 +483,8 @@ struct SystemItem: View {
                 .font(.system(size: 11))
                 .foregroundColor(AppTheme.textSecondary)
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(label): \(status ? "OK" : "Not available")")
     }
 }
 
@@ -527,6 +541,8 @@ struct AgentPill: View {
         )
         .animation(.easeOut(duration: 0.15), value: isHovered)
         .onHover { isHovered = $0 }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Agent: \(agent.name), model: \(agent.displayModel)")
     }
 }
 
@@ -755,6 +771,8 @@ struct QuickStatItem: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 8)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(label): \(value)")
     }
 }
 
@@ -792,6 +810,8 @@ struct TopAgentRow: View {
                 .foregroundColor(AppTheme.textSecondary)
                 .frame(width: 30, alignment: .trailing)
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Agent \(name): \(count) conversations")
     }
 }
 

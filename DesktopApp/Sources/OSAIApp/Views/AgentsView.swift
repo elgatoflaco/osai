@@ -56,6 +56,7 @@ struct AgentsView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 10))
                     }
                     .buttonStyle(.plain)
+            .accessibilityLabel("Create new agent")
                 }
                 .padding(.bottom, 4)
 
@@ -253,6 +254,9 @@ struct AgentCard: View {
         .offset(y: isHovered ? -2 : 0)
         .animation(.easeOut(duration: 0.2), value: isHovered)
         .onHover { isHovered = $0 }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Agent: \(agent.name.capitalized)")
+        .accessibilityValue("Model: \(agent.model)\(agent.description.isEmpty ? "" : ", \(agent.description)")")
         .alert("Delete Agent", isPresented: $showConfirmDelete) {
             Button("Cancel", role: .cancel) {}
             Button("Delete", role: .destructive, action: onDelete)

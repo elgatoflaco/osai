@@ -3,9 +3,13 @@ import SwiftUI
 struct GhostIcon: View {
     var size: CGFloat = 48
     var animate: Bool = true
+    var isProcessing: Bool = false
     var tint: Color = AppTheme.accent
 
     @State private var floatOffset: CGFloat = 0
+    @State private var breatheScale: CGFloat = 1.0
+    @State private var glowRadius: CGFloat = 12
+    @State private var glowOpacity: Double = 0.4
 
     private let ghostGrid: [[Int]] = [
         [0,0,0,0,0,1,1,1,1,1,1,0,0,0,0,0],
@@ -55,13 +59,52 @@ struct GhostIcon: View {
             }
         }
         .frame(width: size, height: CGFloat(rows) / CGFloat(cols) * size)
+        .scaleEffect(breatheScale)
         .offset(y: floatOffset)
-        .shadow(color: tint.opacity(0.4), radius: 12, x: 0, y: 4)
+        .shadow(color: tint.opacity(glowOpacity), radius: glowRadius, x: 0, y: 4)
         .onAppear {
             guard animate else { return }
-            withAnimation(.easeInOut(duration: 3).repeatForever(autoreverses: true)) {
-                floatOffset = -3
+            startIdleAnimation()
+        }
+        .onChange(of: isProcessing) { _, processing in
+            guard animate else { return }
+            if processing {
+                startProcessingAnimation()
+            } else {
+                startIdleAnimation()
             }
+        }
+    }
+
+    private func startIdleAnimation() {
+        // Gentle float
+        withAnimation(.easeInOut(duration: 3).repeatForever(autoreverses: true)) {
+            floatOffset = -3
+        }
+        // Subtle breathing scale
+        withAnimation(.easeInOut(duration: 4).repeatForever(autoreverses: true)) {
+            breatheScale = 1.02
+        }
+        // Calm glow
+        withAnimation(.easeInOut(duration: 3).repeatForever(autoreverses: true)) {
+            glowRadius = 16
+            glowOpacity = 0.5
+        }
+    }
+
+    private func startProcessingAnimation() {
+        // Faster, more active float
+        withAnimation(.easeInOut(duration: 1.5).repeatForever(autoreverses: true)) {
+            floatOffset = -5
+        }
+        // More pronounced pulse
+        withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) {
+            breatheScale = 1.06
+        }
+        // Active glow pulse
+        withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) {
+            glowRadius = 24
+            glowOpacity = 0.7
         }
     }
 }

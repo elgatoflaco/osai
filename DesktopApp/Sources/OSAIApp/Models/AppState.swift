@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import Combine
 import UniformTypeIdentifiers
 import UserNotifications
@@ -447,6 +448,47 @@ class AppState: ObservableObject {
     func startNewChat() {
         activeConversation = nil
         selectedTab = .chat
+    }
+
+    func closeCurrentConversation() {
+        activeConversation = nil
+        suggestedReplies = []
+    }
+
+    func copyLastAssistantMessage() {
+        guard let conv = activeConversation,
+              let lastAssistant = conv.messages.last(where: { $0.role == .assistant }) else { return }
+        let content = lastAssistant.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !content.isEmpty else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(content, forType: .string)
+        showToast("Copied to clipboard", type: .success)
+    }
+
+    func navigateConversation(direction: Int) {
+        guard !conversations.isEmpty else { return }
+        selectedTab = .chat
+
+        guard let active = activeConversation,
+              let currentIdx = conversations.firstIndex(where: { $0.id == active.id }) else {
+            // No active conversation: open first or last depending on direction
+            if direction > 0 {
+                openConversation(conversations[0])
+            } else {
+                openConversation(conversations[conversations.count - 1])
+            }
+            return
+        }
+
+        let newIdx = currentIdx + direction
+        if newIdx >= 0, newIdx < conversations.count {
+            openConversation(conversations[newIdx])
+        }
+    }
+
+    /// Returns the content of the last user message in the active conversation, if any.
+    func lastUserMessageContent() -> String? {
+        activeConversation?.messages.last(where: { $0.role == .user })?.content
     }
 
     func openConversation(_ conv: Conversation) {

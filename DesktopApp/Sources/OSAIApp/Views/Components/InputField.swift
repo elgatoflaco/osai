@@ -36,6 +36,8 @@ struct TaskInputField: View {
             }
             .buttonStyle(.plain)
             .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .accessibilityLabel("Send message")
+            .accessibilityHint(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Type a message first" : "Double tap to send")
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 14)
@@ -68,6 +70,8 @@ struct GrowingTextEditor: NSViewRepresentable {
     var isDisabled: Bool
     var isFocused: Binding<Bool>
     var onSubmit: () -> Void
+    var onUpArrowInEmptyInput: (() -> Void)?
+    var onEscapeKey: (() -> Void)?
 
     private let lineHeight: CGFloat = 20
     private let maxLines: Int = 5
@@ -88,6 +92,8 @@ struct GrowingTextEditor: NSViewRepresentable {
         let textView = SubmittableTextView()
         textView.delegate = context.coordinator
         textView.onSubmit = onSubmit
+        textView.onUpArrowInEmptyInput = onUpArrowInEmptyInput
+        textView.onEscapeKey = onEscapeKey
         textView.font = font
         textView.textColor = textColor
         textView.backgroundColor = .clear
@@ -115,8 +121,10 @@ struct GrowingTextEditor: NSViewRepresentable {
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         guard let textView = scrollView.documentView as? SubmittableTextView else { return }
 
-        // Update submit closure
+        // Update closures
         textView.onSubmit = onSubmit
+        textView.onUpArrowInEmptyInput = onUpArrowInEmptyInput
+        textView.onEscapeKey = onEscapeKey
 
         // Only update text if it differs (avoid cursor jumping)
         if textView.string != text {
@@ -215,14 +223,27 @@ struct GrowingTextEditor: NSViewRepresentable {
     }
 }
 
-/// NSTextView subclass that intercepts Return (submit) vs Shift+Return (newline).
+/// NSTextView subclass that intercepts Return (submit) vs Shift+Return (newline),
+/// and Up arrow in empty input to recall the last user message.
 class SubmittableTextView: NSTextView {
     var onSubmit: (() -> Void)?
+    var onUpArrowInEmptyInput: (() -> Void)?
+    var onEscapeKey: (() -> Void)?
 
     override func keyDown(with event: NSEvent) {
         // Return key without Shift modifier -> submit
         if event.keyCode == 36 && !event.modifierFlags.contains(.shift) {
             onSubmit?()
+            return
+        }
+        // Up arrow in empty input -> recall last user message
+        if event.keyCode == 126 && string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            onUpArrowInEmptyInput?()
+            return
+        }
+        // Escape key -> clear input or bubble up
+        if event.keyCode == 53 {
+            onEscapeKey?()
             return
         }
         super.keyDown(with: event)
@@ -236,6 +257,7 @@ struct ChatInputBar: View {
     @Binding var text: String
     @Binding var attachedFiles: [URL]
     var isDisabled: Bool = false
+    var onUpArrowInEmptyInput: (() -> Void)?
     var onSubmit: () -> Void
 
     @State private var isFocused: Bool = false
@@ -283,8 +305,10 @@ struct ChatInputBar: View {
                                 .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
+                            .accessibilityLabel("\(cmd.command), \(cmd.description)")
                         }
                     }
+                    .accessibilityLabel("Slash commands menu")
                     .background(AppTheme.bgCard)
                     .clipShape(RoundedRectangle(cornerRadius: 10))
                     .overlay(RoundedRectangle(cornerRadius: 10).stroke(AppTheme.borderGlass, lineWidth: 1))
@@ -301,6 +325,8 @@ struct ChatInputBar: View {
                         .foregroundColor(AppTheme.textSecondary)
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Attach files")
+                .accessibilityHint("Double tap to open file picker")
                 .help("Attach files")
                 .padding(.bottom, 2)
 
@@ -311,7 +337,15 @@ struct ChatInputBar: View {
                     placeholderText: "Message...",
                     isDisabled: isDisabled,
                     isFocused: $isFocused,
-                    onSubmit: submitIfValid
+                    onSubmit: submitIfValid,
+                    onUpArrowInEmptyInput: onUpArrowInEmptyInput,
+                    onEscapeKey: {
+                        if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            text = ""
+                        } else {
+                            appState.closeCurrentConversation()
+                        }
+                    }
                 )
 
                 Button(action: submitIfValid) {
@@ -321,6 +355,8 @@ struct ChatInputBar: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(!canSubmit)
+                .accessibilityLabel("Send message")
+                .accessibilityHint(canSubmit ? "Double tap to send" : "Type a message first")
                 .padding(.bottom, 2)
             }
             .padding(.horizontal, 16)
