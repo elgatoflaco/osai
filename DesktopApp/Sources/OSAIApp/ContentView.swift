@@ -1878,6 +1878,8 @@ struct ContentView: View {
     @State private var commandSearch = ""
     @State private var showCompactMenu = false
     @State private var showKeyboardShortcuts = false
+    @State private var focusMode: Bool = false
+    @State private var focusExitHover: Bool = false
     @State private var sessionSaveTimer: Timer?
     @State private var terminationObserver: NSObjectProtocol?
 
@@ -1889,7 +1891,76 @@ struct ContentView: View {
             let hideSidebar = isVeryNarrow || appState.compactMode
 
             ZStack(alignment: .leading) {
-                if appState.compactMode {
+                if focusMode {
+                    // MARK: - Focus Mode
+                    ZStack {
+                        AppTheme.bgPrimary
+                            .ignoresSafeArea()
+
+                        ChatView()
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                        // Vignette overlay — subtle dimmed edges
+                        Rectangle()
+                            .fill(
+                                RadialGradient(
+                                    gradient: Gradient(colors: [
+                                        Color.clear,
+                                        Color.black.opacity(0.15)
+                                    ]),
+                                    center: .center,
+                                    startRadius: min(geo.size.width, geo.size.height) * 0.35,
+                                    endRadius: max(geo.size.width, geo.size.height) * 0.75
+                                )
+                            )
+                            .ignoresSafeArea()
+                            .allowsHitTesting(false)
+
+                        // Floating exit button — top-right, appears on hover
+                        VStack {
+                            HStack {
+                                Spacer()
+                                Button(action: {
+                                    withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
+                                        focusMode = false
+                                    }
+                                }) {
+                                    HStack(spacing: 5) {
+                                        Image(systemName: "arrow.down.right.and.arrow.up.left")
+                                            .font(.system(size: 11, weight: .medium))
+                                        if focusExitHover {
+                                            Text("Exit Focus")
+                                                .font(.system(size: 11, weight: .medium))
+                                                .transition(.opacity.combined(with: .move(edge: .trailing)))
+                                        }
+                                    }
+                                    .foregroundColor(AppTheme.textSecondary)
+                                    .padding(.horizontal, focusExitHover ? 12 : 8)
+                                    .padding(.vertical, 8)
+                                    .background(.ultraThinMaterial)
+                                    .background(AppTheme.bgCard.opacity(0.5))
+                                    .clipShape(Capsule())
+                                    .overlay(
+                                        Capsule()
+                                            .stroke(AppTheme.borderGlass, lineWidth: 1)
+                                    )
+                                    .opacity(focusExitHover ? 1.0 : 0.35)
+                                }
+                                .buttonStyle(.plain)
+                                .onHover { hovering in
+                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                        focusExitHover = hovering
+                                    }
+                                }
+                                .padding(.top, 12)
+                                .padding(.trailing, 12)
+                                .help("Exit Focus Mode (Cmd+Shift+F)")
+                            }
+                            Spacer()
+                        }
+                    }
+                    .transition(.opacity)
+                } else if appState.compactMode {
                     // Compact mode: no sidebar, minimal header + content
                     VStack(spacing: 0) {
                         CompactModeHeader(showCompactMenu: $showCompactMenu)
@@ -2046,6 +2117,7 @@ struct ContentView: View {
             }
             .animation(.easeOut(duration: 0.25), value: appState.showSidebarOverlay)
             .animation(.easeInOut(duration: 0.3), value: appState.compactMode)
+            .animation(.spring(response: 0.4, dampingFraction: 0.85), value: focusMode)
             .onChange(of: isNarrow) { _, narrow in
                 // Auto-collapse sidebar when window becomes narrow
                 if narrow && !appState.sidebarCollapsed {
@@ -2211,6 +2283,16 @@ struct ContentView: View {
                     .hidden()
                 Button("") { appState.toggleSidebarCollapse() }
                     .keyboardShortcut("\\", modifiers: .command)
+                    .hidden()
+                Button("") {
+                    withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
+                        focusMode.toggle()
+                        if focusMode {
+                            appState.selectedTab = .chat
+                        }
+                    }
+                }
+                    .keyboardShortcut("f", modifiers: [.command, .shift])
                     .hidden()
             }
         )

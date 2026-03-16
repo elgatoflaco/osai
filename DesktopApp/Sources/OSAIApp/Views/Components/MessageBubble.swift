@@ -1785,6 +1785,24 @@ struct MessageBubble: View {
                                     .padding(.top, 4)
                             }
                         }
+
+                        // Word count & reading time footer for long assistant messages
+                        if !message.isStreaming && message.role == .assistant {
+                            let words = message.content.split(whereSeparator: { $0.isWhitespace || $0.isNewline })
+                            let wordCount = words.count
+                            if wordCount > 100 {
+                                let readingMinutes = max(1, Int((Double(wordCount) / 200.0).rounded(.up)))
+                                let charCount = message.content.count
+                                HStack(spacing: 0) {
+                                    Spacer()
+                                    Text("\(wordCount) words  ·  ~\(readingMinutes) min read")
+                                        .font(.system(size: 10))
+                                        .foregroundColor(AppTheme.textMuted)
+                                        .help("\(charCount) characters")
+                                }
+                                .padding(.top, 2)
+                            }
+                        }
                     }
 
                     // Copy, share, bookmark, speak & retry buttons on hover

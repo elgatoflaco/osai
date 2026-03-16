@@ -58,6 +58,9 @@ struct ChatView: View {
     @State private var editingWorkspaceName: String = ""
     @State private var archiveSearchText: String = ""
     @State private var showDeleteAllArchivedAlert: Bool = false
+    @State private var showNotificationPanel: Bool = false
+    @State private var notifications: [NotificationItem] = NotificationItem.sampleNotifications()
+    @State private var readNotificationIds: Set<String> = []
 
     private var filteredConversations: [Conversation] {
         var sorted = appState.workspaceFilteredConversations(appState.sortedConversations)
@@ -562,7 +565,29 @@ struct ChatView: View {
                     }
 
                     if !focusMode {
-                        Button(action: { withAnimation(.easeInOut(duration: 0.2)) { showBookmarksPanel.toggle() } }) {
+                        Button(action: { withAnimation(.easeInOut(duration: 0.2)) { showNotificationPanel.toggle(); showBookmarksPanel = false } }) {
+                            ZStack(alignment: .topTrailing) {
+                                Image(systemName: showNotificationPanel ? "bell.fill" : "bell")
+                                    .font(.system(size: 14))
+                                    .foregroundColor(showNotificationPanel ? AppTheme.accent : AppTheme.textSecondary)
+
+                                let unreadNotifCount = notifications.filter { !readNotificationIds.contains($0.id) }.count
+                                if unreadNotifCount > 0 {
+                                    Text("\(unreadNotifCount)")
+                                        .font(.system(size: 8, weight: .bold, design: .rounded))
+                                        .foregroundColor(.white)
+                                        .padding(.horizontal, 3)
+                                        .padding(.vertical, 1)
+                                        .background(AppTheme.error)
+                                        .clipShape(Capsule())
+                                        .offset(x: 6, y: -6)
+                                }
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .help("Notifications")
+
+                        Button(action: { withAnimation(.easeInOut(duration: 0.2)) { showBookmarksPanel.toggle(); showNotificationPanel = false } }) {
                             ZStack(alignment: .topTrailing) {
                                 Image(systemName: appState.bookmarkedMessages.isEmpty ? "bookmark" : "bookmark.fill")
                                     .font(.system(size: 14))
@@ -723,6 +748,12 @@ struct ChatView: View {
                 // Bookmarks panel
                 if showBookmarksPanel {
                     bookmarksPanel
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                }
+
+                // Notification panel
+                if showNotificationPanel {
+                    notificationPanel
                         .transition(.move(edge: .top).combined(with: .opacity))
                 }
 
@@ -2663,6 +2694,187 @@ struct ChatView: View {
         case .assistant: return "cpu"
         case .system: return "gearshape"
         case .tool: return "wrench.and.screwdriver"
+        }
+    }
+
+    // MARK: - Notification Panel
+
+    private enum NotificationTimeGroup: String, CaseIterable {
+        case justNow = "Just Now"
+        case recent = "Recent"
+        case earlier = "Earlier"
+    }
+
+    private func notificationTimeGroup(for date: Date) -> NotificationTimeGroup {
+        let elapsed = Date().timeIntervalSince(date)
+        if elapsed < 60 { return .justNow }
+        if elapsed < 3600 { return .recent }
+        return .earlier
+    }
+
+    private var groupedNotifications: [(NotificationTimeGroup, [NotificationItem])] {
+        let grouped = Dictionary(grouping: notifications) { notificationTimeGroup(for: $0.timestamp) }
+        return NotificationTimeGroup.allCases.compactMap { group in
+            guard let items = grouped[group], !items.isEmpty else { return nil }
+            return (group, items.sorted { $0.timestamp > $1.timestamp })
+        }
+    }
+
+    private var notificationPanel: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Header
+            HStack {
+                Image(systemName: "bell.fill")
+                    .font(.system(size: 12))
+                    .foregroundColor(AppTheme.accent)
+                Text("Notifications")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(AppTheme.textPrimary)
+
+                let unreadNotifCount = notifications.filter { !readNotificationIds.contains($0.id) }.count
+                if unreadNotifCount > 0 {
+                    Text("\(unreadNotifCount)")
+                        .font(.system(size: 10, weight: .bold, design: .rounded))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1)
+                        .background(AppTheme.error.opacity(0.8))
+                        .clipShape(Capsule())
+                }
+
+                Spacer()
+
+                if !notifications.isEmpty {
+                    Button(action: {
+                        readNotificationIds = Set(notifications.map { $0.id })
+                    }) {
+                        Text("Mark all read")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundColor(AppTheme.accent.opacity(0.8))
+                    }
+                    .buttonStyle(.plain)
+
+                    Button(action: {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            notifications.removeAll()
+                        }
+                    }) {
+                        Text("Dismiss all")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundColor(AppTheme.error.opacity(0.8))
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.leading, 6)
+                }
+
+                Button(action: {
+                    withAnimation(.easeInOut(duration: 0.2)) { showNotificationPanel = false }
+                }) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(AppTheme.textMuted)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+
+            Divider().background(AppTheme.borderGlass)
+
+            if notifications.isEmpty {
+                HStack {
+                    Spacer()
+                    VStack(spacing: 6) {
+                        Image(systemName: "bell.slash")
+                            .font(.system(size: 20))
+                            .foregroundColor(AppTheme.textMuted)
+                        Text("No notifications")
+                            .font(.system(size: 12))
+                            .foregroundColor(AppTheme.textMuted)
+                    }
+                    .padding(.vertical, 20)
+                    Spacer()
+                }
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(groupedNotifications, id: \.0) { group, items in
+                            // Group header
+                            Text(group.rawValue)
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundColor(AppTheme.textMuted)
+                                .textCase(.uppercase)
+                                .padding(.horizontal, 14)
+                                .padding(.top, 10)
+                                .padding(.bottom, 4)
+
+                            ForEach(items) { item in
+                                notificationRow(item)
+                            }
+                        }
+                    }
+                }
+                .frame(maxHeight: 260)
+            }
+        }
+        .background(AppTheme.bgSecondary.opacity(0.6))
+    }
+
+    private func notificationRow(_ item: NotificationItem) -> some View {
+        let isUnread = !readNotificationIds.contains(item.id)
+        return HStack(alignment: .top, spacing: 10) {
+            // Unread dot
+            Circle()
+                .fill(isUnread ? AppTheme.accent : Color.clear)
+                .frame(width: 6, height: 6)
+                .padding(.top, 5)
+
+            // Icon
+            Image(systemName: item.icon)
+                .font(.system(size: 13))
+                .foregroundColor(item.iconColor)
+                .frame(width: 20, height: 20)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.title)
+                    .font(.system(size: 12, weight: isUnread ? .semibold : .regular))
+                    .foregroundColor(AppTheme.textPrimary)
+                    .lineLimit(1)
+                if let body = item.body {
+                    Text(body)
+                        .font(.system(size: 11))
+                        .foregroundColor(AppTheme.textSecondary)
+                        .lineLimit(2)
+                }
+                Text(item.relativeTime)
+                    .font(.system(size: 10))
+                    .foregroundColor(AppTheme.textMuted)
+            }
+
+            Spacer()
+
+            // Dismiss button
+            Button(action: {
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    notifications.removeAll { $0.id == item.id }
+                }
+            }) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundColor(AppTheme.textMuted)
+                    .padding(4)
+                    .background(AppTheme.bgCard.opacity(0.6))
+                    .clipShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .help("Dismiss")
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 6)
+        .background(isUnread ? AppTheme.accent.opacity(0.05) : Color.clear)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            readNotificationIds.insert(item.id)
         }
     }
 
@@ -5320,5 +5532,41 @@ struct ConversationDropDelegate: DropDelegate {
     private func resetState() {
         draggedId = nil
         dropTargetId = nil
+    }
+}
+
+// MARK: - Notification Model
+
+struct NotificationItem: Identifiable {
+    let id: String
+    let title: String
+    let body: String?
+    let icon: String
+    let iconColor: Color
+    let timestamp: Date
+
+    var relativeTime: String {
+        let elapsed = Date().timeIntervalSince(timestamp)
+        if elapsed < 60 { return "Just now" }
+        if elapsed < 3600 {
+            let mins = Int(elapsed / 60)
+            return "\(mins)m ago"
+        }
+        if elapsed < 86400 {
+            let hours = Int(elapsed / 3600)
+            return "\(hours)h ago"
+        }
+        let days = Int(elapsed / 86400)
+        return "\(days)d ago"
+    }
+
+    static func sampleNotifications() -> [NotificationItem] {
+        let now = Date()
+        return [
+            NotificationItem(id: "n1", title: "Agent completed task", body: "Research agent finished gathering data", icon: "checkmark.circle.fill", iconColor: AppTheme.success, timestamp: now.addingTimeInterval(-15)),
+            NotificationItem(id: "n2", title: "New conversation started", body: nil, icon: "bubble.left.fill", iconColor: AppTheme.accent, timestamp: now.addingTimeInterval(-120)),
+            NotificationItem(id: "n3", title: "Export ready", body: "Your conversation export is ready to download", icon: "square.and.arrow.down.fill", iconColor: AppTheme.accent, timestamp: now.addingTimeInterval(-1800)),
+            NotificationItem(id: "n4", title: "Context limit warning", body: "Conversation approaching token limit", icon: "exclamationmark.triangle.fill", iconColor: AppTheme.warning, timestamp: now.addingTimeInterval(-5400)),
+        ]
     }
 }
