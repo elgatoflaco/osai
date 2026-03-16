@@ -342,6 +342,7 @@ class OSAIService {
         if conv.totalOutputTokens > 0 { json["totalOutputTokens"] = conv.totalOutputTokens }
         if let branchedFromId = conv.branchedFromId { json["branchedFromId"] = branchedFromId }
         if let branchedAtMessageIndex = conv.branchedAtMessageIndex { json["branchedAtMessageIndex"] = branchedAtMessageIndex }
+        if !conv.tags.isEmpty { json["tags"] = conv.tags }
 
         let path = "\(dir)/\(conv.id).json"
         if let data = try? JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted]) {
@@ -385,6 +386,7 @@ class OSAIService {
             agentName: json["agentName"] as? String,
             modelId: json["modelId"] as? String,
             isPinned: json["isPinned"] as? Bool ?? false,
+            tags: json["tags"] as? [String] ?? [],
             totalInputTokens: json["totalInputTokens"] as? Int ?? 0,
             totalOutputTokens: json["totalOutputTokens"] as? Int ?? 0,
             branchedFromId: json["branchedFromId"] as? String,

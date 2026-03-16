@@ -208,10 +208,13 @@ struct MessageBubble: View {
     var onRetry: (() -> Void)?
     var onReaction: ((MessageReaction?) -> Void)?
     var onBranch: (() -> Void)?
+    var onEdit: ((String) -> Void)?
     @State private var appeared = false
     @State private var copied = false
     @State private var isHovered = false
     @State private var reactionBounce: MessageReaction?
+    @State private var isEditing = false
+    @State private var editText = ""
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -237,41 +240,22 @@ struct MessageBubble: View {
     private var userBubble: some View {
         HStack(alignment: .top, spacing: 8) {
             VStack(alignment: .trailing, spacing: 3) {
-                Text(message.content)
-                    .font(.system(size: 14))
-                    .foregroundColor(AppTheme.textPrimary)
-                    .textSelection(.enabled)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 12)
-                    .background(AppTheme.accent.opacity(0.12))
-                    .clipShape(RoundedRectangle(cornerRadius: 18))
-                    .overlay(RoundedRectangle(cornerRadius: 18).stroke(AppTheme.accent.opacity(0.2), lineWidth: 0.5))
+                if isEditing {
+                    editingView
+                } else {
+                    Text(message.content)
+                        .font(.system(size: 14))
+                        .foregroundColor(AppTheme.textPrimary)
+                        .textSelection(.enabled)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 12)
+                        .background(AppTheme.accent.opacity(0.12))
+                        .clipShape(RoundedRectangle(cornerRadius: 18))
+                        .overlay(RoundedRectangle(cornerRadius: 18).stroke(AppTheme.accent.opacity(0.2), lineWidth: 0.5))
+                }
 
-                HStack(spacing: 6) {
-                    if isHovered, let onBranch = onBranch {
-                        Button(action: onBranch) {
-                            HStack(spacing: 3) {
-                                Image(systemName: "arrow.triangle.branch")
-                                    .font(.system(size: 9))
-                                Text("Branch")
-                                    .font(.system(size: 9))
-                            }
-                            .foregroundColor(AppTheme.textMuted)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 3)
-                            .background(AppTheme.bgCard.opacity(0.9))
-                            .clipShape(RoundedRectangle(cornerRadius: 6))
-                            .overlay(RoundedRectangle(cornerRadius: 6).stroke(AppTheme.borderGlass, lineWidth: 0.5))
-                        }
-                        .buttonStyle(.plain)
-                        .transition(.opacity)
-                        .accessibilityLabel("Branch conversation from this message")
-                    }
-
-                    Text(timeString(message.timestamp))
-                        .font(.system(size: 9))
-                        .foregroundColor(AppTheme.textMuted)
-                        .padding(.trailing, 4)
+                if !isEditing {
+                    userBubbleActions
                 }
             }
 
@@ -286,6 +270,122 @@ struct MessageBubble: View {
         .accessibilityElement(children: .combine)
         .accessibilityLabel("You said: \(message.content)")
         .accessibilityValue("at \(timeString(message.timestamp))")
+    }
+
+    // MARK: - Editing View
+
+    private var editingView: some View {
+        VStack(alignment: .trailing, spacing: 8) {
+            Text("Editing...")
+                .font(.system(size: 10, weight: .medium))
+                .foregroundColor(AppTheme.textMuted)
+
+            TextEditor(text: $editText)
+                .font(.system(size: 14))
+                .foregroundColor(AppTheme.textPrimary)
+                .scrollContentBackground(.hidden)
+                .padding(10)
+                .frame(minHeight: 60, maxHeight: 200)
+                .background(AppTheme.accent.opacity(0.06))
+                .clipShape(RoundedRectangle(cornerRadius: 14))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14)
+                        .stroke(AppTheme.accent.opacity(0.5), lineWidth: 1.5)
+                )
+                .shadow(color: AppTheme.accent.opacity(0.15), radius: 6, y: 0)
+
+            HStack(spacing: 8) {
+                Button(action: {
+                    withAnimation(.easeInOut(duration: 0.2)) { isEditing = false }
+                }) {
+                    Text("Cancel")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(AppTheme.textMuted)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 5)
+                        .background(AppTheme.bgCard.opacity(0.9))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(AppTheme.borderGlass, lineWidth: 0.5))
+                }
+                .buttonStyle(.plain)
+
+                Button(action: {
+                    let trimmed = editText.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !trimmed.isEmpty else { return }
+                    withAnimation(.easeInOut(duration: 0.2)) { isEditing = false }
+                    onEdit?(trimmed)
+                }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "arrow.up.circle.fill")
+                            .font(.system(size: 11))
+                        Text("Save & Resend")
+                            .font(.system(size: 11, weight: .medium))
+                    }
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 5)
+                    .background(AppTheme.accent)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    // MARK: - User Bubble Actions
+
+    private var userBubbleActions: some View {
+        HStack(spacing: 6) {
+            if isHovered {
+                if onEdit != nil {
+                    Button(action: {
+                        editText = message.content
+                        withAnimation(.easeInOut(duration: 0.2)) { isEditing = true }
+                    }) {
+                        HStack(spacing: 3) {
+                            Image(systemName: "pencil")
+                                .font(.system(size: 9))
+                            Text("Edit")
+                                .font(.system(size: 9))
+                        }
+                        .foregroundColor(AppTheme.textMuted)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(AppTheme.bgCard.opacity(0.9))
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(AppTheme.borderGlass, lineWidth: 0.5))
+                    }
+                    .buttonStyle(.plain)
+                    .transition(.opacity)
+                    .accessibilityLabel("Edit this message")
+                }
+
+                if let onBranch = onBranch {
+                    Button(action: onBranch) {
+                        HStack(spacing: 3) {
+                            Image(systemName: "arrow.triangle.branch")
+                                .font(.system(size: 9))
+                            Text("Branch")
+                                .font(.system(size: 9))
+                        }
+                        .foregroundColor(AppTheme.textMuted)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(AppTheme.bgCard.opacity(0.9))
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(AppTheme.borderGlass, lineWidth: 0.5))
+                    }
+                    .buttonStyle(.plain)
+                    .transition(.opacity)
+                    .accessibilityLabel("Branch conversation from this message")
+                }
+            }
+
+            Text(timeString(message.timestamp))
+                .font(.system(size: 9))
+                .foregroundColor(AppTheme.textMuted)
+                .padding(.trailing, 4)
+        }
     }
 
     private var assistantBubble: some View {

@@ -22,6 +22,8 @@ struct ChatView: View {
     @State private var renamingConversationId: String? = nil
     @State private var renamingText: String = ""
     @State private var deleteConfirmConversation: Conversation? = nil
+    @State private var newTagText: String = ""
+    @State private var showNewTagPopover: String? = nil
 
     // MARK: - Date grouping
 
@@ -42,7 +44,10 @@ struct ChatView: View {
     }
 
     private var filteredConversations: [Conversation] {
-        let sorted = appState.sortedConversations
+        var sorted = appState.sortedConversations
+        if let tag = appState.filterTag {
+            sorted = sorted.filter { $0.tags.contains(tag) }
+        }
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return sorted }
 
@@ -221,443 +226,8 @@ struct ChatView: View {
         HStack(spacing: 0) {
             // Conversation list sidebar (hidden in focus mode or narrow windows)
             if !effectiveFocusMode {
-            VStack(spacing: 0) {
-                HStack {
-                    Text("Chats")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(AppTheme.textPrimary)
-                    Spacer()
-                    Button(action: { appState.startNewChat() }) {
-                        Image(systemName: "square.and.pencil")
-                            .font(.system(size: 13))
-                            .foregroundColor(AppTheme.accent)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("New chat")
-
-                    Menu {
-                        Button(action: {
-                            isSelecting.toggle()
-                            if !isSelecting { selectedConversationIds.removeAll() }
-                        }) {
-                            Label(isSelecting ? "Cancel Selection" : "Select Chats...", systemImage: "checkmark.circle")
-                        }
-                        Divider()
-                        Button(action: { showClearAllAlert = true }) {
-                            Label("Clear All Chats", systemImage: "trash")
-                        }
-                        .disabled(appState.conversations.isEmpty)
-                        Button(action: {
-                            let unpinned = appState.conversations.filter { !$0.isPinned }
-                            guard !unpinned.isEmpty else { return }
-                            appState.deleteMultipleConversations(unpinned)
-                        }) {
-                            Label("Delete Unpinned", systemImage: "pin.slash")
-                        }
-                        .disabled(appState.conversations.filter({ !$0.isPinned }).isEmpty)
-                        Divider()
-                        Button(action: { exportAllConversations() }) {
-                            Label("Export All", systemImage: "square.and.arrow.up")
-                        }
-                        .disabled(appState.conversations.isEmpty)
-                    } label: {
-                        Image(systemName: "ellipsis.circle")
-                            .font(.system(size: 13))
-                            .foregroundColor(AppTheme.textSecondary)
-                    }
-                    .menuStyle(.borderlessButton)
-                    .menuIndicator(.hidden)
-                    .frame(width: 20)
-                }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 12)
-                .alert("Clear All Chats", isPresented: $showClearAllAlert) {
-                    Button("Cancel", role: .cancel) {}
-                    Button("Delete All", role: .destructive) {
-                        appState.clearAllConversations()
-                    }
-                } message: {
-                    Text("This will delete \(appState.conversations.count) conversation\(appState.conversations.count == 1 ? "" : "s"). This cannot be undone.")
-                }
-
-                Divider().background(AppTheme.borderGlass)
-
-                // Search field
-                HStack(spacing: 6) {
-                    Image(systemName: "magnifyingglass")
-                        .font(.system(size: 11))
-                        .foregroundColor(AppTheme.textMuted)
-                    TextField("Search chats...", text: $searchText)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 12))
-                        .foregroundColor(AppTheme.textPrimary)
-                    if !searchText.isEmpty {
-                        Button(action: { searchText = "" }) {
-                            Image(systemName: "xmark.circle.fill")
-                                .font(.system(size: 10))
-                                .foregroundColor(AppTheme.textMuted)
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Clear search")
-                    }
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(AppTheme.bgCard.opacity(0.5))
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-                .padding(.horizontal, 10)
-                .padding(.top, 8)
-                .padding(.bottom, 4)
-
-                // Sort order selector
-                HStack(spacing: 4) {
-                    Menu {
-                        ForEach(ConversationSortOrder.allCases) { order in
-                            Button(action: { appState.conversationSortOrder = order }) {
-                                Label {
-                                    Text(order.rawValue)
-                                } icon: {
-                                    Image(systemName: order.icon)
-                                }
-                            }
-                        }
-                    } label: {
-                        HStack(spacing: 3) {
-                            Image(systemName: "arrow.up.arrow.down")
-                                .font(.system(size: 9))
-                            Text(appState.conversationSortOrder.rawValue)
-                                .font(.system(size: 10))
-                        }
-                        .foregroundColor(AppTheme.textMuted)
-                    }
-                    .menuStyle(.borderlessButton)
-                    .menuIndicator(.hidden)
-                    .fixedSize()
-
-                    Spacer()
-                }
-                .padding(.horizontal, 12)
-                .padding(.bottom, 2)
-
-                // "Search in messages" toggle when there's a query
-                if !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    HStack(spacing: 4) {
-                        Toggle(isOn: $searchIncludesMessages) {
-                            Text("Search in messages")
-                                .font(.system(size: 10))
-                                .foregroundColor(AppTheme.textMuted)
-                        }
-                        .toggleStyle(.switch)
-                        .controlSize(.mini)
-
-                        if !contentSearchResults.isEmpty {
-                            let totalMatches = contentSearchResults.reduce(0) { $0 + $1.matches.count }
-                            Text("\(totalMatches) match\(totalMatches == 1 ? "" : "es")")
-                                .font(.system(size: 9, weight: .medium, design: .monospaced))
-                                .foregroundColor(AppTheme.accent)
-                                .padding(.horizontal, 5)
-                                .padding(.vertical, 1)
-                                .background(AppTheme.accent.opacity(0.1))
-                                .clipShape(Capsule())
-                        }
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 4)
-                }
-
-                if filteredConversations.isEmpty && contentSearchResults.isEmpty {
-                    VStack(spacing: 8) {
-                        Spacer()
-                        Image(systemName: searchText.isEmpty ? "bubble.left.and.bubble.right" : "magnifyingglass")
-                            .font(.system(size: 24))
-                            .foregroundColor(AppTheme.textMuted)
-                        Text(searchText.isEmpty ? "No conversations yet" : "No matches")
-                            .font(.system(size: 11))
-                            .foregroundColor(AppTheme.textMuted)
-                        Spacer()
-                    }
-                } else {
-                    ScrollView(.vertical, showsIndicators: false) {
-                        LazyVStack(spacing: 2, pinnedViews: .sectionHeaders) {
-                            if !pinnedConversations.isEmpty {
-                                Section {
-                                    ForEach(pinnedConversations) { conv in
-                                        HStack(spacing: 6) {
-                                            if isSelecting {
-                                                Image(systemName: selectedConversationIds.contains(conv.id) ? "checkmark.circle.fill" : "circle")
-                                                    .font(.system(size: 14))
-                                                    .foregroundColor(selectedConversationIds.contains(conv.id) ? AppTheme.accent : AppTheme.textMuted)
-                                                    .onTapGesture { toggleSelection(conv.id) }
-                                            }
-                                            ConversationRow(
-                                                conv: conv,
-                                                isActive: appState.activeConversation?.id == conv.id,
-                                                isRenaming: renamingConversationId == conv.id,
-                                                renamingText: renamingConversationId == conv.id ? $renamingText : .constant(""),
-                                                onSelect: { isSelecting ? toggleSelection(conv.id) : appState.openConversation(conv) },
-                                                onDelete: { deleteConfirmConversation = conv },
-                                                onExport: { appState.presentExportSheet(for: conv) },
-                                                onTogglePin: { appState.togglePin(conv) },
-                                                onRename: {
-                                                    renamingText = conv.title
-                                                    renamingConversationId = conv.id
-                                                },
-                                                onCommitRename: {
-                                                    appState.renameConversation(conv, to: renamingText)
-                                                    renamingConversationId = nil
-                                                },
-                                                onCancelRename: { renamingConversationId = nil }
-                                            )
-                                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                                                Button(role: .destructive) {
-                                                    deleteConfirmConversation = conv
-                                                } label: {
-                                                    Label("Delete", systemImage: "trash")
-                                                }
-                                            }
-                                            .swipeActions(edge: .leading, allowsFullSwipe: true) {
-                                                Button {
-                                                    appState.togglePin(conv)
-                                                } label: {
-                                                    Label(conv.isPinned ? "Unpin" : "Pin", systemImage: conv.isPinned ? "pin.slash" : "pin")
-                                                }
-                                                .tint(.yellow)
-                                            }
-                                        }
-                                    }
-                                } header: {
-                                    HStack(spacing: 4) {
-                                        Image(systemName: "pin.fill")
-                                            .font(.system(size: 8))
-                                            .foregroundColor(AppTheme.accent)
-                                        Text("Pinned")
-                                            .font(.system(size: 10, weight: .semibold))
-                                            .foregroundColor(AppTheme.textMuted)
-                                            .textCase(.uppercase)
-                                        Spacer()
-                                    }
-                                    .padding(.horizontal, 12)
-                                    .padding(.top, 10)
-                                    .padding(.bottom, 4)
-                                    .background(AppTheme.bgSecondary.opacity(0.3))
-                                }
-                            }
-                            ForEach(groupedConversations, id: \.0) { group, convs in
-                                Section {
-                                    ForEach(convs) { conv in
-                                        HStack(spacing: 6) {
-                                            if isSelecting {
-                                                Image(systemName: selectedConversationIds.contains(conv.id) ? "checkmark.circle.fill" : "circle")
-                                                    .font(.system(size: 14))
-                                                    .foregroundColor(selectedConversationIds.contains(conv.id) ? AppTheme.accent : AppTheme.textMuted)
-                                                    .onTapGesture { toggleSelection(conv.id) }
-                                            }
-                                            ConversationRow(
-                                                conv: conv,
-                                                isActive: appState.activeConversation?.id == conv.id,
-                                                isRenaming: renamingConversationId == conv.id,
-                                                renamingText: renamingConversationId == conv.id ? $renamingText : .constant(""),
-                                                onSelect: { isSelecting ? toggleSelection(conv.id) : appState.openConversation(conv) },
-                                                onDelete: { deleteConfirmConversation = conv },
-                                                onExport: { appState.presentExportSheet(for: conv) },
-                                                onTogglePin: { appState.togglePin(conv) },
-                                                onRename: {
-                                                    renamingText = conv.title
-                                                    renamingConversationId = conv.id
-                                                },
-                                                onCommitRename: {
-                                                    appState.renameConversation(conv, to: renamingText)
-                                                    renamingConversationId = nil
-                                                },
-                                                onCancelRename: { renamingConversationId = nil }
-                                            )
-                                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                                                Button(role: .destructive) {
-                                                    deleteConfirmConversation = conv
-                                                } label: {
-                                                    Label("Delete", systemImage: "trash")
-                                                }
-                                            }
-                                            .swipeActions(edge: .leading, allowsFullSwipe: true) {
-                                                Button {
-                                                    appState.togglePin(conv)
-                                                } label: {
-                                                    Label(conv.isPinned ? "Unpin" : "Pin", systemImage: conv.isPinned ? "pin.slash" : "pin")
-                                                }
-                                                .tint(.yellow)
-                                            }
-                                        }
-                                    }
-                                } header: {
-                                    HStack {
-                                        Text(group.rawValue)
-                                            .font(.system(size: 10, weight: .semibold))
-                                            .foregroundColor(AppTheme.textMuted)
-                                            .textCase(.uppercase)
-                                        Spacer()
-                                    }
-                                    .padding(.horizontal, 12)
-                                    .padding(.top, 10)
-                                    .padding(.bottom, 4)
-                                    .background(AppTheme.bgSecondary.opacity(0.3))
-                                }
-                            }
-
-                            // Content search results
-                            if !contentSearchResults.isEmpty {
-                                Section {
-                                    ForEach(contentSearchResults) { result in
-                                        VStack(alignment: .leading, spacing: 4) {
-                                            HStack(spacing: 4) {
-                                                Text(result.conversation.title)
-                                                    .font(.system(size: 11, weight: .semibold))
-                                                    .foregroundColor(AppTheme.textPrimary)
-                                                    .lineLimit(1)
-                                                Spacer()
-                                                Text("\(result.matches.count)")
-                                                    .font(.system(size: 9, weight: .bold, design: .rounded))
-                                                    .foregroundColor(AppTheme.accent)
-                                                    .padding(.horizontal, 5)
-                                                    .padding(.vertical, 1)
-                                                    .background(AppTheme.accent.opacity(0.15))
-                                                    .clipShape(Capsule())
-                                            }
-
-                                            ForEach(result.matches.prefix(3)) { msg in
-                                                Button(action: {
-                                                    scrollToMessageId = msg.id
-                                                    appState.openConversation(result.conversation)
-                                                }) {
-                                                    HStack(spacing: 6) {
-                                                        Image(systemName: msg.role == .user ? "person.fill" : "sparkle")
-                                                            .font(.system(size: 8))
-                                                            .foregroundColor(AppTheme.textMuted)
-                                                            .frame(width: 12)
-                                                        HighlightedText(
-                                                            text: messagePreview(msg.content, query: searchText),
-                                                            highlight: searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-                                                        )
-                                                        .lineLimit(2)
-                                                    }
-                                                    .padding(.vertical, 3)
-                                                    .padding(.horizontal, 6)
-                                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                                    .background(AppTheme.bgCard.opacity(0.3))
-                                                    .clipShape(RoundedRectangle(cornerRadius: 5))
-                                                }
-                                                .buttonStyle(.plain)
-                                            }
-
-                                            if result.matches.count > 3 {
-                                                Button(action: {
-                                                    if let firstMatch = result.matches.first {
-                                                        scrollToMessageId = firstMatch.id
-                                                    }
-                                                    appState.openConversation(result.conversation)
-                                                }) {
-                                                    Text("+\(result.matches.count - 3) more match\(result.matches.count - 3 == 1 ? "" : "es")")
-                                                        .font(.system(size: 9))
-                                                        .foregroundColor(AppTheme.accent)
-                                                }
-                                                .buttonStyle(.plain)
-                                                .padding(.leading, 18)
-                                            }
-                                        }
-                                        .padding(.horizontal, 8)
-                                        .padding(.vertical, 6)
-                                        .background(
-                                            RoundedRectangle(cornerRadius: 8)
-                                                .fill(AppTheme.bgCard.opacity(0.2))
-                                        )
-                                        .overlay(
-                                            RoundedRectangle(cornerRadius: 8)
-                                                .stroke(AppTheme.borderGlass, lineWidth: 0.5)
-                                        )
-                                    }
-                                } header: {
-                                    HStack(spacing: 4) {
-                                        Image(systemName: "text.magnifyingglass")
-                                            .font(.system(size: 8))
-                                            .foregroundColor(AppTheme.accent)
-                                        Text("Message Matches")
-                                            .font(.system(size: 10, weight: .semibold))
-                                            .foregroundColor(AppTheme.textMuted)
-                                            .textCase(.uppercase)
-                                        Spacer()
-                                    }
-                                    .padding(.horizontal, 12)
-                                    .padding(.top, 10)
-                                    .padding(.bottom, 4)
-                                    .background(AppTheme.bgSecondary.opacity(0.3))
-                                }
-                            }
-                        }
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                    }
-                }
-                // Floating selection action bar
-                if isSelecting && !selectedConversationIds.isEmpty {
-                    HStack(spacing: 10) {
-                        Button(action: {
-                            let toDelete = appState.conversations.filter { selectedConversationIds.contains($0.id) }
-                            appState.deleteMultipleConversations(toDelete)
-                            selectedConversationIds.removeAll()
-                            isSelecting = false
-                        }) {
-                            Text("Delete Selected (\(selectedConversationIds.count))")
-                                .font(.system(size: 11, weight: .semibold))
-                                .foregroundColor(.white)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 6)
-                                .background(AppTheme.error)
-                                .clipShape(Capsule())
-                        }
-                        .buttonStyle(.plain)
-
-                        Button(action: {
-                            selectedConversationIds.removeAll()
-                            isSelecting = false
-                        }) {
-                            Text("Cancel")
-                                .font(.system(size: 11, weight: .medium))
-                                .foregroundColor(AppTheme.textSecondary)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 6)
-                                .background(AppTheme.bgCard.opacity(0.8))
-                                .clipShape(Capsule())
-                                .overlay(Capsule().stroke(AppTheme.borderGlass, lineWidth: 1))
-                        }
-                        .buttonStyle(.plain)
-                    }
-                    .padding(.vertical, 8)
-                    .frame(maxWidth: .infinity)
-                    .background(AppTheme.bgSecondary.opacity(0.9))
-                    .overlay(
-                        Rectangle().frame(height: 1).foregroundColor(AppTheme.borderGlass),
-                        alignment: .top
-                    )
-                }
+                conversationListSidebar
             }
-            .frame(width: 220)
-            .background(AppTheme.bgSecondary.opacity(0.3))
-            .alert("Delete Conversation", isPresented: Binding(
-                get: { deleteConfirmConversation != nil },
-                set: { if !$0 { deleteConfirmConversation = nil } }
-            )) {
-                Button("Cancel", role: .cancel) { deleteConfirmConversation = nil }
-                Button("Delete", role: .destructive) {
-                    if let conv = deleteConfirmConversation {
-                        appState.deleteConversation(conv)
-                    }
-                    deleteConfirmConversation = nil
-                }
-            } message: {
-                Text("Are you sure you want to delete \"\(deleteConfirmConversation?.title ?? "")\"? This cannot be undone.")
-            }
-
-            Divider().background(AppTheme.borderGlass)
-            } // end focusMode
 
             // Main chat area
             VStack(spacing: 0) {
@@ -865,22 +435,7 @@ struct ChatView: View {
                             ScrollView(.vertical, showsIndicators: true) {
                                 LazyVStack(spacing: 14) {
                                     ForEach(conv.messages) { msg in
-                                        MessageBubble(
-                                            message: msg,
-                                            isLastAssistantMessage: msg.id == lastAssistantId,
-                                            onCancel: msg.isStreaming ? { appState.cancelProcessing() } : nil,
-                                            onRetry: msg.id == lastAssistantId && !msg.isStreaming ? { appState.retryLastMessage() } : nil,
-                                            onReaction: msg.role == .assistant ? { reaction in appState.setReaction(messageId: msg.id, reaction: reaction) } : nil,
-                                            onBranch: msg.role == .user ? {
-                                                let idx = conv.messages.firstIndex(where: { $0.id == msg.id }) ?? 0
-                                                appState.branchConversation(from: conv.id, atMessageIndex: idx)
-                                            } : nil
-                                        )
-                                        .id(msg.id)
-                                        .transition(.asymmetric(
-                                            insertion: .move(edge: .bottom).combined(with: .opacity),
-                                            removal: .opacity
-                                        ))
+                                        messageBubbleView(msg: msg, conv: conv, lastAssistantId: lastAssistantId)
                                     }
                                     .animation(.spring(response: 0.35, dampingFraction: 0.85), value: conv.messages.count)
 
@@ -1112,6 +667,111 @@ struct ChatView: View {
         }
     }
 
+    // MARK: - Conversation Row Builder
+
+    @ViewBuilder
+    private func conversationRowView(for conv: Conversation) -> some View {
+        ConversationRow(
+            conv: conv,
+            isActive: appState.activeConversation?.id == conv.id,
+            isRenaming: renamingConversationId == conv.id,
+            renamingText: renamingConversationId == conv.id ? $renamingText : .constant(""),
+            onSelect: { isSelecting ? toggleSelection(conv.id) : appState.openConversation(conv) },
+            onDelete: { deleteConfirmConversation = conv },
+            onExport: { appState.presentExportSheet(for: conv) },
+            onTogglePin: { appState.togglePin(conv) },
+            onRename: {
+                renamingText = conv.title
+                renamingConversationId = conv.id
+            },
+            onCommitRename: {
+                appState.renameConversation(conv, to: renamingText)
+                renamingConversationId = nil
+            },
+            onCancelRename: { renamingConversationId = nil },
+            allTags: appState.allTags,
+            onAddTag: { tag in appState.addTag(to: conv.id, tag: tag) },
+            onRemoveTag: { tag in appState.removeTag(from: conv.id, tag: tag) },
+            onNewTag: {
+                newTagText = ""
+                showNewTagPopover = conv.id
+            }
+        )
+    }
+
+    // MARK: - New Tag Sheet
+
+    @ViewBuilder
+    private var newTagSheet: some View {
+        VStack(spacing: 12) {
+            Text("New Tag")
+                .font(.system(size: 14, weight: .semibold))
+            TextField("Tag name", text: $newTagText)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 200)
+                .onSubmit { commitNewTag() }
+            HStack(spacing: 12) {
+                Button("Cancel") { showNewTagPopover = nil }
+                    .keyboardShortcut(.cancelAction)
+                Button("Add") { commitNewTag() }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(newTagText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(20)
+    }
+
+    private func commitNewTag() {
+        let tag = newTagText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let convId = showNewTagPopover, !tag.isEmpty {
+            appState.addTag(to: convId, tag: tag)
+        }
+        showNewTagPopover = nil
+    }
+
+    // MARK: - Tag Helpers
+
+    private static let tagColors: [Color] = [.red, .orange, .yellow, .green, .blue, .purple, .pink, .teal]
+
+    private func tagColor(for tag: String) -> Color {
+        let allTags = appState.allTags
+        if let idx = allTags.firstIndex(of: tag) {
+            return Self.tagColors[idx % Self.tagColors.count]
+        }
+        return .gray
+    }
+
+    @ViewBuilder
+    private var tagFilterBar: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 4) {
+                tagFilterPill(label: "All", tag: nil)
+                ForEach(appState.allTags, id: \.self) { tag in
+                    tagFilterPill(label: tag, tag: tag)
+                }
+            }
+            .padding(.horizontal, 12)
+        }
+        .padding(.bottom, 4)
+    }
+
+    @ViewBuilder
+    private func tagFilterPill(label: String, tag: String?) -> some View {
+        let isActive = appState.filterTag == tag
+        Button {
+            appState.filterTag = tag
+        } label: {
+            Text(label)
+                .font(.system(size: 10, weight: isActive ? .semibold : .regular))
+                .foregroundColor(isActive ? .white : AppTheme.textSecondary)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(isActive ? (tag.map { tagColor(for: $0) } ?? AppTheme.accent) : AppTheme.bgCard.opacity(0.6))
+                .clipShape(Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+
     private func toggleSelection(_ id: String) {
         if selectedConversationIds.contains(id) {
             selectedConversationIds.remove(id)
@@ -1178,6 +838,455 @@ struct ChatView: View {
         } else {
             let k = Double(count) / 1000.0
             return String(format: "%.1fk tokens", k)
+        }
+    }
+
+    @ViewBuilder
+    private func messageBubbleView(msg: ChatMessage, conv: Conversation, lastAssistantId: String?) -> some View {
+        let isLastAssistant = msg.id == lastAssistantId
+        let canRetry = isLastAssistant && !msg.isStreaming
+        let isUser = msg.role == .user
+        let editClosure: ((String) -> Void)? = isUser && !appState.isProcessing ? { newContent in
+            appState.editAndResendMessage(messageId: msg.id, newContent: newContent)
+        } : nil
+        MessageBubble(
+            message: msg,
+            isLastAssistantMessage: isLastAssistant,
+            onCancel: msg.isStreaming ? { appState.cancelProcessing() } : nil,
+            onRetry: canRetry ? { appState.retryLastMessage() } : nil,
+            onReaction: msg.role == .assistant ? { reaction in appState.setReaction(messageId: msg.id, reaction: reaction) } : nil,
+            onBranch: isUser ? {
+                let idx = conv.messages.firstIndex(where: { $0.id == msg.id }) ?? 0
+                appState.branchConversation(from: conv.id, atMessageIndex: idx)
+            } : nil,
+            onEdit: editClosure
+        )
+        .id(msg.id)
+        .transition(.asymmetric(
+            insertion: .move(edge: .bottom).combined(with: .opacity),
+            removal: .opacity
+        ))
+    }
+
+
+    // MARK: - Conversation List Sidebar
+
+    @ViewBuilder
+    private var conversationListSidebar: some View {
+        VStack(spacing: 0) {
+            VStack(spacing: 0) {
+                HStack {
+                    Text("Chats")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(AppTheme.textPrimary)
+                    Spacer()
+                    Button(action: { appState.startNewChat() }) {
+                        Image(systemName: "square.and.pencil")
+                            .font(.system(size: 13))
+                            .foregroundColor(AppTheme.accent)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("New chat")
+
+                    Menu {
+                        Button(action: {
+                            isSelecting.toggle()
+                            if !isSelecting { selectedConversationIds.removeAll() }
+                        }) {
+                            Label(isSelecting ? "Cancel Selection" : "Select Chats...", systemImage: "checkmark.circle")
+                        }
+                        Divider()
+                        Button(action: { showClearAllAlert = true }) {
+                            Label("Clear All Chats", systemImage: "trash")
+                        }
+                        .disabled(appState.conversations.isEmpty)
+                        Button(action: {
+                            let unpinned = appState.conversations.filter { !$0.isPinned }
+                            guard !unpinned.isEmpty else { return }
+                            appState.deleteMultipleConversations(unpinned)
+                        }) {
+                            Label("Delete Unpinned", systemImage: "pin.slash")
+                        }
+                        .disabled(appState.conversations.filter({ !$0.isPinned }).isEmpty)
+                        Divider()
+                        Button(action: { exportAllConversations() }) {
+                            Label("Export All", systemImage: "square.and.arrow.up")
+                        }
+                        .disabled(appState.conversations.isEmpty)
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                            .font(.system(size: 13))
+                            .foregroundColor(AppTheme.textSecondary)
+                    }
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                    .frame(width: 20)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+                .alert("Clear All Chats", isPresented: $showClearAllAlert) {
+                    Button("Cancel", role: .cancel) {}
+                    Button("Delete All", role: .destructive) {
+                        appState.clearAllConversations()
+                    }
+                } message: {
+                    Text("This will delete \(appState.conversations.count) conversation\(appState.conversations.count == 1 ? "" : "s"). This cannot be undone.")
+                }
+
+                Divider().background(AppTheme.borderGlass)
+
+                // Search field
+                HStack(spacing: 6) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 11))
+                        .foregroundColor(AppTheme.textMuted)
+                    TextField("Search chats...", text: $searchText)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 12))
+                        .foregroundColor(AppTheme.textPrimary)
+                    if !searchText.isEmpty {
+                        Button(action: { searchText = "" }) {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 10))
+                                .foregroundColor(AppTheme.textMuted)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Clear search")
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(AppTheme.bgCard.opacity(0.5))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .padding(.horizontal, 10)
+                .padding(.top, 8)
+                .padding(.bottom, 4)
+
+                // Sort order selector
+                HStack(spacing: 4) {
+                    Menu {
+                        ForEach(ConversationSortOrder.allCases) { order in
+                            Button(action: { appState.conversationSortOrder = order }) {
+                                Label {
+                                    Text(order.rawValue)
+                                } icon: {
+                                    Image(systemName: order.icon)
+                                }
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: 3) {
+                            Image(systemName: "arrow.up.arrow.down")
+                                .font(.system(size: 9))
+                            Text(appState.conversationSortOrder.rawValue)
+                                .font(.system(size: 10))
+                        }
+                        .foregroundColor(AppTheme.textMuted)
+                    }
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                    .fixedSize()
+
+                    Spacer()
+                }
+                .padding(.horizontal, 12)
+                .padding(.bottom, 2)
+
+                // "Search in messages" toggle when there's a query
+                if !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    HStack(spacing: 4) {
+                        Toggle(isOn: $searchIncludesMessages) {
+                            Text("Search in messages")
+                                .font(.system(size: 10))
+                                .foregroundColor(AppTheme.textMuted)
+                        }
+                        .toggleStyle(.switch)
+                        .controlSize(.mini)
+
+                        if !contentSearchResults.isEmpty {
+                            let totalMatches = contentSearchResults.reduce(0) { $0 + $1.matches.count }
+                            Text("\(totalMatches) match\(totalMatches == 1 ? "" : "es")")
+                                .font(.system(size: 9, weight: .medium, design: .monospaced))
+                                .foregroundColor(AppTheme.accent)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 1)
+                                .background(AppTheme.accent.opacity(0.1))
+                                .clipShape(Capsule())
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 4)
+                }
+
+                // Tag filter
+                if !appState.allTags.isEmpty {
+                    tagFilterBar
+                }
+
+                if filteredConversations.isEmpty && contentSearchResults.isEmpty {
+                    VStack(spacing: 8) {
+                        Spacer()
+                        Image(systemName: searchText.isEmpty ? "bubble.left.and.bubble.right" : "magnifyingglass")
+                            .font(.system(size: 24))
+                            .foregroundColor(AppTheme.textMuted)
+                        Text(searchText.isEmpty ? "No conversations yet" : "No matches")
+                            .font(.system(size: 11))
+                            .foregroundColor(AppTheme.textMuted)
+                        Spacer()
+                    }
+                } else {
+                    ScrollView(.vertical, showsIndicators: false) {
+                        LazyVStack(spacing: 2, pinnedViews: .sectionHeaders) {
+                            if !pinnedConversations.isEmpty {
+                                Section {
+                                    ForEach(pinnedConversations) { conv in
+                                        HStack(spacing: 6) {
+                                            if isSelecting {
+                                                Image(systemName: selectedConversationIds.contains(conv.id) ? "checkmark.circle.fill" : "circle")
+                                                    .font(.system(size: 14))
+                                                    .foregroundColor(selectedConversationIds.contains(conv.id) ? AppTheme.accent : AppTheme.textMuted)
+                                                    .onTapGesture { toggleSelection(conv.id) }
+                                            }
+                                            conversationRowView(for: conv)
+                                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                                Button(role: .destructive) {
+                                                    deleteConfirmConversation = conv
+                                                } label: {
+                                                    Label("Delete", systemImage: "trash")
+                                                }
+                                            }
+                                            .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                                                Button {
+                                                    appState.togglePin(conv)
+                                                } label: {
+                                                    Label(conv.isPinned ? "Unpin" : "Pin", systemImage: conv.isPinned ? "pin.slash" : "pin")
+                                                }
+                                                .tint(.yellow)
+                                            }
+                                        }
+                                    }
+                                } header: {
+                                    HStack(spacing: 4) {
+                                        Image(systemName: "pin.fill")
+                                            .font(.system(size: 8))
+                                            .foregroundColor(AppTheme.accent)
+                                        Text("Pinned")
+                                            .font(.system(size: 10, weight: .semibold))
+                                            .foregroundColor(AppTheme.textMuted)
+                                            .textCase(.uppercase)
+                                        Spacer()
+                                    }
+                                    .padding(.horizontal, 12)
+                                    .padding(.top, 10)
+                                    .padding(.bottom, 4)
+                                    .background(AppTheme.bgSecondary.opacity(0.3))
+                                }
+                            }
+                            ForEach(groupedConversations, id: \.0) { group, convs in
+                                Section {
+                                    ForEach(convs) { conv in
+                                        HStack(spacing: 6) {
+                                            if isSelecting {
+                                                Image(systemName: selectedConversationIds.contains(conv.id) ? "checkmark.circle.fill" : "circle")
+                                                    .font(.system(size: 14))
+                                                    .foregroundColor(selectedConversationIds.contains(conv.id) ? AppTheme.accent : AppTheme.textMuted)
+                                                    .onTapGesture { toggleSelection(conv.id) }
+                                            }
+                                            conversationRowView(for: conv)
+                                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                                Button(role: .destructive) {
+                                                    deleteConfirmConversation = conv
+                                                } label: {
+                                                    Label("Delete", systemImage: "trash")
+                                                }
+                                            }
+                                            .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                                                Button {
+                                                    appState.togglePin(conv)
+                                                } label: {
+                                                    Label(conv.isPinned ? "Unpin" : "Pin", systemImage: conv.isPinned ? "pin.slash" : "pin")
+                                                }
+                                                .tint(.yellow)
+                                            }
+                                        }
+                                    }
+                                } header: {
+                                    HStack {
+                                        Text(group.rawValue)
+                                            .font(.system(size: 10, weight: .semibold))
+                                            .foregroundColor(AppTheme.textMuted)
+                                            .textCase(.uppercase)
+                                        Spacer()
+                                    }
+                                    .padding(.horizontal, 12)
+                                    .padding(.top, 10)
+                                    .padding(.bottom, 4)
+                                    .background(AppTheme.bgSecondary.opacity(0.3))
+                                }
+                            }
+
+                            // Content search results
+                            if !contentSearchResults.isEmpty {
+                                Section {
+                                    ForEach(contentSearchResults) { result in
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            HStack(spacing: 4) {
+                                                Text(result.conversation.title)
+                                                    .font(.system(size: 11, weight: .semibold))
+                                                    .foregroundColor(AppTheme.textPrimary)
+                                                    .lineLimit(1)
+                                                Spacer()
+                                                Text("\(result.matches.count)")
+                                                    .font(.system(size: 9, weight: .bold, design: .rounded))
+                                                    .foregroundColor(AppTheme.accent)
+                                                    .padding(.horizontal, 5)
+                                                    .padding(.vertical, 1)
+                                                    .background(AppTheme.accent.opacity(0.15))
+                                                    .clipShape(Capsule())
+                                            }
+
+                                            ForEach(result.matches.prefix(3)) { msg in
+                                                Button(action: {
+                                                    scrollToMessageId = msg.id
+                                                    appState.openConversation(result.conversation)
+                                                }) {
+                                                    HStack(spacing: 6) {
+                                                        Image(systemName: msg.role == .user ? "person.fill" : "sparkle")
+                                                            .font(.system(size: 8))
+                                                            .foregroundColor(AppTheme.textMuted)
+                                                            .frame(width: 12)
+                                                        HighlightedText(
+                                                            text: messagePreview(msg.content, query: searchText),
+                                                            highlight: searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+                                                        )
+                                                        .lineLimit(2)
+                                                    }
+                                                    .padding(.vertical, 3)
+                                                    .padding(.horizontal, 6)
+                                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                                    .background(AppTheme.bgCard.opacity(0.3))
+                                                    .clipShape(RoundedRectangle(cornerRadius: 5))
+                                                }
+                                                .buttonStyle(.plain)
+                                            }
+
+                                            if result.matches.count > 3 {
+                                                Button(action: {
+                                                    if let firstMatch = result.matches.first {
+                                                        scrollToMessageId = firstMatch.id
+                                                    }
+                                                    appState.openConversation(result.conversation)
+                                                }) {
+                                                    Text("+\(result.matches.count - 3) more match\(result.matches.count - 3 == 1 ? "" : "es")")
+                                                        .font(.system(size: 9))
+                                                        .foregroundColor(AppTheme.accent)
+                                                }
+                                                .buttonStyle(.plain)
+                                                .padding(.leading, 18)
+                                            }
+                                        }
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 6)
+                                        .background(
+                                            RoundedRectangle(cornerRadius: 8)
+                                                .fill(AppTheme.bgCard.opacity(0.2))
+                                        )
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 8)
+                                                .stroke(AppTheme.borderGlass, lineWidth: 0.5)
+                                        )
+                                    }
+                                } header: {
+                                    HStack(spacing: 4) {
+                                        Image(systemName: "text.magnifyingglass")
+                                            .font(.system(size: 8))
+                                            .foregroundColor(AppTheme.accent)
+                                        Text("Message Matches")
+                                            .font(.system(size: 10, weight: .semibold))
+                                            .foregroundColor(AppTheme.textMuted)
+                                            .textCase(.uppercase)
+                                        Spacer()
+                                    }
+                                    .padding(.horizontal, 12)
+                                    .padding(.top, 10)
+                                    .padding(.bottom, 4)
+                                    .background(AppTheme.bgSecondary.opacity(0.3))
+                                }
+                            }
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                    }
+                }
+                // Floating selection action bar
+                if isSelecting && !selectedConversationIds.isEmpty {
+                    HStack(spacing: 10) {
+                        Button(action: {
+                            let toDelete = appState.conversations.filter { selectedConversationIds.contains($0.id) }
+                            appState.deleteMultipleConversations(toDelete)
+                            selectedConversationIds.removeAll()
+                            isSelecting = false
+                        }) {
+                            Text("Delete Selected (\(selectedConversationIds.count))")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 6)
+                                .background(AppTheme.error)
+                                .clipShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+
+                        Button(action: {
+                            selectedConversationIds.removeAll()
+                            isSelecting = false
+                        }) {
+                            Text("Cancel")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundColor(AppTheme.textSecondary)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 6)
+                                .background(AppTheme.bgCard.opacity(0.8))
+                                .clipShape(Capsule())
+                                .overlay(Capsule().stroke(AppTheme.borderGlass, lineWidth: 1))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.vertical, 8)
+                    .frame(maxWidth: .infinity)
+                    .background(AppTheme.bgSecondary.opacity(0.9))
+                    .overlay(
+                        Rectangle().frame(height: 1).foregroundColor(AppTheme.borderGlass),
+                        alignment: .top
+                    )
+                }
+            }
+            .frame(width: 220)
+            .background(AppTheme.bgSecondary.opacity(0.3))
+            .alert("Delete Conversation", isPresented: Binding(
+                get: { deleteConfirmConversation != nil },
+                set: { if !$0 { deleteConfirmConversation = nil } }
+            )) {
+                Button("Cancel", role: .cancel) { deleteConfirmConversation = nil }
+                Button("Delete", role: .destructive) {
+                    if let conv = deleteConfirmConversation {
+                        appState.deleteConversation(conv)
+                    }
+                    deleteConfirmConversation = nil
+                }
+            } message: {
+                Text("Are you sure you want to delete \"\(deleteConfirmConversation?.title ?? "")\"? This cannot be undone.")
+            }
+
+            Divider().background(AppTheme.borderGlass)
+        
+        Divider().background(AppTheme.borderGlass)
+        }
+        .sheet(isPresented: Binding(
+            get: { showNewTagPopover != nil },
+            set: { if !$0 { showNewTagPopover = nil } }
+        )) {
+            newTagSheet
         }
     }
 
@@ -1306,7 +1415,20 @@ struct ConversationRow: View {
     var onRename: (() -> Void)? = nil
     var onCommitRename: (() -> Void)? = nil
     var onCancelRename: (() -> Void)? = nil
+    var allTags: [String] = []
+    var onAddTag: ((String) -> Void)? = nil
+    var onRemoveTag: ((String) -> Void)? = nil
+    var onNewTag: (() -> Void)? = nil
     @State private var isHovered = false
+
+    private static let tagColors: [Color] = [.red, .orange, .yellow, .green, .blue, .purple, .pink, .teal]
+
+    private func tagColor(for tag: String) -> Color {
+        if let idx = allTags.firstIndex(of: tag) {
+            return Self.tagColors[idx % Self.tagColors.count]
+        }
+        return .gray
+    }
 
     var body: some View {
         Button(action: onSelect) {
@@ -1352,6 +1474,10 @@ struct ConversationRow: View {
                         Text(timeLabel(conv.createdAt))
                             .font(.system(size: 9))
                             .foregroundColor(AppTheme.textMuted)
+                    }
+
+                    if !conv.tags.isEmpty {
+                        tagPillsView
                     }
                 }
 
@@ -1405,8 +1531,57 @@ struct ConversationRow: View {
             }
             .disabled(conv.messages.isEmpty)
             Divider()
+            tagContextMenu
+            Divider()
             Button(role: .destructive, action: onDelete) {
                 Label("Delete", systemImage: "trash")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var tagPillsView: some View {
+        HStack(spacing: 3) {
+            ForEach(Array(conv.tags.prefix(3)), id: \.self) { tag in
+                Text(tag)
+                    .font(.system(size: 10))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 1)
+                    .background(tagColor(for: tag).opacity(0.8))
+                    .clipShape(Capsule())
+            }
+            if conv.tags.count > 3 {
+                Text("+\(conv.tags.count - 3) more")
+                    .font(.system(size: 9))
+                    .foregroundColor(AppTheme.textMuted)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var tagContextMenu: some View {
+        Menu("Add Tag") {
+            ForEach(allTags, id: \.self) { tag in
+                Button {
+                    if conv.tags.contains(tag) {
+                        onRemoveTag?(tag)
+                    } else {
+                        onAddTag?(tag)
+                    }
+                } label: {
+                    if conv.tags.contains(tag) {
+                        Label(tag, systemImage: "checkmark")
+                    } else {
+                        Text(tag)
+                    }
+                }
+            }
+            Divider()
+            Button {
+                onNewTag?()
+            } label: {
+                Label("New Tag...", systemImage: "plus")
             }
         }
     }

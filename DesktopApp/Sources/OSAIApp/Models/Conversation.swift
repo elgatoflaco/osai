@@ -69,6 +69,7 @@ struct Conversation: Identifiable {
     var agentName: String?
     var modelId: String?
     var isPinned: Bool = false
+    var tags: [String] = []
     var totalInputTokens: Int = 0
     var totalOutputTokens: Int = 0
     var branchedFromId: String?

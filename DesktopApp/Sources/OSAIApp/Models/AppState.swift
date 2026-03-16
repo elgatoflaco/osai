@@ -283,6 +283,7 @@ class AppState: ObservableObject {
     @Published var suggestedReplies: [String] = []
     @Published var streamingStartTime: Date?
     @Published var conversationSortOrder: ConversationSortOrder = .recent
+    @Published var filterTag: String?
     @Published var notifications: [AppNotification] = []
     @Published var showNotificationPanel: Bool = false
     @Published var selectedModel: String = "anthropic/claude-sonnet-4-20250514"
@@ -743,6 +744,20 @@ class AppState: ObservableObject {
         }
     }
 
+    func editAndResendMessage(messageId: String, newContent: String) {
+        guard !isProcessing else { return }
+        guard activeConversation != nil else { return }
+        guard let msgIndex = activeConversation?.messages.firstIndex(where: { $0.id == messageId }) else { return }
+
+        // Remove all messages after this one (the old response and any subsequent messages)
+        activeConversation?.messages.removeSubrange((msgIndex + 1)...)
+        // Remove the original user message too (sendMessage will re-add it)
+        activeConversation?.messages.remove(at: msgIndex)
+        syncConversationToList()
+
+        sendMessage(newContent)
+    }
+
     func startNewChat() {
         activeConversation = nil
         selectedTab = .chat
@@ -886,6 +901,42 @@ class AppState: ObservableObject {
             activeConversation?.title = trimmed
         }
         if let updated = conversations.first(where: { $0.id == conv.id }) {
+            service.saveConversation(updated)
+        }
+    }
+
+    // MARK: - Tags
+
+    var allTags: [String] {
+        Array(Set(conversations.flatMap { $0.tags })).sorted()
+    }
+
+    func addTag(to conversationId: String, tag: String) {
+        let trimmed = tag.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        if let idx = conversations.firstIndex(where: { $0.id == conversationId }) {
+            if !conversations[idx].tags.contains(trimmed) {
+                conversations[idx].tags.append(trimmed)
+            }
+        }
+        if activeConversation?.id == conversationId {
+            if !(activeConversation?.tags.contains(trimmed) ?? false) {
+                activeConversation?.tags.append(trimmed)
+            }
+        }
+        if let updated = conversations.first(where: { $0.id == conversationId }) {
+            service.saveConversation(updated)
+        }
+    }
+
+    func removeTag(from conversationId: String, tag: String) {
+        if let idx = conversations.firstIndex(where: { $0.id == conversationId }) {
+            conversations[idx].tags.removeAll { $0 == tag }
+        }
+        if activeConversation?.id == conversationId {
+            activeConversation?.tags.removeAll { $0 == tag }
+        }
+        if let updated = conversations.first(where: { $0.id == conversationId }) {
             service.saveConversation(updated)
         }
     }
