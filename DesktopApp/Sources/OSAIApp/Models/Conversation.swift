@@ -67,9 +67,12 @@ struct Conversation: Identifiable {
     var messages: [ChatMessage]
     let createdAt: Date
     var agentName: String?
+    var modelId: String?
     var isPinned: Bool = false
     var totalInputTokens: Int = 0
     var totalOutputTokens: Int = 0
+    var branchedFromId: String?
+    var branchedAtMessageIndex: Int?
 
     /// Estimated cost based on typical rates ($3/M input, $15/M output for Sonnet)
     var estimatedCost: Double {

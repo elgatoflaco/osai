@@ -131,6 +131,57 @@ enum SidebarItem: String, CaseIterable, Identifiable {
     }
 }
 
+// MARK: - Chat Quick Action
+
+struct ChatQuickAction: Identifiable, Codable, Equatable {
+    let id: String
+    let label: String
+    let icon: String   // SF Symbol name
+    let prompt: String
+
+    static let defaults: [ChatQuickAction] = [
+        ChatQuickAction(id: "summarize",   label: "Summarize",    icon: "doc.text.magnifyingglass", prompt: "Summarize our conversation so far"),
+        ChatQuickAction(id: "continue",    label: "Continue",     icon: "arrow.right.circle",       prompt: "Continue from where you left off"),
+        ChatQuickAction(id: "explain",     label: "Explain",      icon: "lightbulb",                prompt: "Explain the last response in simpler terms"),
+        ChatQuickAction(id: "fix_errors",  label: "Fix errors",   icon: "hammer",                   prompt: "Check for and fix any errors in the code above"),
+        ChatQuickAction(id: "translate",   label: "Translate",    icon: "globe",                    prompt: "Translate the above to Spanish"),
+        ChatQuickAction(id: "shorter",     label: "Make shorter", icon: "arrow.down.right.and.arrow.up.left", prompt: "Make the last response more concise"),
+        ChatQuickAction(id: "expand",      label: "Expand",       icon: "arrow.up.left.and.arrow.down.right", prompt: "Expand on the last point with more detail"),
+    ]
+}
+
+// MARK: - Model Definition
+
+struct ModelDefinition: Identifiable, Equatable {
+    let id: String          // e.g. "anthropic/claude-sonnet-4-20250514"
+    let displayName: String // e.g. "Claude Sonnet 4"
+    let shortName: String   // e.g. "Sonnet 4"
+    let provider: String    // e.g. "Anthropic"
+    let providerKey: String // e.g. "anthropic" — matches apiKeys dictionary
+    let tag: String         // e.g. "Smart", "Fast", "Vision"
+    let icon: String        // SF Symbol name
+
+    static func == (lhs: ModelDefinition, rhs: ModelDefinition) -> Bool {
+        lhs.id == rhs.id
+    }
+}
+
+let allModelDefinitions: [ModelDefinition] = [
+    // Anthropic
+    ModelDefinition(id: "anthropic/claude-sonnet-4-20250514", displayName: "Claude Sonnet 4", shortName: "Sonnet 4", provider: "Anthropic", providerKey: "anthropic", tag: "Smart", icon: "brain.head.profile"),
+    ModelDefinition(id: "anthropic/claude-opus-4-20250514", displayName: "Claude Opus 4", shortName: "Opus 4", provider: "Anthropic", providerKey: "anthropic", tag: "Powerful", icon: "brain"),
+    ModelDefinition(id: "anthropic/claude-haiku-4-5-20251001", displayName: "Claude Haiku 3.5", shortName: "Haiku 3.5", provider: "Anthropic", providerKey: "anthropic", tag: "Fast", icon: "hare"),
+    // OpenAI
+    ModelDefinition(id: "openai/gpt-4o", displayName: "GPT-4o", shortName: "GPT-4o", provider: "OpenAI", providerKey: "openai", tag: "Vision", icon: "eye"),
+    ModelDefinition(id: "openai/gpt-4o-mini", displayName: "GPT-4o Mini", shortName: "4o Mini", provider: "OpenAI", providerKey: "openai", tag: "Fast", icon: "hare"),
+    ModelDefinition(id: "openai/o3", displayName: "o3", shortName: "o3", provider: "OpenAI", providerKey: "openai", tag: "Reasoning", icon: "lightbulb"),
+    // Google
+    ModelDefinition(id: "google/gemini-2.5-pro", displayName: "Gemini 2.5 Pro", shortName: "Gemini Pro", provider: "Google", providerKey: "google", tag: "Smart", icon: "brain.head.profile"),
+    ModelDefinition(id: "google/gemini-2.5-flash", displayName: "Gemini 2.5 Flash", shortName: "Gemini Flash", provider: "Google", providerKey: "google", tag: "Fast", icon: "bolt"),
+    // Other
+    ModelDefinition(id: "claude-code", displayName: "Claude Code", shortName: "Claude Code", provider: "Local", providerKey: "claude-code", tag: "Local", icon: "terminal"),
+]
+
 @MainActor
 class AppState: ObservableObject {
     @AppStorage("isDarkMode") var isDarkMode: Bool = true
@@ -141,8 +192,24 @@ class AppState: ObservableObject {
     @AppStorage("compactMode") var compactMode: Bool = false
     @AppStorage("floatOnTop") var floatOnTop: Bool = false
     @AppStorage("windowOpacity") var windowOpacity: Double = 1.0
+    @AppStorage("quickActionsCollapsed") var quickActionsCollapsed: Bool = false
 
     @Published var selectedAccentColor: String = UserDefaults.standard.string(forKey: "selectedAccentColor") ?? "teal"
+
+    /// Enabled quick actions shown in the chat toolbar. Persisted to UserDefaults.
+    @Published var quickActions: [ChatQuickAction] = {
+        if let data = UserDefaults.standard.data(forKey: "chatQuickActions"),
+           let decoded = try? JSONDecoder().decode([ChatQuickAction].self, from: data) {
+            return decoded
+        }
+        return ChatQuickAction.defaults
+    }() {
+        didSet {
+            if let data = try? JSONEncoder().encode(quickActions) {
+                UserDefaults.standard.set(data, forKey: "chatQuickActions")
+            }
+        }
+    }
 
     // MARK: - Window State Persistence
 
@@ -218,6 +285,38 @@ class AppState: ObservableObject {
     @Published var conversationSortOrder: ConversationSortOrder = .recent
     @Published var notifications: [AppNotification] = []
     @Published var showNotificationPanel: Bool = false
+    @Published var selectedModel: String = "anthropic/claude-sonnet-4-20250514"
+
+    /// All known models grouped by provider, indicating availability based on configured API keys.
+    var availableModels: [ModelDefinition] {
+        allModelDefinitions
+    }
+
+    /// Models grouped by provider name for display in the selector.
+    var modelsGroupedByProvider: [(provider: String, models: [ModelDefinition])] {
+        let grouped = Dictionary(grouping: allModelDefinitions) { $0.provider }
+        let order = ["Anthropic", "OpenAI", "Google", "Local"]
+        return order.compactMap { provider in
+            guard let models = grouped[provider] else { return nil }
+            return (provider: provider, models: models)
+        }
+    }
+
+    /// Whether a provider has an API key configured.
+    func hasAPIKey(for providerKey: String) -> Bool {
+        if providerKey == "claude-code" { return true }
+        return config.apiKeys[providerKey] != nil
+    }
+
+    /// Look up a ModelDefinition by its id string.
+    func modelDefinition(for id: String) -> ModelDefinition? {
+        allModelDefinitions.first { $0.id == id }
+    }
+
+    /// Short display name for the currently selected model.
+    var selectedModelShortName: String {
+        modelDefinition(for: selectedModel)?.shortName ?? selectedModel
+    }
 
     var unreadNotificationCount: Int {
         notifications.filter { !$0.isRead }.count
@@ -319,6 +418,7 @@ class AppState: ObservableObject {
         agents = service.loadAgents()
         tasks = service.loadTasks()
         config = service.loadConfig()
+        selectedModel = config.activeModel
         conversations = service.loadConversations()
         let status = service.gatewayStatus()
         gatewayRunning = status.running
@@ -384,11 +484,17 @@ class AppState: ObservableObject {
                 title: smartTitle(from: text),
                 messages: [],
                 createdAt: Date(),
-                agentName: nil
+                agentName: nil,
+                modelId: selectedModel
             )
             activeConversation = conv
             conversations.insert(conv, at: 0)
             selectedTab = .chat
+        }
+
+        // Stamp current model on conversation if not already set
+        if activeConversation?.modelId == nil {
+            activeConversation?.modelId = selectedModel
         }
 
         // Build message with attachment context
@@ -427,12 +533,15 @@ class AppState: ObservableObject {
 
         let streamState = StreamState()
 
-        // Build CLI args — if this conversation is tied to an agent, use --model
+        // Build CLI args — agent model takes priority, then selected model
         var args = [fullText]
         if let agentName = activeConversation?.agentName,
            let agent = agents.first(where: { $0.name == agentName }),
            !agent.model.isEmpty {
             args = ["--model", agent.model, fullText]
+        } else if selectedModel != config.activeModel {
+            // Use the chat-level selected model when it differs from config default
+            args = ["--model", selectedModel, fullText]
         }
 
         Task {
@@ -652,6 +761,26 @@ class AppState: ObservableObject {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(content, forType: .string)
         showToast("Copied to clipboard", type: .success)
+    }
+
+    func branchConversation(from conversationId: String, atMessageIndex: Int) {
+        guard let source = conversations.first(where: { $0.id == conversationId }) else { return }
+        let branchedMessages = Array(source.messages.prefix(atMessageIndex + 1))
+        let newConv = Conversation(
+            id: UUID().uuidString,
+            title: source.title + " (branch)",
+            messages: branchedMessages,
+            createdAt: Date(),
+            agentName: source.agentName,
+            modelId: source.modelId,
+            branchedFromId: conversationId,
+            branchedAtMessageIndex: atMessageIndex
+        )
+        conversations.insert(newConv, at: 0)
+        service.saveConversation(newConv)
+        activeConversation = newConv
+        selectedTab = .chat
+        showToast("Branched conversation", type: .success)
     }
 
     func navigateConversation(direction: Int) {

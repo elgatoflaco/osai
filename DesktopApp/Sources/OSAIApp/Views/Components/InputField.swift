@@ -250,6 +250,145 @@ class SubmittableTextView: NSTextView {
     }
 }
 
+// MARK: - Model Selector
+
+struct ModelSelectorButton: View {
+    @EnvironmentObject var appState: AppState
+    @State private var showPopover = false
+
+    var body: some View {
+        Button(action: { showPopover.toggle() }) {
+            HStack(spacing: 4) {
+                Image(systemName: appState.modelDefinition(for: appState.selectedModel)?.icon ?? "cpu")
+                    .font(.system(size: 10))
+                Text(appState.selectedModelShortName)
+                    .font(.system(size: 11, weight: .medium))
+                    .lineLimit(1)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 8))
+            }
+            .foregroundColor(AppTheme.textSecondary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(AppTheme.bgCard.opacity(0.8))
+            .clipShape(Capsule())
+            .overlay(Capsule().stroke(AppTheme.borderGlass, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Select model, currently \(appState.selectedModelShortName)")
+        .help("Change model")
+        .popover(isPresented: $showPopover, arrowEdge: .top) {
+            ModelSelectorPopover(isPresented: $showPopover)
+                .environmentObject(appState)
+        }
+    }
+}
+
+struct ModelSelectorPopover: View {
+    @EnvironmentObject var appState: AppState
+    @Binding var isPresented: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Header
+            HStack {
+                Text("Select Model")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(AppTheme.textPrimary)
+                Spacer()
+            }
+            .padding(.horizontal, 14)
+            .padding(.top, 12)
+            .padding(.bottom, 8)
+
+            Divider().background(AppTheme.borderGlass)
+
+            ScrollView(.vertical, showsIndicators: true) {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(appState.modelsGroupedByProvider, id: \.provider) { group in
+                        // Provider header
+                        Text(group.provider)
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundColor(AppTheme.textMuted)
+                            .textCase(.uppercase)
+                            .padding(.horizontal, 14)
+                            .padding(.top, 10)
+                            .padding(.bottom, 4)
+
+                        ForEach(group.models) { model in
+                            let isSelected = appState.selectedModel == model.id
+                            let hasKey = appState.hasAPIKey(for: model.providerKey)
+
+                            Button(action: {
+                                if hasKey {
+                                    appState.selectedModel = model.id
+                                    isPresented = false
+                                }
+                            }) {
+                                HStack(spacing: 8) {
+                                    Image(systemName: model.icon)
+                                        .font(.system(size: 12))
+                                        .foregroundColor(hasKey ? AppTheme.accent : AppTheme.textMuted)
+                                        .frame(width: 18)
+
+                                    VStack(alignment: .leading, spacing: 1) {
+                                        Text(model.displayName)
+                                            .font(.system(size: 12, weight: .medium))
+                                            .foregroundColor(hasKey ? AppTheme.textPrimary : AppTheme.textMuted)
+                                        if !hasKey {
+                                            Text("No API key")
+                                                .font(.system(size: 10))
+                                                .foregroundColor(AppTheme.error.opacity(0.7))
+                                        }
+                                    }
+
+                                    Spacer()
+
+                                    Text(model.tag)
+                                        .font(.system(size: 9, weight: .medium))
+                                        .foregroundColor(hasKey ? tagColor(model.tag) : AppTheme.textMuted)
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 2)
+                                        .background((hasKey ? tagColor(model.tag) : AppTheme.textMuted).opacity(0.12))
+                                        .clipShape(Capsule())
+
+                                    if isSelected {
+                                        Image(systemName: "checkmark")
+                                            .font(.system(size: 11, weight: .semibold))
+                                            .foregroundColor(AppTheme.accent)
+                                    }
+                                }
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 6)
+                                .background(isSelected ? AppTheme.accent.opacity(0.08) : Color.clear)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(!hasKey)
+                        }
+                    }
+                }
+                .padding(.bottom, 10)
+            }
+        }
+        .frame(width: 280, height: 360)
+        .background(.ultraThinMaterial)
+        .background(AppTheme.bgGlass)
+    }
+
+    private func tagColor(_ tag: String) -> Color {
+        switch tag {
+        case "Fast": return AppTheme.success
+        case "Smart": return AppTheme.accent
+        case "Powerful": return Color.purple
+        case "Vision": return Color.blue
+        case "Reasoning": return Color.orange
+        case "Local": return AppTheme.textSecondary
+        default: return AppTheme.textSecondary
+        }
+    }
+}
+
 // MARK: - ChatInputBar
 
 struct ChatInputBar: View {
@@ -319,6 +458,9 @@ struct ChatInputBar: View {
             }
 
             HStack(alignment: .bottom, spacing: 10) {
+                ModelSelectorButton()
+                    .padding(.bottom, 2)
+
                 Button(action: openFilePicker) {
                     Image(systemName: "paperclip")
                         .font(.system(size: 16))

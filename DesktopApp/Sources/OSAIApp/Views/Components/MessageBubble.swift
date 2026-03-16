@@ -207,6 +207,7 @@ struct MessageBubble: View {
     var onCancel: (() -> Void)?
     var onRetry: (() -> Void)?
     var onReaction: ((MessageReaction?) -> Void)?
+    var onBranch: (() -> Void)?
     @State private var appeared = false
     @State private var copied = false
     @State private var isHovered = false
@@ -246,16 +247,41 @@ struct MessageBubble: View {
                     .clipShape(RoundedRectangle(cornerRadius: 18))
                     .overlay(RoundedRectangle(cornerRadius: 18).stroke(AppTheme.accent.opacity(0.2), lineWidth: 0.5))
 
-                Text(timeString(message.timestamp))
-                    .font(.system(size: 9))
-                    .foregroundColor(AppTheme.textMuted)
-                    .padding(.trailing, 4)
+                HStack(spacing: 6) {
+                    if isHovered, let onBranch = onBranch {
+                        Button(action: onBranch) {
+                            HStack(spacing: 3) {
+                                Image(systemName: "arrow.triangle.branch")
+                                    .font(.system(size: 9))
+                                Text("Branch")
+                                    .font(.system(size: 9))
+                            }
+                            .foregroundColor(AppTheme.textMuted)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 3)
+                            .background(AppTheme.bgCard.opacity(0.9))
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                            .overlay(RoundedRectangle(cornerRadius: 6).stroke(AppTheme.borderGlass, lineWidth: 0.5))
+                        }
+                        .buttonStyle(.plain)
+                        .transition(.opacity)
+                        .accessibilityLabel("Branch conversation from this message")
+                    }
+
+                    Text(timeString(message.timestamp))
+                        .font(.system(size: 9))
+                        .foregroundColor(AppTheme.textMuted)
+                        .padding(.trailing, 4)
+                }
             }
 
             Image(systemName: "person.circle.fill")
                 .font(.system(size: 26))
                 .foregroundColor(AppTheme.textSecondary)
                 .accessibilityHidden(true)
+        }
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.15)) { isHovered = hovering }
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("You said: \(message.content)")

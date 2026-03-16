@@ -118,6 +118,21 @@ struct ChatView: View {
         focusMode || appState.sidebarHidden
     }
 
+    // MARK: - Quick Actions Bar
+
+    @ViewBuilder
+    private var quickActionsBarView: some View {
+        if let conv = appState.activeConversation, !conv.messages.isEmpty {
+            ChatQuickActionsBar(
+                actions: appState.quickActions,
+                isCollapsed: $appState.quickActionsCollapsed,
+                onAction: { action in
+                    appState.sendMessage(action.prompt)
+                }
+            )
+        }
+    }
+
     // MARK: - Conversation Starter View
 
     @ViewBuilder
@@ -687,6 +702,7 @@ struct ChatView: View {
                                         .font(.system(size: 11))
                                         .foregroundColor(AppTheme.textSecondary)
                                 }
+                                conversationModelLabel(conv)
                                 Text("\(conv.messages.count) messages")
                                     .font(.system(size: 11))
                                     .foregroundColor(AppTheme.textMuted)
@@ -704,6 +720,7 @@ struct ChatView: View {
                                     }
                                 }
                             }
+                            branchedFromLabel(conv)
                         }
                     } else {
                         GhostIcon(size: 20, animate: false)
@@ -837,6 +854,9 @@ struct ChatView: View {
                     )
                 }
 
+                // Quick actions bar
+                quickActionsBarView
+
                 // Messages
                 if let conv = appState.activeConversation, !conv.messages.isEmpty || appState.isProcessing {
                     let lastAssistantId = conv.messages.last(where: { $0.role == .assistant })?.id
@@ -850,7 +870,11 @@ struct ChatView: View {
                                             isLastAssistantMessage: msg.id == lastAssistantId,
                                             onCancel: msg.isStreaming ? { appState.cancelProcessing() } : nil,
                                             onRetry: msg.id == lastAssistantId && !msg.isStreaming ? { appState.retryLastMessage() } : nil,
-                                            onReaction: msg.role == .assistant ? { reaction in appState.setReaction(messageId: msg.id, reaction: reaction) } : nil
+                                            onReaction: msg.role == .assistant ? { reaction in appState.setReaction(messageId: msg.id, reaction: reaction) } : nil,
+                                            onBranch: msg.role == .user ? {
+                                                let idx = conv.messages.firstIndex(where: { $0.id == msg.id }) ?? 0
+                                                appState.branchConversation(from: conv.id, atMessageIndex: idx)
+                                            } : nil
                                         )
                                         .id(msg.id)
                                         .transition(.asymmetric(
@@ -1132,6 +1156,22 @@ struct ChatView: View {
         return "doc"
     }
 
+    @ViewBuilder
+    private func conversationModelLabel(_ conv: Conversation) -> some View {
+        if let modelId = conv.modelId,
+           let modelDef = appState.modelDefinition(for: modelId) {
+            Image(systemName: modelDef.icon)
+                .font(.system(size: 9))
+                .foregroundColor(AppTheme.accent.opacity(0.7))
+            Text(modelDef.shortName)
+                .font(.system(size: 11))
+                .foregroundColor(AppTheme.textSecondary)
+            Text("\u{00B7}")
+                .font(.system(size: 11))
+                .foregroundColor(AppTheme.textMuted)
+        }
+    }
+
     private func abbreviatedTokens(_ count: Int) -> String {
         if count < 1000 {
             return "\(count) tokens"
@@ -1145,6 +1185,28 @@ struct ChatView: View {
         if let lastId = appState.activeConversation?.messages.last?.id {
             withAnimation(.easeOut(duration: 0.3)) {
                 proxy.scrollTo(lastId, anchor: .bottom)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func branchedFromLabel(_ conv: Conversation) -> some View {
+        if let parentId = conv.branchedFromId,
+           let parentConv = appState.conversations.first(where: { $0.id == parentId }) {
+            HStack(spacing: 4) {
+                Image(systemName: "arrow.triangle.branch")
+                    .font(.system(size: 9))
+                    .foregroundColor(AppTheme.accent.opacity(0.7))
+                Text("Branched from:")
+                    .font(.system(size: 10))
+                    .foregroundColor(AppTheme.textMuted)
+                Button(action: { appState.openConversation(parentConv) }) {
+                    Text(parentConv.title)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(AppTheme.accent)
+                        .lineLimit(1)
+                }
+                .buttonStyle(.plain)
             }
         }
     }
@@ -1249,6 +1311,12 @@ struct ConversationRow: View {
     var body: some View {
         Button(action: onSelect) {
             HStack(spacing: 8) {
+                if conv.branchedFromId != nil {
+                    Image(systemName: "arrow.triangle.branch")
+                        .font(.system(size: 9))
+                        .foregroundColor(AppTheme.textMuted.opacity(0.6))
+                        .frame(width: 12)
+                }
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 4) {
                         if conv.isPinned {
