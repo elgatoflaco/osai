@@ -1476,6 +1476,139 @@ struct CommandPaletteView: View {
     }
 }
 
+// MARK: - Keyboard Shortcuts Overlay
+
+struct KeyboardShortcutsView: View {
+    @Binding var isPresented: Bool
+
+    private struct ShortcutEntry: Identifiable {
+        let id = UUID()
+        let keys: String
+        let label: String
+    }
+
+    private struct ShortcutCategory: Identifiable {
+        let id = UUID()
+        let name: String
+        let icon: String
+        let shortcuts: [ShortcutEntry]
+    }
+
+    private var categories: [ShortcutCategory] {
+        [
+            ShortcutCategory(name: "Navigation", icon: "arrow.triangle.swap", shortcuts: [
+                ShortcutEntry(keys: "\u{2318}1-5", label: "Switch tabs"),
+                ShortcutEntry(keys: "\u{2318}N", label: "New chat"),
+                ShortcutEntry(keys: "\u{2318}W", label: "Close conversation"),
+                ShortcutEntry(keys: "\u{2318}[ / ]", label: "Prev / next conversation"),
+            ]),
+            ShortcutCategory(name: "Chat", icon: "bubble.left.and.bubble.right", shortcuts: [
+                ShortcutEntry(keys: "Return", label: "Send message"),
+                ShortcutEntry(keys: "\u{21E7}Return", label: "New line"),
+                ShortcutEntry(keys: "\u{2191}", label: "Input history"),
+                ShortcutEntry(keys: "\u{21E7}\u{2318}C", label: "Copy last response"),
+            ]),
+            ShortcutCategory(name: "Editing", icon: "pencil", shortcuts: [
+                ShortcutEntry(keys: "\u{2318}B", label: "Bold"),
+                ShortcutEntry(keys: "\u{2318}I", label: "Italic"),
+            ]),
+            ShortcutCategory(name: "Window", icon: "macwindow", shortcuts: [
+                ShortcutEntry(keys: "\u{2318}\\", label: "Toggle sidebar"),
+                ShortcutEntry(keys: "\u{2318}K", label: "Command palette"),
+                ShortcutEntry(keys: "\u{2318}/", label: "This cheat sheet"),
+                ShortcutEntry(keys: "\u{21E7}\u{2318}Space", label: "Summon OSAI"),
+            ]),
+        ]
+    }
+
+    var body: some View {
+        ZStack {
+            // Backdrop
+            Color.black.opacity(0.45)
+                .ignoresSafeArea()
+                .onTapGesture { isPresented = false }
+
+            VStack(spacing: 0) {
+                // Header
+                HStack {
+                    Image(systemName: "keyboard")
+                        .foregroundColor(AppTheme.accent)
+                        .font(.system(size: 14, weight: .semibold))
+                    Text("Keyboard Shortcuts")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundColor(AppTheme.textPrimary)
+                    Spacer()
+                    Text("esc")
+                        .font(.system(size: 10, weight: .medium, design: .rounded))
+                        .foregroundColor(AppTheme.textMuted)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 2)
+                        .background(AppTheme.bgSecondary.opacity(0.6))
+                        .clipShape(RoundedRectangle(cornerRadius: 3))
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 14)
+
+                Divider()
+                    .background(AppTheme.borderGlass)
+
+                // Grid of categories
+                let cols = Array(repeating: GridItem(.flexible(), spacing: 20), count: 2)
+                LazyVGrid(columns: cols, alignment: .leading, spacing: 20) {
+                    ForEach(categories) { category in
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack(spacing: 6) {
+                                Image(systemName: category.icon)
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundColor(AppTheme.accent)
+                                Text(category.name)
+                                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                                    .foregroundColor(AppTheme.textMuted)
+                                    .textCase(.uppercase)
+                            }
+
+                            ForEach(category.shortcuts) { shortcut in
+                                HStack(spacing: 0) {
+                                    Text(shortcut.keys)
+                                        .font(.system(size: 12, weight: .medium, design: .monospaced))
+                                        .foregroundColor(AppTheme.textPrimary)
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 3)
+                                        .background(AppTheme.bgSecondary.opacity(0.5))
+                                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                                    Spacer().frame(minWidth: 8)
+                                    Text(shortcut.label)
+                                        .font(.system(size: 12))
+                                        .foregroundColor(AppTheme.textSecondary)
+                                        .lineLimit(1)
+                                    Spacer(minLength: 0)
+                                }
+                            }
+                        }
+                    }
+                }
+                .padding(20)
+            }
+            .frame(maxWidth: 520)
+            .background(
+                RoundedRectangle(cornerRadius: 16)
+                    .fill(.ultraThinMaterial)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16)
+                            .strokeBorder(AppTheme.borderGlass, lineWidth: 1)
+                    )
+                    .shadow(color: .black.opacity(0.5), radius: 40, x: 0, y: 12)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 16))
+            .padding(.horizontal, 40)
+        }
+        .onKeyPress(.escape) {
+            isPresented = false
+            return .handled
+        }
+    }
+}
+
 // MARK: - Window Accessor
 
 /// NSViewRepresentable that provides access to the hosting NSWindow for frame tracking and settings.

@@ -858,6 +858,8 @@ struct MessageBubble: View {
     @State private var reactionBounce: MessageReaction?
     @State private var showReactionPicker = false
     @State private var reactionAppeared = false
+    @State private var reactionPulse = false
+    @State private var hoveredReaction: MessageReaction?
     @State private var isEditing = false
     @State private var editText = ""
     @State private var speakerPulse = false
@@ -2090,32 +2092,44 @@ struct MessageBubble: View {
     }
 
     private var reactionPickerPopover: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 4) {
             ForEach(MessageReaction.allReactions, id: \.self) { reaction in
                 let isSelected = message.reaction == reaction
+                let isHoveredReaction = hoveredReaction == reaction
                 Button(action: {
                     let newReaction: MessageReaction? = isSelected ? nil : reaction
                     reactionBounce = reaction
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.5)) {}
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { reactionBounce = nil }
                     onReaction?(newReaction)
                     showReactionPicker = false
                 }) {
                     Text(reaction.emoji)
-                        .font(.system(size: 20))
-                        .scaleEffect(reactionBounce == reaction ? 1.4 : (isSelected ? 1.15 : 1.0))
-                        .animation(.spring(response: 0.3, dampingFraction: 0.5), value: reactionBounce)
-                        .frame(width: 32, height: 32)
-                        .background(isSelected ? AppTheme.accent.opacity(0.15) : Color.clear)
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .font(.system(size: 22))
+                        .scaleEffect(reactionBounce == reaction ? 1.5 : (isHoveredReaction ? 1.25 : (isSelected ? 1.15 : 1.0)))
+                        .animation(.spring(response: 0.25, dampingFraction: 0.5), value: reactionBounce)
+                        .animation(.spring(response: 0.3, dampingFraction: 0.65), value: hoveredReaction)
+                        .frame(width: 36, height: 36)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(isSelected ? AppTheme.accent.opacity(0.2) : (isHoveredReaction ? AppTheme.textMuted.opacity(0.1) : Color.clear))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8)
+                                .stroke(isSelected ? AppTheme.accent.opacity(0.4) : Color.clear, lineWidth: 1)
+                        )
                 }
                 .buttonStyle(.plain)
+                .onHover { hovering in
+                    hoveredReaction = hovering ? reaction : nil
+                }
                 .accessibilityLabel("\(reactionAccessibilityName(reaction)) reaction\(isSelected ? ", selected" : "")")
                 .accessibilityHint(isSelected ? "Double tap to remove reaction" : "Double tap to react")
             }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
+        .background(AppTheme.bgCard.opacity(0.95))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 
     private func reactionAccessibilityName(_ reaction: MessageReaction) -> String {
@@ -2136,22 +2150,39 @@ struct MessageBubble: View {
             .background(AppTheme.bgCard)
             .clipShape(Circle())
             .overlay(Circle().stroke(AppTheme.borderGlass, lineWidth: 0.5))
+            .shadow(color: AppTheme.accent.opacity(reactionPulse ? 0.3 : 0.0), radius: reactionPulse ? 6 : 0)
             .shadow(color: .black.opacity(0.1), radius: 2, y: 1)
-            .scaleEffect(reactionAppeared ? 1.0 : 0.3)
+            .scaleEffect(reactionAppeared ? (reactionPulse ? 1.15 : 1.0) : 0.0)
             .opacity(reactionAppeared ? 1.0 : 0.0)
             .accessibilityLabel("Reaction: \(reactionAccessibilityName(reaction))")
             .accessibilityValue(reactionAccessibilityName(reaction))
             .onAppear {
-                withAnimation(.spring(response: 0.4, dampingFraction: 0.6)) {
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.5, blendDuration: 0)) {
                     reactionAppeared = true
                 }
+                triggerPulse()
             }
             .onChange(of: message.reaction) { _ in
                 reactionAppeared = false
-                withAnimation(.spring(response: 0.4, dampingFraction: 0.6)) {
+                reactionPulse = false
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.5, blendDuration: 0)) {
                     reactionAppeared = true
                 }
+                triggerPulse()
             }
+    }
+
+    private func triggerPulse() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            withAnimation(.easeOut(duration: 0.25)) {
+                reactionPulse = true
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                withAnimation(.easeInOut(duration: 0.3)) {
+                    reactionPulse = false
+                }
+            }
+        }
     }
 
     private func timeString(_ date: Date) -> String {
@@ -3046,7 +3077,7 @@ struct ResponseView: View {
         let sections = ResponseParser.parse(strippedText)
         let result = buildCollapsibleGroups(from: sections)
         let headingCount = result.groups.count
-        let useCollapsible = headingCount > 5 && !isStreaming
+        let useCollapsible = headingCount >= 3 && !isStreaming
         let useTruncation = !useCollapsible && isPlainTextOnly(sections) && wordCount(text) > 500 && !isStreaming
 
         VStack(alignment: .leading, spacing: zenMode ? 14 : 10) {
@@ -3146,7 +3177,7 @@ struct ResponseView: View {
         .onAppear {
             startCursorTimer()
             // Auto-collapse sections after the first 2 on first appearance
-            if !didAutoCollapse && headingCount > 5 {
+            if !didAutoCollapse && headingCount >= 3 {
                 let groupsToCollapse = result.groups.dropFirst(2).map(\.id)
                 collapsedSections = Set(groupsToCollapse)
                 didAutoCollapse = true

@@ -1403,7 +1403,7 @@ struct ChatView: View {
         }
         .sheet(isPresented: $showStatsSheet) {
             if let conv = appState.activeConversation {
-                ConversationStatsSheet(stats: appState.computeStats(for: conv), conversationTitle: conv.title)
+                ConversationStatsSheet(stats: appState.computeStats(for: conv), conversationTitle: conv.title, messages: conv.messages)
             }
         }
     }
@@ -4766,7 +4766,48 @@ struct SearchFilterChip: View {
 struct ConversationStatsSheet: View {
     let stats: AppState.ConversationStats
     let conversationTitle: String
+    let messages: [ChatMessage]
     @Environment(\.dismiss) private var dismiss
+
+    // Computed properties for enhanced stats
+    private var totalWords: Int {
+        Int(round(stats.wordsPerMessage * Double(stats.totalMessages)))
+    }
+
+    private var messagesPerDay: [(day: String, userCount: Int, assistantCount: Int)] {
+        guard !messages.isEmpty else { return [] }
+        let calendar = Calendar.current
+        let formatter = DateFormatter()
+        formatter.dateFormat = "MMM d"
+
+        var dayBuckets: [(date: Date, label: String, userCount: Int, assistantCount: Int)] = []
+        var bucketMap: [String: Int] = [:]
+
+        for msg in messages {
+            let dayStart = calendar.startOfDay(for: msg.timestamp)
+            let label = formatter.string(from: dayStart)
+            if let idx = bucketMap[label] {
+                if msg.role == .user {
+                    dayBuckets[idx].userCount += 1
+                } else {
+                    dayBuckets[idx].assistantCount += 1
+                }
+            } else {
+                let idx = dayBuckets.count
+                bucketMap[label] = idx
+                let isUser = msg.role == .user
+                dayBuckets.append((
+                    date: dayStart,
+                    label: label,
+                    userCount: isUser ? 1 : 0,
+                    assistantCount: isUser ? 0 : 1
+                ))
+            }
+        }
+        return dayBuckets
+            .sorted { $0.date < $1.date }
+            .map { (day: $0.label, userCount: $0.userCount, assistantCount: $0.assistantCount) }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -4796,10 +4837,29 @@ struct ConversationStatsSheet: View {
 
             ScrollView {
                 VStack(spacing: AppTheme.paddingMd) {
-                    // Messages breakdown
+                    // Overview grid - 2 columns of stat cards
                     GlassCard(hoverEnabled: false) {
                         VStack(alignment: .leading, spacing: 10) {
-                            statsSectionHeader(icon: "bubble.left.and.bubble.right.fill", title: "Messages")
+                            statsSectionHeader(icon: "square.grid.2x2.fill", title: "Overview")
+
+                            LazyVGrid(columns: [
+                                GridItem(.flexible(), spacing: 8),
+                                GridItem(.flexible(), spacing: 8),
+                            ], spacing: 10) {
+                                statsCard(icon: "bubble.left.and.bubble.right.fill", label: "Total Messages", value: "\(stats.totalMessages)")
+                                statsCard(icon: "clock.arrow.circlepath", label: "Duration", value: stats.formattedDuration)
+                                statsCard(icon: "bolt.fill", label: "Avg Response", value: stats.formattedAvgResponseTime)
+                                statsCard(icon: "textformat.size", label: "Total Words", value: abbreviatedCount(totalWords))
+                                statsCard(icon: "doc.text", label: "Words/Message", value: String(format: "%.1f", stats.wordsPerMessage))
+                                statsCard(icon: "chevron.left.forwardslash.chevron.right", label: "Code Blocks", value: "\(stats.codeBlocksCount)")
+                            }
+                        }
+                    }
+
+                    // Messages breakdown with bar
+                    GlassCard(hoverEnabled: false) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            statsSectionHeader(icon: "bubble.left.and.bubble.right.fill", title: "Messages Breakdown")
 
                             HStack(spacing: 16) {
                                 statsValueBlock(label: "Total", value: "\(stats.totalMessages)")
@@ -4821,6 +4881,67 @@ struct ConversationStatsSheet: View {
                                     }
                                 }
                                 .frame(height: 12)
+
+                                HStack {
+                                    HStack(spacing: 4) {
+                                        Circle().fill(AppTheme.accent).frame(width: 8, height: 8)
+                                        Text("User").font(.system(size: 10)).foregroundColor(AppTheme.textMuted)
+                                    }
+                                    HStack(spacing: 4) {
+                                        Circle().fill(AppTheme.accent.opacity(0.4)).frame(width: 8, height: 8)
+                                        Text("Assistant").font(.system(size: 10)).foregroundColor(AppTheme.textMuted)
+                                    }
+                                    Spacer()
+                                }
+                            }
+                        }
+                    }
+
+                    // Messages per day bar chart
+                    if messagesPerDay.count > 1 {
+                        GlassCard(hoverEnabled: false) {
+                            VStack(alignment: .leading, spacing: 10) {
+                                statsSectionHeader(icon: "calendar.badge.clock", title: "Messages Per Day")
+
+                                let maxDayCount = messagesPerDay.map { $0.userCount + $0.assistantCount }.max() ?? 1
+
+                                HStack(alignment: .bottom, spacing: 4) {
+                                    ForEach(Array(messagesPerDay.enumerated()), id: \.offset) { _, dayData in
+                                        let totalCount = dayData.userCount + dayData.assistantCount
+                                        let barHeight = CGFloat(totalCount) / CGFloat(max(1, maxDayCount))
+
+                                        VStack(spacing: 2) {
+                                            Text("\(totalCount)")
+                                                .font(.system(size: 9, weight: .medium, design: .rounded))
+                                                .foregroundColor(AppTheme.textMuted)
+
+                                            VStack(spacing: 1) {
+                                                // User portion
+                                                if dayData.userCount > 0 {
+                                                    RoundedRectangle(cornerRadius: 3)
+                                                        .fill(AppTheme.accent)
+                                                        .frame(height: max(2, 100 * barHeight * CGFloat(dayData.userCount) / CGFloat(max(1, totalCount))))
+                                                }
+                                                // Assistant portion
+                                                if dayData.assistantCount > 0 {
+                                                    RoundedRectangle(cornerRadius: 3)
+                                                        .fill(AppTheme.accent.opacity(0.4))
+                                                        .frame(height: max(2, 100 * barHeight * CGFloat(dayData.assistantCount) / CGFloat(max(1, totalCount))))
+                                                }
+                                            }
+                                            .frame(height: 100 * barHeight)
+
+                                            Text(dayData.day)
+                                                .font(.system(size: 8))
+                                                .foregroundColor(AppTheme.textMuted)
+                                                .lineLimit(1)
+                                                .fixedSize()
+                                        }
+                                        .frame(maxWidth: .infinity)
+                                    }
+                                }
+                                .frame(height: 130)
+                                .padding(.top, 4)
 
                                 HStack {
                                     HStack(spacing: 4) {
@@ -4880,23 +5001,6 @@ struct ConversationStatsSheet: View {
                         }
                     }
 
-                    // Timing & general stats
-                    GlassCard(hoverEnabled: false) {
-                        VStack(alignment: .leading, spacing: 10) {
-                            statsSectionHeader(icon: "clock.fill", title: "Timing & General")
-
-                            LazyVGrid(columns: [
-                                GridItem(.flexible(), spacing: 8),
-                                GridItem(.flexible(), spacing: 8),
-                            ], spacing: 10) {
-                                statsCard(icon: "clock.arrow.circlepath", label: "Duration", value: stats.formattedDuration)
-                                statsCard(icon: "bolt.fill", label: "Avg Response", value: stats.formattedAvgResponseTime)
-                                statsCard(icon: "textformat.size", label: "Words/Message", value: String(format: "%.1f", stats.wordsPerMessage))
-                                statsCard(icon: "chevron.left.forwardslash.chevron.right", label: "Code Blocks", value: "\(stats.codeBlocksCount)")
-                            }
-                        }
-                    }
-
                     // Top tools
                     if !stats.topTools.isEmpty {
                         GlassCard(hoverEnabled: false) {
@@ -4944,7 +5048,7 @@ struct ConversationStatsSheet: View {
                 .padding(AppTheme.paddingLg)
             }
         }
-        .frame(minWidth: 420, idealWidth: 480, minHeight: 460, idealHeight: 560)
+        .frame(minWidth: 480, idealWidth: 540, minHeight: 520, idealHeight: 680)
         .background(AppTheme.bgPrimary)
     }
 
