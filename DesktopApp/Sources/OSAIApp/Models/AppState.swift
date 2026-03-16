@@ -2890,8 +2890,9 @@ class AppState: ObservableObject {
 
                 syncConversationToList()
 
-                // Auto-generate smart title after first assistant response
+                // Auto-generate smart title and summary after first assistant response
                 autoTitleIfNeeded()
+                autoSummarizeIfNeeded()
                 syncConversationToList()
 
                 if let conv = activeConversation {
@@ -4014,6 +4015,87 @@ class AppState: ObservableObject {
         if activeConversation?.id == conv.id {
             activeConversation?.title = newTitle
             activeConversation?.titleManuallySet = false
+        }
+        if let updated = conversations.first(where: { $0.id == conv.id }) {
+            service.saveConversation(updated)
+        }
+    }
+
+    // MARK: - Conversation Subtitle Summaries
+
+    /// Generate a brief subtitle summary (max 60 chars) from conversation content.
+    func generateSubtitleSummary(for conversation: Conversation) -> String {
+        let messages = conversation.messages
+
+        // If there's an assistant reply, use the first sentence of the first assistant message
+        if let firstAssistant = messages.first(where: { $0.role == .assistant && !$0.isStreaming }) {
+            let text = firstAssistant.content.trimmingCharacters(in: .whitespacesAndNewlines)
+            // Extract first sentence (split on . ! ? or newline)
+            let sentenceEnders = CharacterSet(charactersIn: ".!?\n")
+            let parts = text.components(separatedBy: sentenceEnders)
+            let firstSentence = (parts.first ?? text).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !firstSentence.isEmpty {
+                if firstSentence.count <= 60 {
+                    return firstSentence
+                }
+                return String(firstSentence.prefix(57)) + "..."
+            }
+        }
+
+        // If the conversation has tool activities, mention the most used tool
+        let toolActivities = messages.flatMap { $0.activities }.filter { $0.type == .toolCall }
+        if !toolActivities.isEmpty {
+            var toolFreq: [String: Int] = [:]
+            for activity in toolActivities {
+                toolFreq[activity.label, default: 0] += 1
+            }
+            if let topTool = toolFreq.max(by: { $0.value < $1.value }) {
+                let summary = "Used \(topTool.key) (\(topTool.value)x)"
+                if summary.count <= 60 {
+                    return summary
+                }
+                return String(summary.prefix(57)) + "..."
+            }
+        }
+
+        // If only user messages, use "You: " + first message preview
+        if let firstUser = messages.first(where: { $0.role == .user }) {
+            let text = firstUser.content.trimmingCharacters(in: .whitespacesAndNewlines)
+            let prefix = "You: "
+            let maxContent = 60 - prefix.count
+            if text.count <= maxContent {
+                return prefix + text
+            }
+            return prefix + String(text.prefix(maxContent - 3)) + "..."
+        }
+
+        return ""
+    }
+
+    /// Auto-generate summary only if one doesn't already exist.
+    func autoSummarizeIfNeeded() {
+        guard let conv = activeConversation else { return }
+        guard conv.summary == nil || conv.summary?.isEmpty == true else { return }
+
+        let summary = generateSubtitleSummary(for: conv)
+        guard !summary.isEmpty else { return }
+
+        if let idx = conversations.firstIndex(where: { $0.id == conv.id }) {
+            conversations[idx].summary = summary
+        }
+        activeConversation?.summary = summary
+    }
+
+    /// Regenerate the summary for a conversation, replacing any existing one.
+    func regenerateSummary(for conv: Conversation) {
+        let summary = generateSubtitleSummary(for: conv)
+        guard !summary.isEmpty else { return }
+
+        if let idx = conversations.firstIndex(where: { $0.id == conv.id }) {
+            conversations[idx].summary = summary
+        }
+        if activeConversation?.id == conv.id {
+            activeConversation?.summary = summary
         }
         if let updated = conversations.first(where: { $0.id == conv.id }) {
             service.saveConversation(updated)

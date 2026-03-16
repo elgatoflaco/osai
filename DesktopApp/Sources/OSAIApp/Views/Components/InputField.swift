@@ -978,6 +978,20 @@ struct ChatInputBar: View {
             .shadow(color: isDragOver ? AppTheme.accentGlow.opacity(0.35) : .clear, radius: 16, x: 0, y: 0)
             .animation(.easeInOut(duration: 0.25), value: isDragOver)
 
+            // Character / word counter
+            if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                HStack {
+                    Spacer()
+                    Text("\(text.count) chars \u{00B7} \(inputWordCount) words")
+                        .font(.system(size: 10, weight: .regular, design: .monospaced))
+                        .foregroundColor(inputCounterColor)
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 3)
+                .transition(.opacity)
+                .animation(.easeInOut(duration: 0.2), value: text.isEmpty)
+            }
+
             // History browsing indicator
             if appState.isBrowsingInputHistory {
                 HStack(spacing: 4) {
@@ -1071,6 +1085,28 @@ struct ChatInputBar: View {
 
     private var canSubmit: Bool {
         !isDisabled && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    // MARK: - Input counter helpers
+
+    private static let charLimitWarning = 4000
+    private static let charLimitDanger = 8000
+
+    private var inputWordCount: Int {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return 0 }
+        return trimmed.components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+            .count
+    }
+
+    private var inputCounterColor: Color {
+        if text.count > Self.charLimitDanger {
+            return AppTheme.error
+        } else if text.count > Self.charLimitWarning {
+            return AppTheme.warning
+        }
+        return AppTheme.textMuted
     }
 
     private func submitIfValid() {
