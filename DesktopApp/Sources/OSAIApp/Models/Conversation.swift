@@ -54,10 +54,12 @@ struct ChatMessage: Identifiable, Equatable {
     var toolResult: String?
     var agentName: String?
     var reaction: MessageReaction?
+    var isBookmarked: Bool = false
 
     static func == (lhs: ChatMessage, rhs: ChatMessage) -> Bool {
         lhs.id == rhs.id && lhs.content == rhs.content && lhs.isStreaming == rhs.isStreaming &&
-        lhs.activities == rhs.activities && lhs.agentName == rhs.agentName && lhs.reaction == rhs.reaction
+        lhs.activities == rhs.activities && lhs.agentName == rhs.agentName && lhs.reaction == rhs.reaction &&
+        lhs.isBookmarked == rhs.isBookmarked
     }
 }
 

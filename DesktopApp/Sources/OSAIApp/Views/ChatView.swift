@@ -28,6 +28,7 @@ struct ChatView: View {
     @State private var autoScrollPaused: Bool = false
     @State private var scrollContentHeight: CGFloat = 0
     @State private var scrollViewHeight: CGFloat = 0
+    @State private var showBookmarksPanel: Bool = false
 
     // MARK: - Date grouping
 
@@ -353,6 +354,16 @@ struct ChatView: View {
                         .help("Context window usage")
                     }
 
+                    if !focusMode {
+                        Button(action: { withAnimation(.easeInOut(duration: 0.2)) { showBookmarksPanel.toggle() } }) {
+                            Image(systemName: appState.bookmarkedMessages.isEmpty ? "bookmark" : "bookmark.fill")
+                                .font(.system(size: 14))
+                                .foregroundColor(showBookmarksPanel ? AppTheme.accent : AppTheme.textSecondary)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Bookmarks")
+                    }
+
                     if !focusMode, let conv = appState.activeConversation, !conv.messages.isEmpty {
                         Button(action: { appState.presentExportSheet(for: conv) }) {
                             Image(systemName: "square.and.arrow.up")
@@ -389,6 +400,12 @@ struct ChatView: View {
                 .background(AppTheme.bgSecondary.opacity(0.2))
 
                 Divider().background(AppTheme.borderGlass)
+
+                // Bookmarks panel
+                if showBookmarksPanel {
+                    bookmarksPanel
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                }
 
                 // Conversation search bar
                 if showConversationSearch {
@@ -1014,7 +1031,8 @@ struct ChatView: View {
                 let idx = conv.messages.firstIndex(where: { $0.id == msg.id }) ?? 0
                 appState.branchConversation(from: conv.id, atMessageIndex: idx)
             } : nil,
-            onEdit: editClosure
+            onEdit: editClosure,
+            onBookmark: { appState.toggleBookmark(messageId: msg.id) }
         )
         .id(msg.id)
         .transition(.asymmetric(
@@ -1023,6 +1041,118 @@ struct ChatView: View {
         ))
     }
 
+
+    // MARK: - Bookmarks Panel
+
+    @ViewBuilder
+    private var bookmarksPanel: some View {
+        let grouped = Dictionary(grouping: appState.bookmarkedMessages, by: { $0.conversation.id })
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Image(systemName: "bookmark.fill")
+                    .font(.system(size: 12))
+                    .foregroundColor(AppTheme.accent)
+                Text("Bookmarks")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(AppTheme.textPrimary)
+
+                Spacer()
+
+                if !appState.bookmarkedMessages.isEmpty {
+                    Button(action: {
+                        appState.clearAllBookmarks()
+                    }) {
+                        Text("Clear all")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundColor(AppTheme.error.opacity(0.8))
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                Button(action: { withAnimation(.easeInOut(duration: 0.2)) { showBookmarksPanel = false } }) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(AppTheme.textMuted)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+
+            Divider().background(AppTheme.borderGlass)
+
+            if appState.bookmarkedMessages.isEmpty {
+                HStack {
+                    Spacer()
+                    VStack(spacing: 6) {
+                        Image(systemName: "bookmark.slash")
+                            .font(.system(size: 20))
+                            .foregroundColor(AppTheme.textMuted.opacity(0.5))
+                        Text("No bookmarked messages")
+                            .font(.system(size: 12))
+                            .foregroundColor(AppTheme.textMuted)
+                    }
+                    .padding(.vertical, 16)
+                    Spacer()
+                }
+            } else {
+                ScrollView(.vertical, showsIndicators: true) {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(Array(grouped.keys.sorted()), id: \.self) { convId in
+                            if let items = grouped[convId], let conv = items.first?.conversation {
+                                VStack(alignment: .leading, spacing: 0) {
+                                    Text(conv.title)
+                                        .font(.system(size: 11, weight: .semibold))
+                                        .foregroundColor(AppTheme.textSecondary)
+                                        .padding(.horizontal, 14)
+                                        .padding(.vertical, 6)
+
+                                    ForEach(items, id: \.message.id) { item in
+                                        Button(action: {
+                                            appState.openConversation(item.conversation)
+                                            scrollToMessageId = item.message.id
+                                            withAnimation(.easeInOut(duration: 0.2)) { showBookmarksPanel = false }
+                                        }) {
+                                            HStack(spacing: 8) {
+                                                Image(systemName: "bookmark.fill")
+                                                    .font(.system(size: 9))
+                                                    .foregroundColor(AppTheme.accent.opacity(0.6))
+                                                VStack(alignment: .leading, spacing: 2) {
+                                                    Text(String(item.message.content.prefix(80)))
+                                                        .font(.system(size: 12))
+                                                        .foregroundColor(AppTheme.textPrimary)
+                                                        .lineLimit(2)
+                                                        .multilineTextAlignment(.leading)
+                                                    Text(bookmarkTimeString(item.message.timestamp))
+                                                        .font(.system(size: 10))
+                                                        .foregroundColor(AppTheme.textMuted)
+                                                }
+                                                Spacer()
+                                            }
+                                            .padding(.horizontal, 14)
+                                            .padding(.vertical, 6)
+                                            .contentShape(Rectangle())
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
+                                }
+
+                                Divider().background(AppTheme.borderGlass).padding(.horizontal, 10)
+                            }
+                        }
+                    }
+                }
+                .frame(maxHeight: 240)
+            }
+        }
+        .background(AppTheme.bgSecondary.opacity(0.4))
+    }
+
+    private func bookmarkTimeString(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "MMM d, HH:mm"
+        return formatter.string(from: date)
+    }
 
     // MARK: - Conversation List Sidebar
 

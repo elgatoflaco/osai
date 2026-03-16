@@ -326,6 +326,7 @@ class OSAIService {
             if let tool = msg.toolName { m["toolName"] = tool }
             if let result = msg.toolResult { m["toolResult"] = result }
             if let reaction = msg.reaction { m["reaction"] = reaction.rawValue }
+            if msg.isBookmarked { m["isBookmarked"] = true }
             return m
         }
 
@@ -375,11 +376,13 @@ class OSAIService {
             if let reactionStr = m["reaction"] as? String {
                 reaction = MessageReaction(rawValue: reactionStr)
             }
+            let isBookmarked = m["isBookmarked"] as? Bool ?? false
             return ChatMessage(
                 id: msgId, role: role, content: content, timestamp: ts,
                 toolName: m["toolName"] as? String,
                 toolResult: m["toolResult"] as? String,
-                reaction: reaction
+                reaction: reaction,
+                isBookmarked: isBookmarked
             )
         }
 

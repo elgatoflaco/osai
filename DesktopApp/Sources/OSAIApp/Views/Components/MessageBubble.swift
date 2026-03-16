@@ -51,6 +51,161 @@ private func extractImagePaths(from text: String) -> [String] {
     return paths
 }
 
+// MARK: - URL Detection for Link Previews
+
+/// Extracts unique http/https URLs from message text, skipping URLs inside code blocks
+/// and URLs that point to image files (those are handled by inline image rendering).
+private func extractPreviewURLs(from text: String) -> [URL] {
+    // Strip code blocks first so we don't detect URLs inside them
+    let codeBlockPattern = #"```[\s\S]*?```"#
+    var strippedText = text
+    if let codeRegex = try? NSRegularExpression(pattern: codeBlockPattern, options: [.dotMatchesLineSeparators]) {
+        strippedText = codeRegex.stringByReplacingMatches(
+            in: strippedText,
+            range: NSRange(strippedText.startIndex..., in: strippedText),
+            withTemplate: ""
+        )
+    }
+    // Also strip inline code
+    let inlineCodePattern = #"`[^`]+`"#
+    if let inlineRegex = try? NSRegularExpression(pattern: inlineCodePattern, options: []) {
+        strippedText = inlineRegex.stringByReplacingMatches(
+            in: strippedText,
+            range: NSRange(strippedText.startIndex..., in: strippedText),
+            withTemplate: ""
+        )
+    }
+
+    let urlPattern = #"https?://[^\s\"\]\)>',]+"#
+    guard let regex = try? NSRegularExpression(pattern: urlPattern, options: []) else { return [] }
+    let range = NSRange(strippedText.startIndex..., in: strippedText)
+
+    var seen = Set<String>()
+    var urls: [URL] = []
+    for match in regex.matches(in: strippedText, range: range) {
+        if let r = Range(match.range, in: strippedText) {
+            var raw = String(strippedText[r])
+            // Trim trailing punctuation that got captured
+            while raw.last == "." || raw.last == "," || raw.last == ";" || raw.last == ":" {
+                raw = String(raw.dropLast())
+            }
+            // Skip image URLs
+            let ext = (raw as NSString).pathExtension.lowercased()
+            if imageExtensions.contains(ext) { continue }
+            guard !seen.contains(raw), let url = URL(string: raw) else { continue }
+            seen.insert(raw)
+            urls.append(url)
+        }
+    }
+    return urls
+}
+
+// MARK: - Link Preview Card
+
+struct LinkPreviewCard: View {
+    let url: URL
+    @State private var isHovered = false
+
+    private var host: String {
+        url.host ?? url.absoluteString
+    }
+
+    private var icon: String {
+        let h = host.lowercased()
+        if h.contains("github.com") { return "chevron.left.forwardslash.chevron.right" }
+        if h.contains("stackoverflow.com") { return "text.bubble" }
+        if h.contains("youtube.com") || h.contains("youtu.be") { return "play.rectangle" }
+        if h.contains("twitter.com") || h.contains("x.com") { return "at" }
+        return "globe"
+    }
+
+    private var iconColor: Color {
+        let hash = abs(host.hashValue)
+        let hue = Double(hash % 360) / 360.0
+        return Color(hue: hue, saturation: 0.55, brightness: 0.85)
+    }
+
+    var body: some View {
+        Button(action: {
+            NSWorkspace.shared.open(url)
+        }) {
+            HStack(spacing: 10) {
+                // Favicon placeholder
+                Image(systemName: icon)
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundColor(iconColor)
+                    .frame(width: 30, height: 30)
+                    .background(iconColor.opacity(0.12))
+                    .clipShape(RoundedRectangle(cornerRadius: 7))
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(host)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(AppTheme.textPrimary)
+                        .lineLimit(1)
+
+                    Text(url.absoluteString)
+                        .font(.system(size: 11))
+                        .foregroundColor(AppTheme.textMuted)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+
+                Spacer(minLength: 0)
+
+                Image(systemName: "arrow.up.right")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(AppTheme.textMuted.opacity(0.6))
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .frame(maxWidth: 350)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(AppTheme.bgCard.opacity(isHovered ? 0.9 : 0.6))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(
+                        isHovered ? iconColor.opacity(0.3) : AppTheme.borderGlass,
+                        lineWidth: isHovered ? 1.0 : 0.5
+                    )
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.15)) { isHovered = hovering }
+            if hovering { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+        }
+        .accessibilityLabel("Open link: \(host)")
+    }
+}
+
+// MARK: - Link Previews Stack
+
+struct LinkPreviewsStack: View {
+    let urls: [URL]
+    private let maxVisible = 5
+
+    var body: some View {
+        let visible = Array(urls.prefix(maxVisible))
+        let overflow = urls.count - maxVisible
+
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(visible, id: \.absoluteString) { url in
+                LinkPreviewCard(url: url)
+            }
+            if overflow > 0 {
+                Text("+\(overflow) more link\(overflow == 1 ? "" : "s")")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(AppTheme.textMuted)
+                    .padding(.leading, 4)
+            }
+        }
+    }
+}
+
 // MARK: - Quick Look Coordinator
 
 final class QLCoordinator: NSObject, QLPreviewPanelDataSource {
@@ -223,6 +378,7 @@ struct MessageBubble: View {
     var onReaction: ((MessageReaction?) -> Void)?
     var onBranch: (() -> Void)?
     var onEdit: ((String) -> Void)?
+    var onBookmark: (() -> Void)?
     @State private var appeared = false
     @State private var copied = false
     @State private var isHovered = false
@@ -349,8 +505,29 @@ struct MessageBubble: View {
 
     // MARK: - User Bubble Actions
 
+    private var bookmarkButton: some View {
+        Group {
+            if isHovered || message.isBookmarked {
+                Button(action: { onBookmark?() }) {
+                    Image(systemName: message.isBookmarked ? "bookmark.fill" : "bookmark")
+                        .font(.system(size: 10))
+                        .foregroundColor(message.isBookmarked ? AppTheme.accent : AppTheme.textMuted)
+                        .frame(width: 20, height: 20)
+                        .background(AppTheme.bgCard.opacity(0.9))
+                        .clipShape(RoundedRectangle(cornerRadius: 5))
+                        .overlay(RoundedRectangle(cornerRadius: 5).stroke(AppTheme.borderGlass, lineWidth: 0.5))
+                }
+                .buttonStyle(.plain)
+                .transition(.opacity)
+                .accessibilityLabel(message.isBookmarked ? "Remove bookmark" : "Bookmark message")
+            }
+        }
+    }
+
     private var userBubbleActions: some View {
         HStack(spacing: 6) {
+            bookmarkButton
+
             if isHovered {
                 if onEdit != nil {
                     Button(action: {
@@ -441,11 +618,22 @@ struct MessageBubble: View {
                             }
                             .padding(.top, 4)
                         }
+
+                        // Link preview cards for URLs in message
+                        if !message.isStreaming {
+                            let previewURLs = extractPreviewURLs(from: message.content)
+                            if !previewURLs.isEmpty {
+                                LinkPreviewsStack(urls: previewURLs)
+                                    .padding(.top, 4)
+                            }
+                        }
                     }
 
-                    // Copy & retry buttons on hover
-                    if message.role == .assistant && !message.content.isEmpty && !message.isStreaming && (isHovered || copied) {
+                    // Copy, bookmark & retry buttons on hover
+                    if message.role == .assistant && !message.content.isEmpty && !message.isStreaming && (isHovered || copied || message.isBookmarked) {
                         HStack(spacing: 4) {
+                            bookmarkButton
+
                             Button(action: {
                                 NSPasteboard.general.clearContents()
                                 NSPasteboard.general.setString(message.content, forType: .string)

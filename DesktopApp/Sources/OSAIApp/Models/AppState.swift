@@ -183,6 +183,51 @@ let allModelDefinitions: [ModelDefinition] = [
 ]
 
 @MainActor
+// MARK: - Dashboard Section
+
+enum DashboardSection: String, Codable, CaseIterable, Identifiable {
+    case gateway
+    case stats
+    case spending
+    case tokenStats
+    case analytics
+    case chatInsights
+    case recentActivity
+    case systemHealth
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .gateway: return "Gateway Status"
+        case .stats: return "Quick Stats"
+        case .spending: return "Monthly Spending"
+        case .tokenStats: return "Token & Cost Statistics"
+        case .analytics: return "Usage Analytics"
+        case .chatInsights: return "Chat Insights"
+        case .recentActivity: return "Recent Activity"
+        case .systemHealth: return "System Health"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .gateway: return "power"
+        case .stats: return "square.grid.2x2"
+        case .spending: return "chart.bar"
+        case .tokenStats: return "number.circle"
+        case .analytics: return "chart.bar.xaxis"
+        case .chatInsights: return "lightbulb"
+        case .recentActivity: return "clock.arrow.circlepath"
+        case .systemHealth: return "server.rack"
+        }
+    }
+
+    static let defaultOrder: [DashboardSection] = [
+        .gateway, .stats, .spending, .tokenStats, .analytics, .chatInsights, .recentActivity, .systemHealth
+    ]
+}
+
 class AppState: ObservableObject {
     @AppStorage("isDarkMode") var isDarkMode: Bool = true
     @AppStorage("sidebarCollapsed") var sidebarCollapsed: Bool = false
@@ -193,6 +238,79 @@ class AppState: ObservableObject {
     @AppStorage("floatOnTop") var floatOnTop: Bool = false
     @AppStorage("windowOpacity") var windowOpacity: Double = 1.0
     @AppStorage("quickActionsCollapsed") var quickActionsCollapsed: Bool = false
+
+    // MARK: - Dashboard Customization
+
+    @Published var showDashboardCustomizer: Bool = false
+
+    /// Ordered list of visible dashboard sections, persisted to UserDefaults.
+    @Published var visibleDashboardSections: [DashboardSection] = {
+        if let data = UserDefaults.standard.data(forKey: "visibleDashboardSections"),
+           let decoded = try? JSONDecoder().decode([DashboardSection].self, from: data) {
+            return decoded
+        }
+        return DashboardSection.defaultOrder
+    }() {
+        didSet {
+            if let data = try? JSONEncoder().encode(visibleDashboardSections) {
+                UserDefaults.standard.set(data, forKey: "visibleDashboardSections")
+            }
+        }
+    }
+
+    /// Set of collapsed (minimized) dashboard section keys, persisted to UserDefaults.
+    @Published var collapsedDashboardSections: Set<DashboardSection> = {
+        if let data = UserDefaults.standard.data(forKey: "collapsedDashboardSections"),
+           let decoded = try? JSONDecoder().decode(Set<DashboardSection>.self, from: data) {
+            return decoded
+        }
+        return []
+    }() {
+        didSet {
+            if let data = try? JSONEncoder().encode(collapsedDashboardSections) {
+                UserDefaults.standard.set(data, forKey: "collapsedDashboardSections")
+            }
+        }
+    }
+
+    func isSectionVisible(_ section: DashboardSection) -> Bool {
+        visibleDashboardSections.contains(section)
+    }
+
+    func isSectionCollapsed(_ section: DashboardSection) -> Bool {
+        collapsedDashboardSections.contains(section)
+    }
+
+    func toggleSectionCollapsed(_ section: DashboardSection) {
+        if collapsedDashboardSections.contains(section) {
+            collapsedDashboardSections.remove(section)
+        } else {
+            collapsedDashboardSections.insert(section)
+        }
+    }
+
+    func toggleSectionVisibility(_ section: DashboardSection) {
+        if let idx = visibleDashboardSections.firstIndex(of: section) {
+            visibleDashboardSections.remove(at: idx)
+        } else {
+            visibleDashboardSections.append(section)
+        }
+    }
+
+    func moveSectionUp(_ section: DashboardSection) {
+        guard let idx = visibleDashboardSections.firstIndex(of: section), idx > 0 else { return }
+        visibleDashboardSections.swapAt(idx, idx - 1)
+    }
+
+    func moveSectionDown(_ section: DashboardSection) {
+        guard let idx = visibleDashboardSections.firstIndex(of: section), idx < visibleDashboardSections.count - 1 else { return }
+        visibleDashboardSections.swapAt(idx, idx + 1)
+    }
+
+    func resetDashboardSections() {
+        visibleDashboardSections = DashboardSection.defaultOrder
+        collapsedDashboardSections = []
+    }
 
     @Published var selectedAccentColor: String = UserDefaults.standard.string(forKey: "selectedAccentColor") ?? "teal"
 
@@ -943,6 +1061,48 @@ class AppState: ObservableObject {
         }
     }
 
+    // MARK: - Bookmarks
+
+    func toggleBookmark(messageId: String) {
+        // Toggle in activeConversation
+        if let msgIdx = activeConversation?.messages.firstIndex(where: { $0.id == messageId }) {
+            activeConversation?.messages[msgIdx].isBookmarked.toggle()
+        }
+        // Toggle in conversations array
+        for convIdx in conversations.indices {
+            if let msgIdx = conversations[convIdx].messages.firstIndex(where: { $0.id == messageId }) {
+                conversations[convIdx].messages[msgIdx].isBookmarked.toggle()
+                service.saveConversation(conversations[convIdx])
+                break
+            }
+        }
+    }
+
+    var bookmarkedMessages: [(conversation: Conversation, message: ChatMessage)] {
+        conversations.flatMap { conv in
+            conv.messages
+                .filter { $0.isBookmarked }
+                .map { (conversation: conv, message: $0) }
+        }
+    }
+
+    func clearAllBookmarks() {
+        for convIdx in conversations.indices {
+            for msgIdx in conversations[convIdx].messages.indices {
+                if conversations[convIdx].messages[msgIdx].isBookmarked {
+                    conversations[convIdx].messages[msgIdx].isBookmarked = false
+                }
+            }
+            service.saveConversation(conversations[convIdx])
+        }
+        if var active = activeConversation {
+            for msgIdx in active.messages.indices {
+                active.messages[msgIdx].isBookmarked = false
+            }
+            activeConversation = active
+        }
+    }
+
     func renameConversation(_ conv: Conversation, to newTitle: String) {
         let trimmed = newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
@@ -1616,9 +1776,8 @@ class AppState: ObservableObject {
 }
 
 /// Mutable state shared between streaming callback and MainActor code.
-/// Only accessed from the main thread.
-@MainActor
-class StreamState {
+/// Only accessed from the main thread via handleAppEvent.
+class StreamState: @unchecked Sendable {
     var activeActivityIds: [String: String] = [:]  // event id -> activity id
     var accumulatedText: String = ""
 }
