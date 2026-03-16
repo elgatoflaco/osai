@@ -162,7 +162,9 @@ struct DesktopAgentCLI {
         // --- Single command mode (no banner, no status) ---
         // osai "do something"
         // osai --deliver discord:channelId "do something"
+        // osai --app-mode "do something"  (NDJSON for desktop app)
         // echo "do something" | osai
+        let isAppMode = args.contains("--app-mode")
         var commandArgs: [String] = []
         var deliverTarget: String? = nil
         var taskId: String? = nil
@@ -173,6 +175,7 @@ struct DesktopAgentCLI {
             if arg == "--model" { skipNext = true; continue }
             if arg == "--profile" { skipNext = true; continue }
             if arg == "--verbose" || arg == "-v" { continue }
+            if arg == "--app-mode" { continue }
             if arg == "gateway" { continue }
             if arg == "--deliver" { skipNext = true; deliverTarget = args.count > i + 1 ? args[i + 1] : nil; continue }
             if arg == "--task-id" { skipNext = true; taskId = args.count > i + 1 ? args[i + 1] : nil; continue }
@@ -194,8 +197,16 @@ struct DesktopAgentCLI {
         if let command = singleCommand, !command.isEmpty {
             let agent = AgentLoop(config: config, mcpManager: mcpManager)
             agent.approval.autoApprove = true  // One-shot/task mode: no prompts
+
+            // Wire app-mode NDJSON emitter
+            let emitter: AppModeEmitter? = isAppMode ? AppModeEmitter() : nil
+            agent.appModeEmitter = emitter
+
             do {
                 let response = try await agent.processUserInput(command)
+
+                // Emit done event for desktop app
+                emitter?.emitDone()
 
                 // Deliver result to gateway if --deliver specified
                 if let target = deliverTarget {
@@ -210,7 +221,12 @@ struct DesktopAgentCLI {
                     TaskScheduler.markRun(id: tid)
                 }
             } catch {
-                printColored("Error: \(error)", color: .red)
+                if let emitter = emitter {
+                    emitter.emitError(error.localizedDescription)
+                    emitter.emitDone()
+                } else {
+                    printColored("Error: \(error)", color: .red)
+                }
                 if let target = deliverTarget {
                     await deliverToGateway(target: target, message: "❌ Task error: \(error.localizedDescription)\nCommand: \(String(command.prefix(100)))")
                 }

@@ -16,6 +16,7 @@ final class ContextDetector {
         case singleCommand  // Piped input or `osai "command"`
         case guiTask        // Agent is performing GUI automation
         case subAgent       // Running as a sub-agent
+        case desktopApp     // Desktop app via --app-mode (NDJSON protocol)
     }
 
     /// Output format matching the context
@@ -75,7 +76,13 @@ final class ContextDetector {
         let maxLen: Int
         let supportsImages: Bool
 
-        if isSubAgent {
+        if ProcessInfo.processInfo.arguments.contains("--app-mode") {
+            context = .desktopApp
+            format = .structured
+            platform = nil
+            maxLen = 100_000
+            supportsImages = false
+        } else if isSubAgent {
             context = .subAgent
             format = .plainText
             platform = nil
@@ -218,6 +225,15 @@ final class ContextDetector {
             - Return structured results for the parent agent
             - No conversational text
             - Focus on data and findings
+            """
+
+        case .desktopApp:
+            additions += """
+
+            ## RESPONSE FORMAT — DESKTOP APP:
+            - Use markdown formatting for rich display
+            - Be concise and well-structured
+            - No raw terminal output or ANSI codes
             """
         }
 

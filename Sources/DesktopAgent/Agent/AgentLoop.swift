@@ -25,9 +25,15 @@ final class AgentLoop {
     // Consecutive tool failure tracking for error feedback
     private var consecutiveFailures: (toolName: String, errorPrefix: String, count: Int) = ("", "", 0)
 
+    // Loop guard: recent tool call hashes for ping-pong detection
+    private var recentToolCallHashes: [String] = []
+
     // Gateway support
     var gatewayContext: GatewayDeliveryContext?
     var onStreamText: ((String) async -> Void)?
+
+    // Desktop app NDJSON mode
+    var appModeEmitter: AppModeEmitter?
 
     // Cancellation support
     var isCancelled = false
@@ -189,7 +195,9 @@ final class AgentLoop {
         if shouldRoute, let specializedAgent = AgentRegistry.route(input: userInput) {
             // Claude Code backend: delegate directly to CLI
             if specializedAgent.usesClaudeCode {
-                if verbose {
+                if let emitter = appModeEmitter {
+                    emitter.emitAgentRoute(agent: specializedAgent.name, model: "claude-code")
+                } else if verbose {
                     printColored("  \u{1F3AF} Routing to Claude Code agent: \(specializedAgent.name)", color: .magenta)
                 }
                 let result = try await runClaudeCodeAgent(agent: specializedAgent, input: userInput)
@@ -200,13 +208,25 @@ final class AgentLoop {
             }
             // API backend: verify the model can be resolved
             else if let resolved = AIProvider.resolve(modelString: specializedAgent.model) {
-                if verbose {
+                if let emitter = appModeEmitter {
+                    emitter.emitAgentRoute(agent: specializedAgent.name, model: specializedAgent.model)
+                } else if verbose {
                     printColored("  \u{1F3AF} Routing to specialized agent: \(specializedAgent.name) (\(specializedAgent.model))", color: .magenta)
                 }
-                let result = try await runSpecializedAgent(agent: specializedAgent, resolved: resolved, input: userInput)
-                if !result.isEmpty {
-                    conversationHistory.append(ClaudeMessage(role: "assistant", content: [.text(result)]))
-                    return result
+                do {
+                    let result = try await runSpecializedAgent(agent: specializedAgent, resolved: resolved, input: userInput)
+                    if !result.isEmpty {
+                        conversationHistory.append(ClaudeMessage(role: "assistant", content: [.text(result)]))
+                        return result
+                    }
+                } catch {
+                    // Specialized agent failed — fall through to main model
+                    let msg = "Agent '\(specializedAgent.name)' failed: \(error is AgentError ? (error as! AgentError).description : error.localizedDescription). Falling back to main model."
+                    if let emitter = appModeEmitter {
+                        emitter.emitStatus(msg)
+                    } else {
+                        printColored("  \u{26A0} \(msg)", color: .yellow)
+                    }
                 }
             } else if verbose {
                 printColored("  \u{26A0} Agent '\(specializedAgent.name)' model '\(specializedAgent.model)' not resolved, using main model", color: .yellow)
@@ -258,7 +278,11 @@ final class AgentLoop {
         while iterations < maxIterations {
             // Check cancellation
             if isCancelled {
-                printColored("\n  ⚠ Task cancelled by user", color: .yellow)
+                if let emitter = appModeEmitter {
+                    emitter.emitStatus("Task cancelled by user")
+                } else {
+                    printColored("\n  ⚠ Task cancelled by user", color: .yellow)
+                }
                 isCancelled = false
                 return finalResponse
             }
@@ -279,7 +303,11 @@ final class AgentLoop {
             if context.needsCompaction && conversationHistory.count > 10 {
                 let preCount = conversationHistory.count
                 let preTokens = context.estimateMessageTokens(conversationHistory)
-                printColored("  🗜 Compacting context (\(preCount) messages, ~\(context.fmtTokens(preTokens)) tokens)...", color: .magenta)
+                if let emitter = appModeEmitter {
+                    emitter.emitStatus("Compacting context (\(preCount) messages, ~\(context.fmtTokens(preTokens)) tokens)...")
+                } else {
+                    printColored("  🗜 Compacting context (\(preCount) messages, ~\(context.fmtTokens(preTokens)) tokens)...", color: .magenta)
+                }
                 conversationHistory = try await context.compactHistory(
                     messages: conversationHistory,
                     client: client,
@@ -287,7 +315,11 @@ final class AgentLoop {
                 )
                 let postTokens = context.estimateMessageTokens(conversationHistory)
                 let saved = max(preTokens - postTokens, 0)
-                printColored("  ✓ Compacted: \(preCount) → \(conversationHistory.count) messages, saved ~\(context.fmtTokens(saved)) tokens", color: .green)
+                if let emitter = appModeEmitter {
+                    emitter.emitStatus("Compacted: \(preCount) → \(conversationHistory.count) messages, saved ~\(context.fmtTokens(saved)) tokens")
+                } else {
+                    printColored("  ✓ Compacted: \(preCount) → \(conversationHistory.count) messages, saved ~\(context.fmtTokens(saved)) tokens", color: .green)
+                }
             }
 
             // Check spending limits before API call
@@ -295,7 +327,11 @@ final class AgentLoop {
                 throw AgentError.permissionDenied(limitError)
             }
             if let warning = spendingGuard.checkWarnings() {
-                printColored("  \(warning)", color: .yellow)
+                if let emitter = appModeEmitter {
+                    emitter.emitStatus(warning)
+                } else {
+                    printColored("  \(warning)", color: .yellow)
+                }
             }
 
             // API call with automatic retry for transient errors + fallback models
@@ -313,7 +349,11 @@ final class AgentLoop {
                 let classified = errorRecovery.classify(error: error)
                 errorRecovery.recordError(classified)
                 if classified.isRetryable, case .retry(let delayMs, _) = classified.suggestedAction {
-                    printColored("  🔄 \(classified.category) — retrying in \(delayMs)ms...", color: .yellow)
+                    if let emitter = appModeEmitter {
+                        emitter.emitStatus("\(classified.category) — retrying in \(delayMs)ms...")
+                    } else {
+                        printColored("  🔄 \(classified.category) — retrying in \(delayMs)ms...", color: .yellow)
+                    }
                     try await Task.sleep(nanoseconds: UInt64(delayMs) * 1_000_000)
                     do {
                         response = try await client.sendMessage(
@@ -356,7 +396,11 @@ final class AgentLoop {
                 spendingGuard.recordSpend(cost: cost)
             }
 
-            if verbose, let usage = response.usage {
+            if let emitter = appModeEmitter, let usage = response.usage {
+                emitter.emitTokens(input: usage.inputTokens, output: usage.outputTokens)
+                let pct = Int(context.contextPercentage)
+                emitter.emitContextPressure(usedPercent: pct)
+            } else if verbose, let usage = response.usage {
                 printColored("  [Tokens] ↑\(usage.inputTokens) ↓\(usage.outputTokens) | Context: \(context.shortStatus)", color: .gray)
             }
 
@@ -374,7 +418,11 @@ final class AgentLoop {
                 case .text(let text):
                     if !text.isEmpty {
                         finalResponse += (finalResponse.isEmpty ? "" : "\n") + text
-                        printWithPlanFormatting(text)
+                        if let emitter = appModeEmitter {
+                            emitter.emitText(text)
+                        } else {
+                            printWithPlanFormatting(text)
+                        }
                         if let stream = onStreamText {
                             await stream(text)
                         }
@@ -382,24 +430,50 @@ final class AgentLoop {
 
                 case .toolUse(let id, let name, let input, _):
                     hasToolUse = true
-                    let icon = toolIcon(name)
                     let detail = toolDetail(name: name, input: input)
-                    if detail.isEmpty {
-                        printColored("  \(icon) \(name)", color: .yellow)
+                    if let emitter = appModeEmitter {
+                        emitter.emitToolStart(id: id, name: name, detail: detail)
                     } else {
-                        printColored("  \(icon) \(name)", color: .yellow)
-                        printColored("    \(detail)", color: .gray)
-                    }
+                        let icon = toolIcon(name)
+                        if detail.isEmpty {
+                            printColored("  \(icon) \(name)", color: .yellow)
+                        } else {
+                            printColored("  \(icon) \(name)", color: .yellow)
+                            printColored("    \(detail)", color: .gray)
+                        }
 
-                    if verbose {
-                        let inputDesc = input.map { "\($0.key): \($0.value.value)" }.joined(separator: ", ")
-                        printColored("    Input: \(inputDesc)", color: .gray)
+                        if verbose {
+                            let inputDesc = input.map { "\($0.key): \($0.value.value)" }.joined(separator: ", ")
+                            printColored("    Input: \(inputDesc)", color: .gray)
+                        }
                     }
 
                     pendingToolCalls.append((id: id, name: name, input: input))
 
                 default:
                     break
+                }
+            }
+
+            // === Loop Guard: Ping-pong detection ===
+            if !pendingToolCalls.isEmpty {
+                let callHash = pendingToolCalls.map { "\($0.name):\($0.input.keys.sorted().joined())" }.joined(separator: "|")
+                recentToolCallHashes.append(callHash)
+                if recentToolCallHashes.count > 6 {
+                    recentToolCallHashes.removeFirst()
+                }
+                // Detect ping-pong: A-B-A-B pattern
+                if recentToolCallHashes.count >= 4 {
+                    let last4 = Array(recentToolCallHashes.suffix(4))
+                    if last4[0] == last4[2] && last4[1] == last4[3] && last4[0] != last4[1] {
+                        let warning = "[SYSTEM: Loop detected - you are repeating the same tool call pattern. Break the cycle by trying a different approach or informing the user.]"
+                        if let emitter = appModeEmitter {
+                            emitter.emitStatus("Loop pattern detected - injecting guidance")
+                        } else {
+                            printColored("  ⚠ Loop pattern detected (ping-pong)", color: .yellow)
+                        }
+                        conversationHistory.append(ClaudeMessage(role: "user", content: [.text(warning)]))
+                    }
                 }
             }
 
@@ -423,12 +497,17 @@ final class AgentLoop {
                         var result = await executeShellWithStreaming(command: command, timeout: timeout)
                         if !result.success {
                             let enhanced = enhanceToolError(toolName: tc.name, input: tc.input, error: result.output)
-                            result = ToolResult(success: false, output: enhanced, screenshot: result.screenshot)
+                            let guidance = "\n\n[SYSTEM: This tool call failed. Do NOT fabricate or assume the result. Do NOT take downstream actions based on expected output from this failed call. Instead, inform the user of the failure or try an alternative approach.]"
+                            result = ToolResult(success: false, output: enhanced + guidance, screenshot: result.screenshot)
                         } else {
                             resetConsecutiveFailures(toolName: tc.name)
                         }
-                        let statusIcon = result.success ? "✓" : "✗"
-                        printColored("    \(statusIcon) \(String(result.output.prefix(300)))", color: result.success ? .green : .red)
+                        if let emitter = appModeEmitter {
+                            emitter.emitToolResult(id: tc.id, name: tc.name, success: result.success, output: result.output)
+                        } else {
+                            let statusIcon = result.success ? "✓" : "✗"
+                            printColored("    \(statusIcon) \(String(result.output.prefix(300)))", color: result.success ? .green : .red)
+                        }
                         toolResults.append(.toolResultText(toolUseId: tc.id, text: result.output))
                         continue
                     }
@@ -531,7 +610,9 @@ final class AgentLoop {
             if !pipelineToolCalls.isEmpty {
                 let strategy = AsyncToolPipeline.analyzeStrategy(tools: pipelineToolCalls)
 
-                if verbose && pipelineToolCalls.count > 1 {
+                if let emitter = appModeEmitter, pipelineToolCalls.count > 1 {
+                    emitter.emitStatus("Pipeline: \(pipelineToolCalls.count) tools, strategy=\(strategy)")
+                } else if verbose && pipelineToolCalls.count > 1 {
                     printColored("    ⚡ Pipeline: \(pipelineToolCalls.count) tools, strategy=\(strategy)", color: .cyan)
                 }
 
@@ -597,7 +678,8 @@ final class AgentLoop {
                     let toolInput = pipelineToolCalls.first(where: { $0.id == pr.id })?.input ?? [:]
                     if !result.success {
                         let enhanced = enhanceToolError(toolName: pr.name, input: toolInput, error: result.output)
-                        result = ToolResult(success: false, output: enhanced, screenshot: result.screenshot)
+                        let guidance = "\n\n[SYSTEM: This tool call failed. Do NOT fabricate or assume the result. Do NOT take downstream actions based on expected output from this failed call. Instead, inform the user of the failure or try an alternative approach.]"
+                        result = ToolResult(success: false, output: enhanced + guidance, screenshot: result.screenshot)
                     } else {
                         resetConsecutiveFailures(toolName: pr.name)
                     }
@@ -615,10 +697,14 @@ final class AgentLoop {
                         wasCached: pr.wasCached, wasParallel: strategy == .parallel
                     )
 
-                    let statusIcon = result.success ? "✓" : "✗"
-                    let statusColor: ANSIColor = result.success ? .green : .red
-                    let cacheTag = pr.wasCached ? " ⚡cache" : ""
-                    printColored("    \(statusIcon) \(String(result.output.prefix(300)))\(cacheTag)", color: statusColor)
+                    if let emitter = appModeEmitter {
+                        emitter.emitToolResult(id: pr.id, name: pr.name, success: result.success, output: result.output, durationMs: pr.durationMs)
+                    } else {
+                        let statusIcon = result.success ? "✓" : "✗"
+                        let statusColor: ANSIColor = result.success ? .green : .red
+                        let cacheTag = pr.wasCached ? " ⚡cache" : ""
+                        printColored("    \(statusIcon) \(String(result.output.prefix(300)))\(cacheTag)", color: statusColor)
+                    }
 
                     if let base64 = screenshotBase64 {
                         toolResults.append(.toolResultWithImage(
@@ -643,7 +729,11 @@ final class AgentLoop {
 
             // Check cancellation after tool execution
             if isCancelled {
-                printColored("\n  ⚠ Task cancelled by user", color: .yellow)
+                if let emitter = appModeEmitter {
+                    emitter.emitStatus("Task cancelled by user")
+                } else {
+                    printColored("\n  ⚠ Task cancelled by user", color: .yellow)
+                }
                 isCancelled = false
                 return finalResponse
             }
@@ -1472,7 +1562,8 @@ final class AgentLoop {
                         // Enhance failed tool results with contextual hints
                         if !result.success {
                             let enhanced = enhanceToolError(toolName: name, input: input, error: result.output)
-                            result = ToolResult(success: false, output: enhanced, screenshot: result.screenshot)
+                            let guidance = "\n\n[SYSTEM: This tool call failed. Do NOT fabricate or assume the result. Do NOT take downstream actions based on expected output from this failed call. Instead, inform the user of the failure or try an alternative approach.]"
+                            result = ToolResult(success: false, output: enhanced + guidance, screenshot: result.screenshot)
                         } else {
                             resetConsecutiveFailures(toolName: name)
                         }

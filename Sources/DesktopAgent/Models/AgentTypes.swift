@@ -3,7 +3,7 @@ import CoreGraphics
 
 // MARK: - Errors
 
-enum AgentError: Error, CustomStringConvertible {
+enum AgentError: Error, LocalizedError, CustomStringConvertible {
     case networkError(String)
     case apiError(statusCode: Int, message: String)
     case noAPIKey
@@ -19,6 +19,8 @@ enum AgentError: Error, CustomStringConvertible {
         case .toolError(let msg): return "Tool error: \(msg)"
         }
     }
+
+    var errorDescription: String? { description }
 }
 
 // MARK: - Agent Types
