@@ -9,7 +9,7 @@ struct OSAIApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(appState)
-                .frame(minWidth: 800, minHeight: 600)
+                .frame(minWidth: 480, minHeight: 400)
                 .preferredColorScheme(appState.isDarkMode ? .dark : .light)
         }
         .windowStyle(.hiddenTitleBar)
@@ -28,8 +28,14 @@ struct OSAIApp: App {
             // View menu
             CommandMenu("View") {
                 Button("Toggle Sidebar") {
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        appState.sidebarCollapsed.toggle()
+                    if appState.sidebarHidden {
+                        withAnimation(.easeOut(duration: 0.25)) {
+                            appState.showSidebarOverlay.toggle()
+                        }
+                    } else {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            appState.sidebarCollapsed.toggle()
+                        }
                     }
                 }
                 .keyboardShortcut("\\", modifiers: .command)

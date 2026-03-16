@@ -26,7 +26,9 @@ struct Sidebar: View {
                         item: item,
                         isSelected: appState.selectedTab == item,
                         isCollapsed: appState.sidebarCollapsed,
-                        isHovered: hoveredItem == item
+                        isHovered: hoveredItem == item,
+                        isProcessing: item == .chat && appState.isProcessing,
+                        contextPressureHigh: item == .chat && appState.contextPressurePercent > 75
                     ) {
                         withAnimation(.easeOut(duration: 0.2)) {
                             appState.selectedTab = item
@@ -42,6 +44,30 @@ struct Sidebar: View {
             .padding(.horizontal, 12)
 
             Spacer()
+
+            // Processing status bar
+            if appState.isProcessing {
+                ProcessingStatusBar(
+                    isCollapsed: appState.sidebarCollapsed,
+                    contextPressurePercent: appState.contextPressurePercent
+                ) {
+                    appState.cancelProcessing()
+                }
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .padding(.horizontal, appState.sidebarCollapsed ? 8 : 16)
+                .padding(.bottom, 8)
+            }
+
+            // Context pressure warning (shown when not processing but pressure is high)
+            if !appState.isProcessing && appState.contextPressurePercent > 75 {
+                ContextPressureBar(
+                    isCollapsed: appState.sidebarCollapsed,
+                    percent: appState.contextPressurePercent
+                )
+                .transition(.opacity)
+                .padding(.horizontal, appState.sidebarCollapsed ? 8 : 16)
+                .padding(.bottom, 8)
+            }
 
             // Separator
             Rectangle()
@@ -134,15 +160,160 @@ struct Sidebar: View {
         .frame(width: appState.sidebarCollapsed ? 64 : 200)
         .background(AppTheme.bgSecondary.opacity(0.5))
         .background(.ultraThinMaterial)
+        .animation(.easeOut(duration: 0.25), value: appState.isProcessing)
+        .animation(.easeOut(duration: 0.25), value: appState.contextPressurePercent > 75)
     }
 }
+
+// MARK: - Processing Status Bar
+
+struct ProcessingStatusBar: View {
+    let isCollapsed: Bool
+    let contextPressurePercent: Int
+    let onCancel: () -> Void
+
+    @State private var pulseOpacity: Double = 0.6
+
+    var body: some View {
+        if isCollapsed {
+            // Compact: just the animated ghost
+            VStack(spacing: 4) {
+                GhostIcon(size: 18, animate: true, tint: AppTheme.accent)
+                    .opacity(pulseOpacity)
+
+                Button(action: onCancel) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundColor(AppTheme.textMuted)
+                        .frame(width: 16, height: 16)
+                        .background(AppTheme.bgCard.opacity(0.6))
+                        .clipShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .help("Cancel")
+            }
+            .onAppear {
+                withAnimation(.easeInOut(duration: 1.2).repeatForever(autoreverses: true)) {
+                    pulseOpacity = 1.0
+                }
+            }
+        } else {
+            VStack(spacing: 6) {
+                HStack(spacing: 8) {
+                    GhostIcon(size: 16, animate: true, tint: AppTheme.accent)
+                        .opacity(pulseOpacity)
+
+                    Text("Processing...")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(AppTheme.textSecondary)
+
+                    Spacer()
+
+                    Button(action: onCancel) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundColor(AppTheme.textMuted)
+                            .frame(width: 18, height: 18)
+                            .background(AppTheme.bgCard.opacity(0.6))
+                            .clipShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Cancel processing")
+                }
+
+                // Context pressure during processing
+                if contextPressurePercent > 75 {
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(contextPressureColor)
+                            .frame(width: 5, height: 5)
+
+                        Text("Context: \(contextPressurePercent)%")
+                            .font(.system(size: 10, weight: .medium, design: .monospaced))
+                            .foregroundColor(contextPressureColor)
+
+                        Spacer()
+                    }
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(AppTheme.bgCard.opacity(0.5))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .strokeBorder(AppTheme.accent.opacity(0.15), lineWidth: 1)
+                    )
+            )
+            .onAppear {
+                withAnimation(.easeInOut(duration: 1.2).repeatForever(autoreverses: true)) {
+                    pulseOpacity = 1.0
+                }
+            }
+        }
+    }
+
+    private var contextPressureColor: Color {
+        if contextPressurePercent > 90 {
+            return AppTheme.error
+        } else {
+            return AppTheme.warning
+        }
+    }
+}
+
+// MARK: - Context Pressure Bar (when not processing)
+
+struct ContextPressureBar: View {
+    let isCollapsed: Bool
+    let percent: Int
+
+    var body: some View {
+        if isCollapsed {
+            Circle()
+                .fill(pressureColor)
+                .frame(width: 6, height: 6)
+                .help("Context: \(percent)%")
+        } else {
+            HStack(spacing: 4) {
+                Circle()
+                    .fill(pressureColor)
+                    .frame(width: 5, height: 5)
+
+                Text("Context: \(percent)%")
+                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .foregroundColor(pressureColor)
+
+                Spacer()
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+        }
+    }
+
+    private var pressureColor: Color {
+        if percent > 90 {
+            return AppTheme.error
+        } else {
+            return AppTheme.warning
+        }
+    }
+}
+
+// MARK: - Sidebar Button
 
 struct SidebarButton: View {
     let item: SidebarItem
     let isSelected: Bool
     let isCollapsed: Bool
     let isHovered: Bool
+    var isProcessing: Bool = false
+    var contextPressureHigh: Bool = false
     let action: () -> Void
+
+    @State private var ringRotation: Double = 0
+    @State private var dotPulse: Bool = false
 
     var body: some View {
         Button(action: action) {
@@ -153,16 +324,61 @@ struct SidebarButton: View {
                     .frame(width: 3, height: 20)
                     .padding(.trailing, isCollapsed ? 0 : 8)
 
-                Image(systemName: item.icon)
-                    .font(.system(size: 17, weight: isSelected ? .semibold : .regular))
-                    .foregroundColor(isSelected ? AppTheme.accent : (isHovered ? AppTheme.textPrimary : AppTheme.textSecondary))
-                    .frame(width: 28, height: 28)
+                // Icon with optional processing/context indicators
+                ZStack(alignment: .topTrailing) {
+                    Image(systemName: item.icon)
+                        .font(.system(size: 17, weight: isSelected ? .semibold : .regular))
+                        .foregroundColor(isSelected ? AppTheme.accent : (isHovered ? AppTheme.textPrimary : AppTheme.textSecondary))
+                        .frame(width: 28, height: 28)
+
+                    // Processing ring indicator
+                    if isProcessing {
+                        Circle()
+                            .trim(from: 0, to: 0.65)
+                            .stroke(AppTheme.accent.opacity(0.7), lineWidth: 1.5)
+                            .frame(width: 10, height: 10)
+                            .rotationEffect(.degrees(ringRotation))
+                            .offset(x: 2, y: -2)
+                            .onAppear {
+                                withAnimation(.linear(duration: 1.2).repeatForever(autoreverses: false)) {
+                                    ringRotation = 360
+                                }
+                            }
+                            .onDisappear {
+                                ringRotation = 0
+                            }
+                    }
+
+                    // Context pressure dot (only when not processing, to avoid clutter)
+                    if !isProcessing && contextPressureHigh {
+                        Circle()
+                            .fill(AppTheme.warning)
+                            .frame(width: 6, height: 6)
+                            .opacity(dotPulse ? 1.0 : 0.5)
+                            .offset(x: 2, y: -2)
+                            .onAppear {
+                                withAnimation(.easeInOut(duration: 2.0).repeatForever(autoreverses: true)) {
+                                    dotPulse = true
+                                }
+                            }
+                            .onDisappear {
+                                dotPulse = false
+                            }
+                    }
+                }
 
                 if !isCollapsed {
-                    Text(item.rawValue)
-                        .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
-                        .foregroundColor(isSelected ? AppTheme.textPrimary : (isHovered ? AppTheme.textPrimary : AppTheme.textSecondary))
-                        .padding(.leading, 6)
+                    if isProcessing {
+                        Text("Chat...")
+                            .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
+                            .foregroundColor(isSelected ? AppTheme.textPrimary : (isHovered ? AppTheme.textPrimary : AppTheme.textSecondary))
+                            .padding(.leading, 6)
+                    } else {
+                        Text(item.rawValue)
+                            .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
+                            .foregroundColor(isSelected ? AppTheme.textPrimary : (isHovered ? AppTheme.textPrimary : AppTheme.textSecondary))
+                            .padding(.leading, 6)
+                    }
 
                     Spacer()
                 }

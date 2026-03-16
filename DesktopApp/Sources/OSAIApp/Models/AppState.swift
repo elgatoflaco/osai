@@ -90,6 +90,10 @@ class AppState: ObservableObject {
     @Published var isProcessing: Bool = false
     @Published var shouldFocusInput: Bool = false
     @Published var focusModeEnabled: Bool = false
+    /// Set by GeometryReader when window is too narrow for sidebar
+    @Published var sidebarHidden: Bool = false
+    /// Show sidebar as overlay on very narrow windows
+    @Published var showSidebarOverlay: Bool = false
     @Published var contextPressurePercent: Int = 0
     @Published var suggestedReplies: [String] = []
     private(set) var runningProcess: Process?
@@ -462,6 +466,28 @@ class AppState: ObservableObject {
         }
         service.deleteConversation(conv.id)
         showToast("Conversation deleted", type: .success)
+    }
+
+    func clearAllConversations() {
+        let ids = conversations.map { $0.id }
+        conversations.removeAll()
+        activeConversation = nil
+        for id in ids {
+            service.deleteConversation(id)
+        }
+        showToast("All conversations deleted", type: .success)
+    }
+
+    func deleteMultipleConversations(_ convs: [Conversation]) {
+        let ids = Set(convs.map { $0.id })
+        conversations.removeAll { ids.contains($0.id) }
+        if let activeId = activeConversation?.id, ids.contains(activeId) {
+            activeConversation = nil
+        }
+        for id in ids {
+            service.deleteConversation(id)
+        }
+        showToast("\(ids.count) conversation\(ids.count == 1 ? "" : "s") deleted", type: .success)
     }
 
     func togglePin(_ conv: Conversation) {

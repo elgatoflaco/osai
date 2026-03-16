@@ -13,6 +13,9 @@ struct ChatView: View {
     @State private var searchInConversation = ""
     @State private var showConversationSearch = false
     @State private var currentMatchIndex = 0
+    @State private var showClearAllAlert = false
+    @State private var isSelecting = false
+    @State private var selectedConversationIds: Set<String> = []
 
     // MARK: - Date grouping
 
@@ -72,10 +75,15 @@ struct ChatView: View {
         return AppTheme.error
     }
 
+    /// Hide conversation list when window is narrow or focus mode is toggled
+    private var effectiveFocusMode: Bool {
+        focusMode || appState.sidebarHidden
+    }
+
     var body: some View {
         HStack(spacing: 0) {
-            // Conversation list sidebar
-            if !focusMode {
+            // Conversation list sidebar (hidden in focus mode or narrow windows)
+            if !effectiveFocusMode {
             VStack(spacing: 0) {
                 HStack {
                     Text("Chats")
@@ -88,9 +96,51 @@ struct ChatView: View {
                             .foregroundColor(AppTheme.accent)
                     }
                     .buttonStyle(.plain)
+
+                    Menu {
+                        Button(action: {
+                            isSelecting.toggle()
+                            if !isSelecting { selectedConversationIds.removeAll() }
+                        }) {
+                            Label(isSelecting ? "Cancel Selection" : "Select Chats...", systemImage: "checkmark.circle")
+                        }
+                        Divider()
+                        Button(action: { showClearAllAlert = true }) {
+                            Label("Clear All Chats", systemImage: "trash")
+                        }
+                        .disabled(appState.conversations.isEmpty)
+                        Button(action: {
+                            let unpinned = appState.conversations.filter { !$0.isPinned }
+                            guard !unpinned.isEmpty else { return }
+                            appState.deleteMultipleConversations(unpinned)
+                        }) {
+                            Label("Delete Unpinned", systemImage: "pin.slash")
+                        }
+                        .disabled(appState.conversations.filter({ !$0.isPinned }).isEmpty)
+                        Divider()
+                        Button(action: { exportAllConversations() }) {
+                            Label("Export All", systemImage: "square.and.arrow.up")
+                        }
+                        .disabled(appState.conversations.isEmpty)
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                            .font(.system(size: 13))
+                            .foregroundColor(AppTheme.textSecondary)
+                    }
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                    .frame(width: 20)
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 12)
+                .alert("Clear All Chats", isPresented: $showClearAllAlert) {
+                    Button("Cancel", role: .cancel) {}
+                    Button("Delete All", role: .destructive) {
+                        appState.clearAllConversations()
+                    }
+                } message: {
+                    Text("This will delete \(appState.conversations.count) conversation\(appState.conversations.count == 1 ? "" : "s"). This cannot be undone.")
+                }
 
                 Divider().background(AppTheme.borderGlass)
 
@@ -137,14 +187,22 @@ struct ChatView: View {
                             if !pinnedConversations.isEmpty {
                                 Section {
                                     ForEach(pinnedConversations) { conv in
-                                        ConversationRow(
-                                            conv: conv,
-                                            isActive: appState.activeConversation?.id == conv.id,
-                                            onSelect: { appState.openConversation(conv) },
-                                            onDelete: { appState.deleteConversation(conv) },
-                                            onExport: { appState.exportAndSave(conv) },
-                                            onTogglePin: { appState.togglePin(conv) }
-                                        )
+                                        HStack(spacing: 6) {
+                                            if isSelecting {
+                                                Image(systemName: selectedConversationIds.contains(conv.id) ? "checkmark.circle.fill" : "circle")
+                                                    .font(.system(size: 14))
+                                                    .foregroundColor(selectedConversationIds.contains(conv.id) ? AppTheme.accent : AppTheme.textMuted)
+                                                    .onTapGesture { toggleSelection(conv.id) }
+                                            }
+                                            ConversationRow(
+                                                conv: conv,
+                                                isActive: appState.activeConversation?.id == conv.id,
+                                                onSelect: { isSelecting ? toggleSelection(conv.id) : appState.openConversation(conv) },
+                                                onDelete: { appState.deleteConversation(conv) },
+                                                onExport: { appState.exportAndSave(conv) },
+                                                onTogglePin: { appState.togglePin(conv) }
+                                            )
+                                        }
                                     }
                                 } header: {
                                     HStack(spacing: 4) {
@@ -166,14 +224,22 @@ struct ChatView: View {
                             ForEach(groupedConversations, id: \.0) { group, convs in
                                 Section {
                                     ForEach(convs) { conv in
-                                        ConversationRow(
-                                            conv: conv,
-                                            isActive: appState.activeConversation?.id == conv.id,
-                                            onSelect: { appState.openConversation(conv) },
-                                            onDelete: { appState.deleteConversation(conv) },
-                                            onExport: { appState.exportAndSave(conv) },
-                                            onTogglePin: { appState.togglePin(conv) }
-                                        )
+                                        HStack(spacing: 6) {
+                                            if isSelecting {
+                                                Image(systemName: selectedConversationIds.contains(conv.id) ? "checkmark.circle.fill" : "circle")
+                                                    .font(.system(size: 14))
+                                                    .foregroundColor(selectedConversationIds.contains(conv.id) ? AppTheme.accent : AppTheme.textMuted)
+                                                    .onTapGesture { toggleSelection(conv.id) }
+                                            }
+                                            ConversationRow(
+                                                conv: conv,
+                                                isActive: appState.activeConversation?.id == conv.id,
+                                                onSelect: { isSelecting ? toggleSelection(conv.id) : appState.openConversation(conv) },
+                                                onDelete: { appState.deleteConversation(conv) },
+                                                onExport: { appState.exportAndSave(conv) },
+                                                onTogglePin: { appState.togglePin(conv) }
+                                            )
+                                        }
                                     }
                                 } header: {
                                     HStack {
@@ -193,6 +259,48 @@ struct ChatView: View {
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
                     }
+                }
+                // Floating selection action bar
+                if isSelecting && !selectedConversationIds.isEmpty {
+                    HStack(spacing: 10) {
+                        Button(action: {
+                            let toDelete = appState.conversations.filter { selectedConversationIds.contains($0.id) }
+                            appState.deleteMultipleConversations(toDelete)
+                            selectedConversationIds.removeAll()
+                            isSelecting = false
+                        }) {
+                            Text("Delete Selected (\(selectedConversationIds.count))")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 6)
+                                .background(AppTheme.error)
+                                .clipShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+
+                        Button(action: {
+                            selectedConversationIds.removeAll()
+                            isSelecting = false
+                        }) {
+                            Text("Cancel")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundColor(AppTheme.textSecondary)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 6)
+                                .background(AppTheme.bgCard.opacity(0.8))
+                                .clipShape(Capsule())
+                                .overlay(Capsule().stroke(AppTheme.borderGlass, lineWidth: 1))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.vertical, 8)
+                    .frame(maxWidth: .infinity)
+                    .background(AppTheme.bgSecondary.opacity(0.9))
+                    .overlay(
+                        Rectangle().frame(height: 1).foregroundColor(AppTheme.borderGlass),
+                        alignment: .top
+                    )
                 }
             }
             .frame(width: 220)
@@ -662,6 +770,41 @@ struct ChatView: View {
             .keyboardShortcut("f", modifiers: .command)
             .hidden()
         )
+    }
+
+    private func toggleSelection(_ id: String) {
+        if selectedConversationIds.contains(id) {
+            selectedConversationIds.remove(id)
+        } else {
+            selectedConversationIds.insert(id)
+        }
+    }
+
+    private func exportAllConversations() {
+        let panel = NSOpenPanel()
+        panel.title = "Choose Export Folder"
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let folder = panel.url else { return }
+
+        var count = 0
+        for conv in appState.conversations {
+            let markdown = appState.exportConversation(conv)
+            let safeName = conv.title
+                .replacingOccurrences(of: "[^a-zA-Z0-9_ -]", with: "", options: .regularExpression)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let fileName = String(safeName.prefix(60)) + ".md"
+            let fileURL = folder.appendingPathComponent(fileName)
+            do {
+                try markdown.write(to: fileURL, atomically: true, encoding: .utf8)
+                count += 1
+            } catch {
+                // Skip failed exports
+            }
+        }
+        appState.showToast("Exported \(count) conversation\(count == 1 ? "" : "s")", type: .success)
     }
 
     private func fileIcon(for url: URL) -> String {

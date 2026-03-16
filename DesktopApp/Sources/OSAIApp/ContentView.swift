@@ -415,41 +415,125 @@ struct ContentView: View {
     @State private var commandSearch = ""
 
     var body: some View {
-        HStack(spacing: 0) {
-            Sidebar()
-                .animation(.spring(response: 0.3, dampingFraction: 0.85), value: appState.sidebarCollapsed)
+        GeometryReader { geo in
+            let windowWidth = geo.size.width
+            let isNarrow = windowWidth < 800
+            let isVeryNarrow = windowWidth < 600
 
-            // Subtle divider between sidebar and content
-            Rectangle()
-                .fill(AppTheme.borderGlass.opacity(0.5))
-                .frame(width: 1)
-                .ignoresSafeArea()
+            ZStack(alignment: .leading) {
+                HStack(spacing: 0) {
+                    // Sidebar: hidden when very narrow, collapsed when narrow, full otherwise
+                    if !isVeryNarrow {
+                        Sidebar()
+                            .animation(.spring(response: 0.3, dampingFraction: 0.85), value: appState.sidebarCollapsed)
+                            .animation(.spring(response: 0.3, dampingFraction: 0.85), value: isNarrow)
 
-            // Main content area
-            ZStack {
-                AppTheme.bgPrimary
-                    .ignoresSafeArea()
+                        // Subtle divider between sidebar and content
+                        Rectangle()
+                            .fill(AppTheme.borderGlass.opacity(0.5))
+                            .frame(width: 1)
+                            .ignoresSafeArea()
+                    }
 
-                Group {
-                    switch appState.selectedTab {
-                    case .home:
-                        DashboardView()
-                    case .chat:
-                        ChatView()
-                    case .agents:
-                        AgentsView()
-                    case .tasks:
-                        TasksView()
-                    case .settings:
-                        SettingsView()
+                    // Main content area
+                    ZStack {
+                        AppTheme.bgPrimary
+                            .ignoresSafeArea()
+
+                        Group {
+                            switch appState.selectedTab {
+                            case .home:
+                                DashboardView()
+                            case .chat:
+                                ChatView()
+                            case .agents:
+                                AgentsView()
+                            case .tasks:
+                                TasksView()
+                            case .settings:
+                                SettingsView()
+                            }
+                        }
+                        .id(appState.selectedTab)
+                        .transition(.opacity.combined(with: .move(edge: .trailing)))
+                    }
+                    .frame(minWidth: 350, maxWidth: .infinity, maxHeight: .infinity)
+                    .clipped()
+                    .animation(.easeInOut(duration: 0.2), value: appState.selectedTab)
+                    .overlay(alignment: .topLeading) {
+                        // Sidebar toggle when sidebar is hidden
+                        if isVeryNarrow {
+                            Button(action: {
+                                withAnimation(.easeOut(duration: 0.25)) {
+                                    appState.showSidebarOverlay.toggle()
+                                }
+                            }) {
+                                Image(systemName: "sidebar.left")
+                                    .font(.system(size: 14, weight: .medium))
+                                    .foregroundColor(AppTheme.textSecondary)
+                                    .frame(width: 32, height: 32)
+                                    .background(.ultraThinMaterial)
+                                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 8)
+                                            .stroke(AppTheme.borderGlass, lineWidth: 1)
+                                    )
+                            }
+                            .buttonStyle(.plain)
+                            .padding(.top, 8)
+                            .padding(.leading, 8)
+                            .help("Show sidebar")
+                        }
                     }
                 }
-                .id(appState.selectedTab)
-                .transition(.opacity.combined(with: .move(edge: .trailing)))
+
+                // Overlay sidebar for very narrow windows
+                if isVeryNarrow && appState.showSidebarOverlay {
+                    // Dimming backdrop
+                    Color.black.opacity(0.4)
+                        .ignoresSafeArea()
+                        .onTapGesture {
+                            withAnimation(.easeOut(duration: 0.2)) {
+                                appState.showSidebarOverlay = false
+                            }
+                        }
+                        .zIndex(10)
+
+                    // Sidebar overlay
+                    HStack(spacing: 0) {
+                        Sidebar()
+                        Rectangle()
+                            .fill(AppTheme.borderGlass.opacity(0.5))
+                            .frame(width: 1)
+                    }
+                    .shadow(color: .black.opacity(0.3), radius: 20, x: 5, y: 0)
+                    .transition(.move(edge: .leading))
+                    .zIndex(11)
+                }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .clipped()
-            .animation(.easeInOut(duration: 0.2), value: appState.selectedTab)
+            .animation(.easeOut(duration: 0.25), value: appState.showSidebarOverlay)
+            .onChange(of: isNarrow) { _, narrow in
+                // Auto-collapse sidebar when window becomes narrow
+                if narrow && !appState.sidebarCollapsed {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
+                        appState.sidebarCollapsed = true
+                    }
+                }
+            }
+            .onChange(of: isVeryNarrow) { _, veryNarrow in
+                // Update state for ChatView to react to
+                appState.sidebarHidden = veryNarrow
+                if veryNarrow {
+                    appState.showSidebarOverlay = false
+                }
+            }
+            .onAppear {
+                // Set initial state based on window size
+                if windowWidth < 800 {
+                    appState.sidebarCollapsed = true
+                }
+                appState.sidebarHidden = windowWidth < 600
+            }
         }
         // Onboarding overlay
         .overlay {
