@@ -91,6 +91,7 @@ class AppState: ObservableObject {
     @Published var shouldFocusInput: Bool = false
     @Published var focusModeEnabled: Bool = false
     @Published var contextPressurePercent: Int = 0
+    @Published var suggestedReplies: [String] = []
     private(set) var runningProcess: Process?
 
     let service = OSAIService()
@@ -190,6 +191,7 @@ class AppState: ObservableObject {
     func sendMessage(_ text: String, attachments: [URL] = []) {
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         guard !isProcessing else { return }
+        suggestedReplies = []
 
         if activeConversation == nil {
             let conv = Conversation(
@@ -275,6 +277,11 @@ class AppState: ObservableObject {
                 syncConversationToList()
                 if let conv = activeConversation {
                     service.saveConversation(conv)
+                }
+
+                // Generate quick reply suggestions
+                if let lastAssistant = self.activeConversation?.messages.last(where: { $0.role == .assistant }) {
+                    self.generateSuggestedReplies(from: lastAssistant.content)
                 }
 
                 // Send notification if app is in the background
@@ -480,6 +487,35 @@ class AppState: ObservableObject {
         }
         if let updated = conversations.first(where: { $0.id == conv.id }) {
             service.saveConversation(updated)
+        }
+    }
+
+    /// Generate contextual quick-reply suggestions based on the assistant's response.
+    private func generateSuggestedReplies(from content: String) {
+        let lower = content.lowercased()
+
+        // If the response ends with or contains a question
+        let hasQuestion = lower.contains("?")
+        // If the response contains a numbered/bulleted list or plan
+        let hasList = lower.contains("1.") || lower.contains("- ") || lower.contains("step ")
+            || lower.contains("plan") || lower.contains("here's what")
+        // If the response mentions code
+        let hasCode = lower.contains("```") || lower.contains("function ") || lower.contains("def ")
+            || lower.contains("class ") || lower.contains("import ") || lower.contains("var ")
+            || lower.contains("let ") || lower.contains("const ")
+
+        if hasQuestion && hasList {
+            suggestedReplies = ["Yes, proceed", "Tell me more", "No, change approach"]
+        } else if hasQuestion {
+            suggestedReplies = ["Yes", "No", "Tell me more"]
+        } else if hasCode && hasList {
+            suggestedReplies = ["Run it", "Explain more", "Modify it"]
+        } else if hasCode {
+            suggestedReplies = ["Run it", "Explain more", "Modify it"]
+        } else if hasList {
+            suggestedReplies = ["Proceed", "Tell me more", "Change approach"]
+        } else {
+            suggestedReplies = ["Continue", "Elaborate", "New topic"]
         }
     }
 

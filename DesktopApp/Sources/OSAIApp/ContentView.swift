@@ -417,9 +417,13 @@ struct ContentView: View {
     var body: some View {
         HStack(spacing: 0) {
             Sidebar()
+                .animation(.spring(response: 0.3, dampingFraction: 0.85), value: appState.sidebarCollapsed)
 
-            Divider()
-                .background(AppTheme.borderGlass)
+            // Subtle divider between sidebar and content
+            Rectangle()
+                .fill(AppTheme.borderGlass.opacity(0.5))
+                .frame(width: 1)
+                .ignoresSafeArea()
 
             // Main content area
             ZStack {
@@ -440,9 +444,12 @@ struct ContentView: View {
                         SettingsView()
                     }
                 }
-                .animation(.easeOut(duration: 0.25), value: appState.selectedTab)
+                .id(appState.selectedTab)
+                .transition(.opacity.combined(with: .move(edge: .trailing)))
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .clipped()
+            .animation(.easeInOut(duration: 0.2), value: appState.selectedTab)
         }
         // Onboarding overlay
         .overlay {

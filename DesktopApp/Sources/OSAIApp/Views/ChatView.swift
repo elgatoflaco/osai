@@ -528,6 +528,37 @@ struct ChatView: View {
                     .padding(AppTheme.paddingXl)
                 }
 
+                // Quick reply suggestions
+                if !appState.isProcessing && !appState.suggestedReplies.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(appState.suggestedReplies, id: \.self) { suggestion in
+                                Button(action: {
+                                    messageText = suggestion
+                                    appState.sendMessage(suggestion)
+                                    messageText = ""
+                                }) {
+                                    Text(suggestion)
+                                        .font(.system(size: 12, weight: .medium))
+                                        .foregroundColor(AppTheme.accent)
+                                        .padding(.horizontal, 12)
+                                        .padding(.vertical, 6)
+                                        .background(Color.clear)
+                                        .clipShape(Capsule())
+                                        .overlay(
+                                            Capsule()
+                                                .stroke(AppTheme.accent.opacity(0.5), lineWidth: 1)
+                                        )
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        .padding(.horizontal, AppTheme.paddingLg)
+                        .padding(.vertical, 8)
+                    }
+                    .transition(.opacity.animation(.easeIn(duration: 0.3)))
+                }
+
                 // Input bar
                 VStack(spacing: 0) {
                     Divider().background(AppTheme.borderGlass)
@@ -611,6 +642,11 @@ struct ChatView: View {
                     }
                 }
                 return true
+            }
+        }
+        .onChange(of: messageText) { _, newValue in
+            if !newValue.isEmpty {
+                appState.suggestedReplies = []
             }
         }
         .background(

@@ -142,6 +142,10 @@ struct DashboardView: View {
                 }
                 .frame(maxWidth: 800)
 
+                // Usage Analytics
+                AnalyticsSectionView(conversations: appState.conversations, agents: appState.agents)
+                    .frame(maxWidth: 800)
+
                 // Two-column layout
                 HStack(alignment: .top, spacing: AppTheme.paddingLg) {
                     // Recent Conversations
@@ -523,6 +527,271 @@ struct AgentPill: View {
         )
         .animation(.easeOut(duration: 0.15), value: isHovered)
         .onHover { isHovered = $0 }
+    }
+}
+
+// MARK: - Analytics Section
+
+struct AnalyticsSectionView: View {
+    let conversations: [Conversation]
+    let agents: [AgentInfo]
+
+    var body: some View {
+        VStack(spacing: AppTheme.paddingLg) {
+            // Quick stats row
+            GlassCard {
+                VStack(alignment: .leading, spacing: 12) {
+                    SectionHeader(title: "Quick Stats", icon: "chart.bar.xaxis")
+
+                    LazyVGrid(columns: [
+                        GridItem(.flexible(), spacing: 14),
+                        GridItem(.flexible(), spacing: 14),
+                        GridItem(.flexible(), spacing: 14),
+                        GridItem(.flexible(), spacing: 14),
+                    ], spacing: 14) {
+                        QuickStatItem(
+                            label: "Total Conversations",
+                            value: "\(conversations.count)",
+                            icon: "bubble.left.and.bubble.right"
+                        )
+                        QuickStatItem(
+                            label: "Total Messages",
+                            value: formatLargeNumber(totalMessages),
+                            icon: "text.bubble"
+                        )
+                        QuickStatItem(
+                            label: "Most Active Day",
+                            value: mostActiveDay,
+                            icon: "calendar.badge.clock"
+                        )
+                        QuickStatItem(
+                            label: "Avg Msgs / Conv",
+                            value: avgMessagesPerConversation,
+                            icon: "divide"
+                        )
+                    }
+                }
+            }
+
+            // Weekly activity chart
+            GlassCard {
+                VStack(alignment: .leading, spacing: 14) {
+                    SectionHeader(title: "Weekly Activity", icon: "chart.bar.fill")
+
+                    WeeklyBarChart(dailyCounts: weeklyMessageCounts)
+                        .frame(height: 120)
+                }
+            }
+
+            // Top agents
+            if !topAgentData.isEmpty {
+                GlassCard {
+                    VStack(alignment: .leading, spacing: 12) {
+                        SectionHeader(title: "Top Agents", icon: "person.3.sequence.fill")
+
+                        ForEach(topAgentData, id: \.name) { entry in
+                            TopAgentRow(
+                                name: entry.name,
+                                count: entry.count,
+                                maxCount: topAgentData.first?.count ?? 1,
+                                color: agentColor(entry.name)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - Computed data
+
+    private var totalMessages: Int {
+        conversations.reduce(0) { $0 + $1.messages.count }
+    }
+
+    private var mostActiveDay: String {
+        let counts = weeklyMessageCounts
+        guard let maxEntry = counts.max(by: { $0.count < $1.count }), maxEntry.count > 0 else {
+            return "--"
+        }
+        return maxEntry.label
+    }
+
+    private var avgMessagesPerConversation: String {
+        guard !conversations.isEmpty else { return "0" }
+        let avg = Double(totalMessages) / Double(conversations.count)
+        if avg == avg.rounded() {
+            return "\(Int(avg))"
+        }
+        return String(format: "%.1f", avg)
+    }
+
+    /// Messages per day for the last 7 days, ordered Mon-Sun ending today.
+    var weeklyMessageCounts: [DayCount] {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+
+        // Build array of last 7 days
+        var days: [DayCount] = []
+        let dayFormatter = DateFormatter()
+        dayFormatter.dateFormat = "EEE"
+
+        for offset in stride(from: -6, through: 0, by: 1) {
+            guard let date = calendar.date(byAdding: .day, value: offset, to: today) else { continue }
+            let label = dayFormatter.string(from: date)
+            days.append(DayCount(label: label, date: date, count: 0))
+        }
+
+        // Count messages per day
+        for conv in conversations {
+            for msg in conv.messages {
+                let msgDay = calendar.startOfDay(for: msg.timestamp)
+                if let idx = days.firstIndex(where: { $0.date == msgDay }) {
+                    days[idx].count += 1
+                }
+            }
+        }
+
+        return days
+    }
+
+    /// Agent usage ranked by conversation count.
+    var topAgentData: [AgentCount] {
+        var counts: [String: Int] = [:]
+        for conv in conversations {
+            if let name = conv.agentName {
+                counts[name, default: 0] += 1
+            }
+        }
+        return counts
+            .map { AgentCount(name: $0.key, count: $0.value) }
+            .sorted { $0.count > $1.count }
+            .prefix(5)
+            .map { $0 }
+    }
+
+    private func formatLargeNumber(_ n: Int) -> String {
+        if n >= 1_000_000 { return String(format: "%.1fM", Double(n) / 1_000_000) }
+        if n >= 1_000 { return String(format: "%.1fK", Double(n) / 1_000) }
+        return "\(n)"
+    }
+}
+
+struct DayCount: Identifiable {
+    let id = UUID()
+    let label: String
+    let date: Date
+    var count: Int
+}
+
+struct AgentCount {
+    let name: String
+    let count: Int
+}
+
+// MARK: - Weekly Bar Chart
+
+struct WeeklyBarChart: View {
+    let dailyCounts: [DayCount]
+
+    var body: some View {
+        let maxCount = max(dailyCounts.map(\.count).max() ?? 1, 1)
+
+        GeometryReader { geo in
+            HStack(alignment: .bottom, spacing: 8) {
+                ForEach(dailyCounts) { day in
+                    VStack(spacing: 6) {
+                        if day.count > 0 {
+                            Text("\(day.count)")
+                                .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                                .foregroundColor(AppTheme.textSecondary)
+                        }
+
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(
+                                day.count > 0
+                                    ? AppTheme.accent
+                                    : AppTheme.textMuted.opacity(0.2)
+                            )
+                            .frame(
+                                height: day.count > 0
+                                    ? max(CGFloat(day.count) / CGFloat(maxCount) * (geo.size.height - 36), 6)
+                                    : 6
+                            )
+
+                        Text(day.label)
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundColor(AppTheme.textMuted)
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Quick Stat Item
+
+struct QuickStatItem: View {
+    let label: String
+    let value: String
+    let icon: String
+
+    var body: some View {
+        VStack(spacing: 6) {
+            Image(systemName: icon)
+                .font(.system(size: 14))
+                .foregroundColor(AppTheme.accent)
+
+            Text(value)
+                .font(.system(size: 16, weight: .bold, design: .monospaced))
+                .foregroundColor(AppTheme.textPrimary)
+
+            Text(label)
+                .font(.system(size: 10))
+                .foregroundColor(AppTheme.textMuted)
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 8)
+    }
+}
+
+// MARK: - Top Agent Row
+
+struct TopAgentRow: View {
+    let name: String
+    let count: Int
+    let maxCount: Int
+    let color: Color
+
+    var body: some View {
+        HStack(spacing: 12) {
+            GhostIcon(size: 20, animate: false, tint: color)
+
+            Text(name)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundColor(AppTheme.textPrimary)
+                .frame(width: 100, alignment: .leading)
+
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(AppTheme.bgPrimary.opacity(0.5))
+
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(color.opacity(0.7))
+                        .frame(width: max(CGFloat(count) / CGFloat(maxCount) * geo.size.width, 4))
+                }
+            }
+            .frame(height: 8)
+
+            Text("\(count)")
+                .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                .foregroundColor(AppTheme.textSecondary)
+                .frame(width: 30, alignment: .trailing)
+        }
     }
 }
 
