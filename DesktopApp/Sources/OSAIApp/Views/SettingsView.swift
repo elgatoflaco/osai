@@ -630,8 +630,35 @@ struct SettingsView: View {
 
     // MARK: - Usage Statistics
 
+    // Chart colors
+    private static let chartInputColor = Color(red: 0x3B/255, green: 0x82/255, blue: 0xF6/255)   // blue
+    private static let chartOutputColor = Color(red: 0x8B/255, green: 0x5C/255, blue: 0xF6/255)  // purple
+
+    /// Sample data shown when no real usage has been recorded yet.
+    private static func sampleWeeklyData() -> [DailyTokenUsage] {
+        let calendar = Calendar.current
+        let today = Date()
+        let samples: [(Int, Int)] = [
+            (4200, 1800), (6100, 2900), (3500, 1200),
+            (8300, 3700), (5600, 2400), (2100, 900), (7400, 3100)
+        ]
+        return (0..<7).map { offset in
+            let date = calendar.date(byAdding: .day, value: offset - 6, to: today)!
+            let formatter = DateFormatter()
+            formatter.dateFormat = "yyyy-MM-dd"
+            let key = formatter.string(from: date)
+            return DailyTokenUsage(
+                dateKey: key, date: date,
+                inputTokens: samples[offset].0,
+                outputTokens: samples[offset].1
+            )
+        }
+    }
+
     private var usageStatisticsSection: some View {
-        let weeklyData = appState.getWeeklyTokenUsage()
+        let realData = appState.getWeeklyTokenUsage()
+        let hasRealData = realData.contains { $0.totalTokens > 0 }
+        let weeklyData = hasRealData ? realData : Self.sampleWeeklyData()
         let maxTokens = weeklyData.map { $0.totalTokens }.max() ?? 1
         let totalInput = weeklyData.reduce(0) { $0 + $1.inputTokens }
         let totalOutput = weeklyData.reduce(0) { $0 + $1.outputTokens }
@@ -639,6 +666,28 @@ struct SettingsView: View {
 
         return SettingsSection(title: "Usage Statistics", icon: "chart.bar.xaxis") {
             VStack(spacing: 16) {
+                // Period total header
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Last 7 Days")
+                            .font(AppTheme.fontCaption)
+                            .foregroundColor(AppTheme.textMuted)
+                        Text(formatTokens(totalInput + totalOutput) + " tokens")
+                            .font(.system(size: 20, weight: .semibold, design: .rounded))
+                            .foregroundColor(AppTheme.textPrimary)
+                    }
+                    Spacer()
+                    if !hasRealData {
+                        Text("Sample Data")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundColor(AppTheme.textMuted)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(AppTheme.bgSecondary.opacity(0.6))
+                            .cornerRadius(4)
+                    }
+                }
+
                 // Bar chart
                 HStack(alignment: .bottom, spacing: 8) {
                     // Y-axis max label
@@ -655,7 +704,13 @@ struct SettingsView: View {
 
                     // Bars
                     ForEach(weeklyData) { day in
-                        VStack(spacing: 4) {
+                        VStack(spacing: 2) {
+                            // Token count label above bar
+                            Text(day.totalTokens > 0 ? formatTokens(day.totalTokens) : "")
+                                .font(.system(size: 8, weight: .medium, design: .monospaced))
+                                .foregroundColor(AppTheme.textMuted)
+                                .frame(height: 12)
+
                             // Stacked bar
                             GeometryReader { geo in
                                 let totalHeight = geo.size.height
@@ -665,16 +720,16 @@ struct SettingsView: View {
 
                                 VStack(spacing: 0) {
                                     Spacer(minLength: 0)
-                                    // Output tokens (top, lighter)
+                                    // Output tokens (top, purple)
                                     if day.outputTokens > 0 {
                                         RoundedRectangle(cornerRadius: 3)
-                                            .fill(AppTheme.accent.opacity(0.5))
+                                            .fill(Self.chartOutputColor)
                                             .frame(height: outputHeight)
                                     }
-                                    // Input tokens (bottom, full color)
+                                    // Input tokens (bottom, blue)
                                     if day.inputTokens > 0 {
                                         RoundedRectangle(cornerRadius: 3)
-                                            .fill(AppTheme.accent)
+                                            .fill(Self.chartInputColor)
                                             .frame(height: inputHeight)
                                     }
                                 }
@@ -694,7 +749,7 @@ struct SettingsView: View {
                 HStack(spacing: 16) {
                     HStack(spacing: 6) {
                         RoundedRectangle(cornerRadius: 2)
-                            .fill(AppTheme.accent)
+                            .fill(Self.chartInputColor)
                             .frame(width: 12, height: 12)
                         Text("Input")
                             .font(.system(size: 11))
@@ -702,7 +757,7 @@ struct SettingsView: View {
                     }
                     HStack(spacing: 6) {
                         RoundedRectangle(cornerRadius: 2)
-                            .fill(AppTheme.accent.opacity(0.5))
+                            .fill(Self.chartOutputColor)
                             .frame(width: 12, height: 12)
                         Text("Output")
                             .font(.system(size: 11))

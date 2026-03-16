@@ -1322,14 +1322,17 @@ struct CreateAgentSheet: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var appState: AppState
 
-    private let totalSteps = 5
+    private let totalSteps = 6
+    private let stepLabels = ["Identity", "Model", "Prompt", "Triggers", "Preview", "Review"]
 
     @State private var step = 1
+    @State private var previousStep = 1
     @State private var name = ""
     @State private var description = ""
     @State private var model = "anthropic/claude-sonnet-4-20250514"
     @State private var triggers = ""
     @State private var systemPrompt = ""
+    @State private var attemptedAdvance = false
 
     private var slug: String {
         name.lowercased()
@@ -1343,23 +1346,53 @@ struct CreateAgentSheet: View {
             .filter { !$0.isEmpty }
     }
 
+    // MARK: - Validation
+
+    private var nameError: String? {
+        guard attemptedAdvance else { return nil }
+        if name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return "Name is required"
+        }
+        return nil
+    }
+
+    private var descriptionError: String? {
+        guard attemptedAdvance else { return nil }
+        if description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return "Description is required"
+        }
+        return nil
+    }
+
+    private var modelError: String? {
+        guard attemptedAdvance && step == 2 else { return nil }
+        if model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return "Please select a model"
+        }
+        return nil
+    }
+
     private var canAdvance: Bool {
         switch step {
-        case 1: return !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        case 1:
+            return !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && !description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        case 2:
+            return !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         default: return true
         }
     }
 
     private var stepLabel: String {
-        switch step {
-        case 1: return "Name & Description"
-        case 2: return "Model Selection"
-        case 3: return "System Prompt"
-        case 4: return "Trigger Keywords"
-        case 5: return "Review & Create"
-        default: return ""
-        }
+        guard step >= 1, step <= totalSteps else { return "" }
+        return stepLabels[step - 1]
     }
+
+    private var slideDirection: Edge {
+        step >= previousStep ? .trailing : .leading
+    }
+
+    // MARK: - Body
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1383,16 +1416,10 @@ struct CreateAgentSheet: View {
             }
             .padding(20)
 
-            // Step indicator dots
-            HStack(spacing: 8) {
-                ForEach(1...totalSteps, id: \.self) { s in
-                    Circle()
-                        .fill(s <= step ? AppTheme.accent : AppTheme.textMuted.opacity(0.3))
-                        .frame(width: s == step ? 10 : 7, height: s == step ? 10 : 7)
-                        .animation(.easeInOut(duration: 0.25), value: step)
-                }
-            }
-            .padding(.bottom, 8)
+            // Step progress indicator: circles connected by lines
+            WizardStepIndicator(totalSteps: totalSteps, currentStep: step, labels: stepLabels)
+                .padding(.horizontal, 20)
+                .padding(.bottom, 12)
 
             // Progress bar
             GeometryReader { geo in
@@ -1408,25 +1435,36 @@ struct CreateAgentSheet: View {
             }
             .frame(height: 3)
 
+            // Step content with slide transition
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    switch step {
-                    case 1:
-                        AgentFormIdentity(name: $name, description: $description, slug: slug, nameEditable: true)
-                    case 2:
-                        AgentFormModel(model: $model)
-                    case 3:
-                        AgentFormSystemPrompt(systemPrompt: $systemPrompt)
-                    case 4:
-                        AgentFormTriggers(triggers: $triggers, triggerList: triggerList)
-                    case 5:
-                        wizardReviewStep
-                    default:
-                        EmptyView()
+                    Group {
+                        switch step {
+                        case 1:
+                            wizardIdentityStep
+                        case 2:
+                            wizardModelStep
+                        case 3:
+                            AgentFormSystemPrompt(systemPrompt: $systemPrompt)
+                        case 4:
+                            AgentFormTriggers(triggers: $triggers, triggerList: triggerList)
+                        case 5:
+                            wizardPreviewStep
+                        case 6:
+                            wizardReviewStep
+                        default:
+                            EmptyView()
+                        }
                     }
+                    .id(step)
+                    .transition(.asymmetric(
+                        insertion: .move(edge: slideDirection).combined(with: .opacity),
+                        removal: .move(edge: slideDirection == .trailing ? .leading : .trailing).combined(with: .opacity)
+                    ))
                 }
                 .padding(20)
             }
+            .animation(.easeInOut(duration: 0.3), value: step)
 
             Divider().background(AppTheme.borderGlass)
 
@@ -1437,7 +1475,7 @@ struct CreateAgentSheet: View {
                         .foregroundColor(AppTheme.textSecondary)
                         .buttonStyle(.plain)
                 } else {
-                    Button(action: { withAnimation { step -= 1 } }) {
+                    Button(action: { goToStep(step - 1) }) {
                         HStack(spacing: 4) {
                             Image(systemName: "chevron.left")
                             Text("Back")
@@ -1451,7 +1489,13 @@ struct CreateAgentSheet: View {
                 Spacer()
 
                 if step < totalSteps {
-                    Button(action: { withAnimation { step += 1 } }) {
+                    Button(action: {
+                        attemptedAdvance = true
+                        if canAdvance {
+                            attemptedAdvance = false
+                            goToStep(step + 1)
+                        }
+                    }) {
                         HStack(spacing: 6) {
                             Text("Next")
                             Image(systemName: "chevron.right")
@@ -1460,11 +1504,10 @@ struct CreateAgentSheet: View {
                         .foregroundColor(.white)
                         .padding(.horizontal, 20)
                         .padding(.vertical, 10)
-                        .background(canAdvance ? AppTheme.accent : AppTheme.textMuted)
+                        .background(AppTheme.accent)
                         .clipShape(RoundedRectangle(cornerRadius: 10))
                     }
                     .buttonStyle(.plain)
-                    .disabled(!canAdvance)
                 } else {
                     Button(action: saveAndDismiss) {
                         HStack(spacing: 6) {
@@ -1475,20 +1518,208 @@ struct CreateAgentSheet: View {
                         .foregroundColor(.white)
                         .padding(.horizontal, 20)
                         .padding(.vertical, 10)
-                        .background(canAdvance ? AppTheme.accent : AppTheme.textMuted)
+                        .background(AppTheme.accent)
                         .clipShape(RoundedRectangle(cornerRadius: 10))
                     }
                     .buttonStyle(.plain)
-                    .disabled(!canAdvance)
                 }
             }
             .padding(20)
         }
-        .frame(width: 540, height: 660)
+        .frame(width: 540, height: 700)
         .background(AppTheme.bgSecondary)
     }
 
-    // MARK: - Step 5: Review
+    private func goToStep(_ target: Int) {
+        previousStep = step
+        withAnimation(.easeInOut(duration: 0.3)) {
+            step = target
+        }
+    }
+
+    // MARK: - Step 1: Identity with validation
+
+    @ViewBuilder
+    private var wizardIdentityStep: some View {
+        GlassCard {
+            VStack(alignment: .leading, spacing: 14) {
+                Label("Identity", systemImage: "person.text.rectangle")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(AppTheme.accent)
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Name")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(AppTheme.textSecondary)
+                    TextField("My Agent", text: $name)
+                        .textFieldStyle(.plain)
+                        .font(AppTheme.fontBody)
+                        .padding(10)
+                        .background(AppTheme.bgPrimary.opacity(0.5))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8)
+                                .stroke(nameError != nil ? AppTheme.error : Color.clear, lineWidth: 1)
+                        )
+                    if let error = nameError {
+                        Text(error)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(AppTheme.error)
+                    }
+                }
+
+                if !slug.isEmpty {
+                    HStack(spacing: 4) {
+                        Image(systemName: "doc.text")
+                            .font(.system(size: 10))
+                        Text("~/.desktop-agent/agents/\(slug).md")
+                            .font(.system(size: 11, design: .monospaced))
+                    }
+                    .foregroundColor(AppTheme.textMuted)
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Description")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(AppTheme.textSecondary)
+                    TextField("What does this agent do?", text: $description)
+                        .textFieldStyle(.plain)
+                        .font(AppTheme.fontBody)
+                        .padding(10)
+                        .background(AppTheme.bgPrimary.opacity(0.5))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8)
+                                .stroke(descriptionError != nil ? AppTheme.error : Color.clear, lineWidth: 1)
+                        )
+                    if let error = descriptionError {
+                        Text(error)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(AppTheme.error)
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - Step 2: Model with validation
+
+    @ViewBuilder
+    private var wizardModelStep: some View {
+        GlassCard {
+            VStack(alignment: .leading, spacing: 14) {
+                Label("Model", systemImage: "cpu")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(AppTheme.accent)
+
+                Picker("", selection: $model) {
+                    ForEach(agentModelOptions, id: \.self) { m in
+                        Text(m).tag(m)
+                    }
+                }
+                .pickerStyle(.menu)
+                .tint(AppTheme.accent)
+
+                if let error = modelError {
+                    Text(error)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(AppTheme.error)
+                }
+
+                if model == "claude-code" {
+                    HStack(spacing: 6) {
+                        Image(systemName: "terminal")
+                            .font(.system(size: 11))
+                        Text("Delegates to local Claude Code CLI for code tasks")
+                            .font(.system(size: 11))
+                    }
+                    .foregroundColor(AppTheme.textMuted)
+                }
+            }
+        }
+    }
+
+    // MARK: - Step 5: Preview (agent card mockup)
+
+    @ViewBuilder
+    private var wizardPreviewStep: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Label("Card Preview", systemImage: "eye")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundColor(AppTheme.accent)
+
+            Text("This is how your agent will appear in the grid.")
+                .font(.system(size: 12))
+                .foregroundColor(AppTheme.textMuted)
+
+            // Simulated agent card
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(spacing: 12) {
+                    GhostIcon(size: 36, animate: false, tint: agentColor(slug.isEmpty ? "agent" : slug))
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text((slug.isEmpty ? "agent" : slug).capitalized)
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundColor(AppTheme.textPrimary)
+                            .lineLimit(1)
+                        HStack(spacing: 4) {
+                            Text(model == "claude-code" ? "Claude Code" : "API")
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundColor(AppTheme.textMuted)
+                        }
+                    }
+                    Spacer()
+                }
+
+                if !description.isEmpty {
+                    Text(description)
+                        .font(.system(size: 12))
+                        .foregroundColor(AppTheme.textSecondary)
+                        .lineLimit(2)
+                }
+
+                // Model pill
+                HStack(spacing: 6) {
+                    Image(systemName: "cpu")
+                        .font(.system(size: 9))
+                        .foregroundColor(AppTheme.accent)
+                    Text(model.contains("/") ? String(model.split(separator: "/").last ?? Substring(model)) : model)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundColor(AppTheme.textSecondary)
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(AppTheme.accent.opacity(0.08))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+
+                // Trigger pills
+                if !triggerList.isEmpty {
+                    FlowLayout(spacing: 6) {
+                        ForEach(triggerList, id: \.self) { trigger in
+                            Text(trigger)
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundColor(AppTheme.accent)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 3)
+                                .background(AppTheme.accent.opacity(0.12))
+                                .clipShape(Capsule())
+                        }
+                    }
+                }
+            }
+            .padding(16)
+            .background(.ultraThinMaterial)
+            .background(AppTheme.bgGlass)
+            .clipShape(RoundedRectangle(cornerRadius: AppTheme.cornerRadius))
+            .overlay(
+                RoundedRectangle(cornerRadius: AppTheme.cornerRadius)
+                    .stroke(agentColor(slug.isEmpty ? "agent" : slug).opacity(0.3), lineWidth: 1)
+            )
+            .shadow(color: .black.opacity(0.2), radius: 12, x: 0, y: 6)
+        }
+    }
+
+    // MARK: - Step 6: Review
 
     @ViewBuilder
     private var wizardReviewStep: some View {
@@ -1610,6 +1841,58 @@ struct CreateAgentSheet: View {
             triggers: triggerList
         )
         dismiss()
+    }
+}
+
+// MARK: - Wizard Step Indicator (circles connected by lines)
+
+struct WizardStepIndicator: View {
+    let totalSteps: Int
+    let currentStep: Int
+    let labels: [String]
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(1...totalSteps, id: \.self) { s in
+                // Circle
+                VStack(spacing: 4) {
+                    ZStack {
+                        Circle()
+                            .fill(s < currentStep ? AppTheme.accent : (s == currentStep ? AppTheme.accent : AppTheme.bgPrimary.opacity(0.5)))
+                            .frame(width: 24, height: 24)
+                        Circle()
+                            .stroke(s <= currentStep ? AppTheme.accent : AppTheme.textMuted.opacity(0.3), lineWidth: 2)
+                            .frame(width: 24, height: 24)
+
+                        if s < currentStep {
+                            Image(systemName: "checkmark")
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundColor(.white)
+                        } else {
+                            Text("\(s)")
+                                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                                .foregroundColor(s == currentStep ? .white : AppTheme.textMuted)
+                        }
+                    }
+                    .animation(.easeInOut(duration: 0.25), value: currentStep)
+
+                    Text(labels[s - 1])
+                        .font(.system(size: 8, weight: s == currentStep ? .semibold : .regular))
+                        .foregroundColor(s == currentStep ? AppTheme.accent : AppTheme.textMuted)
+                        .lineLimit(1)
+                }
+                .frame(width: 50)
+
+                // Connecting line (not after last step)
+                if s < totalSteps {
+                    Rectangle()
+                        .fill(s < currentStep ? AppTheme.accent : AppTheme.textMuted.opacity(0.2))
+                        .frame(height: 2)
+                        .padding(.bottom, 18) // align with circles, not labels
+                        .animation(.easeInOut(duration: 0.25), value: currentStep)
+                }
+            }
+        }
     }
 }
 

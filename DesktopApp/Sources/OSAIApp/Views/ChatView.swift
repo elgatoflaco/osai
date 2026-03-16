@@ -63,6 +63,8 @@ struct ChatView: View {
     @State private var showNotificationPanel: Bool = false
     @State private var notifications: [NotificationItem] = NotificationItem.sampleNotifications()
     @State private var readNotificationIds: Set<String> = []
+    @State private var infoTagInput: String = ""
+    @State private var infoTagFocused: Bool = false
 
     private var filteredConversations: [Conversation] {
         var sorted = appState.workspaceFilteredConversations(appState.sortedConversations)
@@ -1580,6 +1582,141 @@ struct ChatView: View {
         appState.tagColor(for: tag)
     }
 
+    /// Deterministic color from tag name hash, using AppTheme-compatible hues
+    private func tagHashColor(for tag: String) -> Color {
+        if let provider = appState.tagColors[tag],
+           let match = AppState.tagColorPalette.first(where: { $0.name == provider }) {
+            return match.color
+        }
+        var hash: UInt64 = 5381
+        for byte in tag.utf8 {
+            hash = ((hash &<< 5) &+ hash) &+ UInt64(byte)
+        }
+        let hue = Double(hash % 360) / 360.0
+        return Color(hue: hue, saturation: 0.55, brightness: 0.85)
+    }
+
+    /// Auto-suggest tags based on typed input, from all existing tags
+    private func tagSuggestions(for input: String, excluding current: [String]) -> [String] {
+        let query = input.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else { return [] }
+        let allExisting = appState.allUniqueTags()
+        return allExisting.filter { tag in
+            tag.lowercased().contains(query) && !current.contains(tag)
+        }
+    }
+
+    // MARK: - Info Panel Tag Management
+
+    @ViewBuilder
+    private func infoTagManagementPanel(_ conv: Conversation) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 4) {
+                Image(systemName: "tag")
+                    .font(.system(size: 10))
+                    .foregroundColor(AppTheme.textMuted)
+                    .frame(width: 14)
+                Text("Tags")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(AppTheme.textMuted)
+                Spacer()
+            }
+
+            // Existing tags as colored pills with X to remove
+            if !conv.tags.isEmpty {
+                WrappingHStack(items: conv.tags, spacing: 4) { tag in
+                    HStack(spacing: 3) {
+                        Text(tag)
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundColor(.white)
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.15)) {
+                                appState.removeTag(from: conv.id, tag: tag)
+                            }
+                        } label: {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 7, weight: .bold))
+                                .foregroundColor(.white.opacity(0.8))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(tagHashColor(for: tag).opacity(0.85))
+                    .clipShape(Capsule())
+                }
+            }
+
+            // Tag input field with auto-suggest
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Image(systemName: "plus.circle")
+                        .font(.system(size: 10))
+                        .foregroundColor(AppTheme.textMuted)
+                    TextField("Add tag...", text: $infoTagInput)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 11))
+                        .foregroundColor(AppTheme.textPrimary)
+                        .onSubmit {
+                            commitInfoTag(convId: conv.id)
+                        }
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .background(AppTheme.bgCard.opacity(0.6))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+
+                // Auto-suggest dropdown
+                let suggestions = tagSuggestions(for: infoTagInput, excluding: conv.tags)
+                if !suggestions.isEmpty {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(suggestions.prefix(5), id: \.self) { suggestion in
+                            Button {
+                                appState.addTag(to: conv.id, tag: suggestion)
+                                infoTagInput = ""
+                            } label: {
+                                HStack(spacing: 6) {
+                                    Circle()
+                                        .fill(tagHashColor(for: suggestion))
+                                        .frame(width: 8, height: 8)
+                                    Text(suggestion)
+                                        .font(.system(size: 11))
+                                        .foregroundColor(AppTheme.textPrimary)
+                                    Spacer()
+                                }
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .background(Color.clear)
+                            .onHover { hovering in
+                                if hovering {
+                                    NSCursor.pointingHand.push()
+                                } else {
+                                    NSCursor.pop()
+                                }
+                            }
+                        }
+                    }
+                    .background(AppTheme.bgCard.opacity(0.9))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(AppTheme.borderGlass, lineWidth: 1)
+                    )
+                }
+            }
+        }
+    }
+
+    private func commitInfoTag(convId: String) {
+        let tag = infoTagInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !tag.isEmpty else { return }
+        appState.addTag(to: convId, tag: tag)
+        infoTagInput = ""
+    }
+
     // MARK: - Workspace Selector
 
     @ViewBuilder
@@ -2533,26 +2670,8 @@ struct ChatView: View {
                     infoRow(icon: "cpu", label: "Model", value: displayName)
                 }
 
-                if !conv.tags.isEmpty {
-                    HStack(spacing: 4) {
-                        Image(systemName: "tag")
-                            .font(.system(size: 10))
-                            .foregroundColor(AppTheme.textMuted)
-                            .frame(width: 14)
-                        Text("Tags:")
-                            .font(.system(size: 11))
-                            .foregroundColor(AppTheme.textMuted)
-                        ForEach(conv.tags, id: \.self) { tag in
-                            Text(tag)
-                                .font(.system(size: 10))
-                                .foregroundColor(.white)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 1)
-                                .background(AppTheme.accent.opacity(0.7))
-                                .clipShape(Capsule())
-                        }
-                    }
-                }
+                // Tag management panel
+                infoTagManagementPanel(conv)
 
                 if !toolNames.isEmpty {
                     VStack(alignment: .leading, spacing: 3) {
@@ -5771,5 +5890,59 @@ struct MergePreviewSheet: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+}
+
+// MARK: - Wrapping HStack for Tag Pills
+
+/// A horizontal wrapping layout that lays out items in rows
+struct WrappingHStack<Item: Hashable, ItemView: View>: View {
+    let items: [Item]
+    let spacing: CGFloat
+    @ViewBuilder let content: (Item) -> ItemView
+
+    @State private var totalHeight: CGFloat = 20
+
+    var body: some View {
+        var width = CGFloat.zero
+        var height = CGFloat.zero
+
+        GeometryReader { geometry in
+            ZStack(alignment: .topLeading) {
+                ForEach(Array(items.enumerated()), id: \.element) { index, item in
+                    content(item)
+                        .fixedSize()
+                        .alignmentGuide(.leading) { d in
+                            if abs(width - d.width) > geometry.size.width {
+                                width = 0
+                                height -= d.height + spacing
+                            }
+                            let result = width
+                            if index == items.count - 1 {
+                                width = 0
+                            } else {
+                                width -= d.width + spacing
+                            }
+                            return result
+                        }
+                        .alignmentGuide(.top) { _ in
+                            let result = height
+                            if index == items.count - 1 {
+                                height = 0
+                            }
+                            return result
+                        }
+                }
+            }
+            .background(
+                GeometryReader { geo -> Color in
+                    DispatchQueue.main.async {
+                        totalHeight = geo.size.height
+                    }
+                    return .clear
+                }
+            )
+        }
+        .frame(height: max(totalHeight, 0))
     }
 }
