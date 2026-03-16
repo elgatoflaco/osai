@@ -417,6 +417,33 @@ struct SettingsView: View {
                         .accessibilityValue(appState.sidebarCollapsed ? "On" : "Off")
                 }
 
+                // Text-to-Speech toggle
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Text-to-Speech")
+                            .font(AppTheme.fontBody)
+                            .foregroundColor(AppTheme.textPrimary)
+                        Text("Show speaker button on assistant messages")
+                            .font(.system(size: 10))
+                            .foregroundColor(AppTheme.textMuted)
+                    }
+                    Spacer()
+                    Toggle("Text-to-Speech", isOn: Binding(
+                        get: { appState.textToSpeechEnabled },
+                        set: { newVal in
+                            appState.textToSpeechEnabled = newVal
+                            if !newVal && appState.isSpeaking {
+                                appState.stopSpeaking()
+                            }
+                        }
+                    ))
+                        .toggleStyle(.switch)
+                        .tint(AppTheme.accent)
+                        .labelsHidden()
+                        .accessibilityLabel("Text-to-Speech")
+                        .accessibilityValue(appState.textToSpeechEnabled ? "On" : "Off")
+                }
+
                 Divider().background(AppTheme.borderGlass)
 
                 // Accent Color

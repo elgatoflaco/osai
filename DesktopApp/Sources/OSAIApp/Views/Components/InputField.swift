@@ -71,8 +71,11 @@ struct GrowingTextEditor: NSViewRepresentable {
     var isFocused: Binding<Bool>
     var onSubmit: () -> Void
     var onUpArrowInEmptyInput: (() -> Void)?
+    var onDownArrowHistory: (() -> Void)?
     var onEscapeKey: (() -> Void)?
     var onPasteImages: (([URL]) -> Void)?
+    var onUserTyped: (() -> Void)?
+    var isBrowsingHistory: Bool = false
 
     private let lineHeight: CGFloat = 20
     private let maxLines: Int = 5
@@ -94,8 +97,10 @@ struct GrowingTextEditor: NSViewRepresentable {
         textView.delegate = context.coordinator
         textView.onSubmit = onSubmit
         textView.onUpArrowInEmptyInput = onUpArrowInEmptyInput
+        textView.onDownArrowHistory = onDownArrowHistory
         textView.onEscapeKey = onEscapeKey
         textView.onPasteImages = onPasteImages
+        textView.isBrowsingHistory = isBrowsingHistory
         textView.font = font
         textView.textColor = textColor
         textView.backgroundColor = .clear
@@ -126,8 +131,10 @@ struct GrowingTextEditor: NSViewRepresentable {
         // Update closures
         textView.onSubmit = onSubmit
         textView.onUpArrowInEmptyInput = onUpArrowInEmptyInput
+        textView.onDownArrowHistory = onDownArrowHistory
         textView.onEscapeKey = onEscapeKey
         textView.onPasteImages = onPasteImages
+        textView.isBrowsingHistory = isBrowsingHistory
 
         // Only update text if it differs (avoid cursor jumping)
         if textView.string != text {
@@ -157,6 +164,7 @@ struct GrowingTextEditor: NSViewRepresentable {
         func textDidChange(_ notification: Notification) {
             guard let textView = notification.object as? NSTextView else { return }
             parent.text = textView.string
+            parent.onUserTyped?()
             updatePlaceholder()
 
             if let scrollView = textView.enclosingScrollView {
@@ -231,8 +239,12 @@ struct GrowingTextEditor: NSViewRepresentable {
 class SubmittableTextView: NSTextView {
     var onSubmit: (() -> Void)?
     var onUpArrowInEmptyInput: (() -> Void)?
+    var onDownArrowHistory: (() -> Void)?
     var onEscapeKey: (() -> Void)?
     var onPasteImages: (([URL]) -> Void)?
+
+    /// Whether the user is currently browsing input history (enables down-arrow navigation)
+    var isBrowsingHistory: Bool = false
 
     override func keyDown(with event: NSEvent) {
         // Return key without Shift modifier -> submit
@@ -240,9 +252,18 @@ class SubmittableTextView: NSTextView {
             onSubmit?()
             return
         }
-        // Up arrow in empty input -> recall last user message
-        if event.keyCode == 126 && string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            onUpArrowInEmptyInput?()
+        // Up arrow: navigate history when input is empty or cursor is at the very beginning
+        if event.keyCode == 126 {
+            let isEmpty = string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            let atBeginning = selectedRange().location == 0 && selectedRange().length == 0
+            if isEmpty || atBeginning || isBrowsingHistory {
+                onUpArrowInEmptyInput?()
+                return
+            }
+        }
+        // Down arrow: navigate history forward when browsing
+        if event.keyCode == 125 && isBrowsingHistory {
+            onDownArrowHistory?()
             return
         }
         // Escape key -> clear input or bubble up
@@ -448,6 +469,7 @@ struct ChatInputBar: View {
     var isDisabled: Bool = false
     var isDragOver: Bool = false
     var onUpArrowInEmptyInput: (() -> Void)?
+    var onDownArrowHistory: (() -> Void)?
     var onPasteImages: (([URL]) -> Void)?
     var onSubmit: () -> Void
 
@@ -553,6 +575,7 @@ struct ChatInputBar: View {
                     isFocused: $isFocused,
                     onSubmit: submitIfValid,
                     onUpArrowInEmptyInput: onUpArrowInEmptyInput,
+                    onDownArrowHistory: onDownArrowHistory,
                     onEscapeKey: {
                         if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                             text = ""
@@ -560,7 +583,11 @@ struct ChatInputBar: View {
                             appState.closeCurrentConversation()
                         }
                     },
-                    onPasteImages: onPasteImages
+                    onPasteImages: onPasteImages,
+                    onUserTyped: {
+                        appState.resetInputHistoryNavigation()
+                    },
+                    isBrowsingHistory: appState.isBrowsingInputHistory
                 )
 
                 Button(action: submitIfValid) {
@@ -590,6 +617,24 @@ struct ChatInputBar: View {
             )
             .shadow(color: isDragOver ? AppTheme.accentGlow.opacity(0.35) : .clear, radius: 16, x: 0, y: 0)
             .animation(.easeInOut(duration: 0.25), value: isDragOver)
+
+            // History browsing indicator
+            if appState.isBrowsingInputHistory {
+                HStack(spacing: 4) {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .font(.system(size: 9))
+                    Text("History \(appState.inputHistoryPositionLabel)")
+                        .font(.system(size: 10, weight: .medium))
+                }
+                .foregroundColor(AppTheme.textMuted)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(AppTheme.bgCard.opacity(0.6))
+                .clipShape(Capsule())
+                .transition(.opacity.combined(with: .move(edge: .bottom)))
+                .animation(.easeOut(duration: 0.15), value: appState.isBrowsingInputHistory)
+                .padding(.top, 4)
+            }
         }
         .onChange(of: text) { _, newValue in
             if newValue.hasPrefix("/") {

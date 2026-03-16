@@ -391,6 +391,18 @@ struct ChatView: View {
                         .buttonStyle(.plain)
                         .help("Extract code blocks")
 
+                        Button(action: {
+                            withAnimation(.easeInOut(duration: 0.15)) {
+                                appState.showRawMarkdown.toggle()
+                            }
+                        }) {
+                            Image(systemName: appState.showRawMarkdown ? "doc.richtext" : "doc.plaintext")
+                                .font(.system(size: 14))
+                                .foregroundColor(appState.showRawMarkdown ? AppTheme.accent : AppTheme.textSecondary)
+                        }
+                        .buttonStyle(.plain)
+                        .help(appState.showRawMarkdown ? "Show rendered markdown (\u{2318}\u{21E7}R)" : "Show raw markdown (\u{2318}\u{21E7}R)")
+
                         Button(action: { appState.presentExportSheet(for: conv) }) {
                             Image(systemName: "square.and.arrow.up")
                                 .font(.system(size: 14))
@@ -398,6 +410,20 @@ struct ChatView: View {
                         }
                         .buttonStyle(.plain)
                         .help("Export conversation")
+                    }
+
+                    if !focusMode, let _ = appState.activeConversation {
+                        Button(action: {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                appState.showConversationInfo.toggle()
+                            }
+                        }) {
+                            Image(systemName: "info.circle")
+                                .font(.system(size: 14))
+                                .foregroundColor(appState.showConversationInfo ? AppTheme.accent : AppTheme.textSecondary)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Conversation info")
                     }
 
                     Button(action: { withAnimation(.easeInOut(duration: 0.25)) {
@@ -430,6 +456,12 @@ struct ChatView: View {
                 // Bookmarks panel
                 if showBookmarksPanel {
                     bookmarksPanel
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                }
+
+                // Conversation info panel
+                if appState.showConversationInfo, let conv = appState.activeConversation {
+                    conversationInfoPanel(conv)
                         .transition(.move(edge: .top).combined(with: .opacity))
                 }
 
@@ -762,8 +794,12 @@ struct ChatView: View {
                     }
 
                     ChatInputBar(text: $messageText, attachedFiles: $attachedFiles, isDisabled: appState.isProcessing, isDragOver: isDragOver, onUpArrowInEmptyInput: {
-                        if let lastContent = appState.lastUserMessageContent() {
-                            messageText = lastContent
+                        if let text = appState.navigateInputHistory(direction: -1, currentText: messageText) {
+                            messageText = text
+                        }
+                    }, onDownArrowHistory: {
+                        if let text = appState.navigateInputHistory(direction: 1, currentText: messageText) {
+                            messageText = text
                         }
                     }, onPasteImages: { urls in
                         for url in urls {
@@ -774,6 +810,7 @@ struct ChatView: View {
                         appState.showToast("\(urls.count) image\(urls.count == 1 ? "" : "s") pasted", type: .success)
                     }) {
                         guard !messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+                        appState.addToInputHistory(messageText)
                         let files = attachedFiles
                         appState.sendMessage(messageText, attachments: files)
                         messageText = ""
@@ -870,6 +907,15 @@ struct ChatView: View {
                     }
                 }
                 .keyboardShortcut("f", modifiers: [.command, .shift])
+                .hidden()
+
+                // Cmd+Shift+R: Toggle raw markdown globally
+                Button("") {
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        appState.showRawMarkdown.toggle()
+                    }
+                }
+                .keyboardShortcut("r", modifiers: [.command, .shift])
                 .hidden()
             }
         )
@@ -1307,6 +1353,196 @@ struct ChatView: View {
         let picker = NSSharingServicePicker(items: [formatted])
         let rect = CGRect(x: contentView.bounds.midX, y: contentView.bounds.midY, width: 1, height: 1)
         picker.show(relativeTo: rect, of: contentView, preferredEdge: .minY)
+    }
+
+    // MARK: - Conversation Info Panel
+
+    @ViewBuilder
+    private func conversationInfoPanel(_ conv: Conversation) -> some View {
+        let summary = conv.summary ?? appState.generateSummary(for: conv)
+        let userCount = conv.messages.filter { $0.role == .user }.count
+        let assistantCount = conv.messages.filter { $0.role == .assistant }.count
+
+        // Collect unique tools
+        let toolNames: [String] = {
+            var names: [String] = []
+            for msg in conv.messages {
+                for activity in msg.activities where activity.type == .toolCall {
+                    if !names.contains(activity.label) { names.append(activity.label) }
+                }
+                if let tool = msg.toolName, !names.contains(tool) { names.append(tool) }
+            }
+            return names
+        }()
+
+        VStack(alignment: .leading, spacing: 10) {
+            // Header
+            HStack {
+                Image(systemName: "info.circle.fill")
+                    .font(.system(size: 13))
+                    .foregroundColor(AppTheme.accent)
+                Text("Conversation Info")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(AppTheme.textPrimary)
+                Spacer()
+                Button(action: {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        appState.showConversationInfo = false
+                    }
+                }) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 13))
+                        .foregroundColor(AppTheme.textMuted)
+                }
+                .buttonStyle(.plain)
+            }
+
+            // Summary text
+            Text(summary)
+                .font(.system(size: 12))
+                .foregroundColor(AppTheme.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Divider().background(AppTheme.borderGlass)
+
+            // Stats grid
+            LazyVGrid(columns: [
+                GridItem(.flexible(), spacing: 8),
+                GridItem(.flexible(), spacing: 8),
+                GridItem(.flexible(), spacing: 8),
+            ], spacing: 8) {
+                infoStatCell(icon: "bubble.left.and.bubble.right", label: "Messages", value: "\(conv.messages.count)")
+                infoStatCell(icon: "person", label: "User", value: "\(userCount)")
+                infoStatCell(icon: "cpu", label: "Assistant", value: "\(assistantCount)")
+            }
+
+            // Details
+            VStack(alignment: .leading, spacing: 6) {
+                infoRow(icon: "calendar", label: "Created", value: {
+                    let f = DateFormatter()
+                    f.dateStyle = .medium
+                    f.timeStyle = .short
+                    return f.string(from: conv.createdAt)
+                }())
+
+                infoRow(icon: "clock", label: "Last updated", value: {
+                    let f = DateFormatter()
+                    f.dateStyle = .medium
+                    f.timeStyle = .short
+                    return f.string(from: conv.lastUpdated)
+                }())
+
+                if conv.totalInputTokens > 0 || conv.totalOutputTokens > 0 {
+                    infoRow(icon: "number", label: "Tokens", value: "\(abbreviatedTokens(conv.totalInputTokens)) in / \(abbreviatedTokens(conv.totalOutputTokens)) out")
+                }
+
+                if conv.estimatedCost >= 0.01 {
+                    infoRow(icon: "dollarsign.circle", label: "Est. cost", value: String(format: "$%.2f", conv.estimatedCost))
+                }
+
+                if let agent = conv.agentName {
+                    infoRow(icon: "person.crop.circle", label: "Agent", value: agent)
+                }
+
+                if let model = conv.modelId {
+                    let displayName = allModelDefinitions.first(where: { $0.id == model })?.shortName ?? model
+                    infoRow(icon: "cpu", label: "Model", value: displayName)
+                }
+
+                if !conv.tags.isEmpty {
+                    HStack(spacing: 4) {
+                        Image(systemName: "tag")
+                            .font(.system(size: 10))
+                            .foregroundColor(AppTheme.textMuted)
+                            .frame(width: 14)
+                        Text("Tags:")
+                            .font(.system(size: 11))
+                            .foregroundColor(AppTheme.textMuted)
+                        ForEach(conv.tags, id: \.self) { tag in
+                            Text(tag)
+                                .font(.system(size: 10))
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 1)
+                                .background(AppTheme.accent.opacity(0.7))
+                                .clipShape(Capsule())
+                        }
+                    }
+                }
+
+                if !toolNames.isEmpty {
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "wrench.and.screwdriver")
+                                .font(.system(size: 10))
+                                .foregroundColor(AppTheme.textMuted)
+                                .frame(width: 14)
+                            Text("Tools used:")
+                                .font(.system(size: 11))
+                                .foregroundColor(AppTheme.textMuted)
+                        }
+                        HStack(spacing: 4) {
+                            ForEach(toolNames, id: \.self) { tool in
+                                Text(tool)
+                                    .font(.system(size: 10, design: .monospaced))
+                                    .foregroundColor(AppTheme.textSecondary)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(AppTheme.bgCard.opacity(0.8))
+                                    .clipShape(Capsule())
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(AppTheme.bgSecondary.opacity(0.95))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(AppTheme.borderGlass, lineWidth: 1)
+        )
+        .padding(.horizontal, AppTheme.paddingLg)
+        .padding(.vertical, 8)
+    }
+
+    @ViewBuilder
+    private func infoStatCell(icon: String, label: String, value: String) -> some View {
+        VStack(spacing: 3) {
+            Image(systemName: icon)
+                .font(.system(size: 12))
+                .foregroundColor(AppTheme.accent.opacity(0.8))
+            Text(value)
+                .font(.system(size: 14, weight: .semibold, design: .rounded))
+                .foregroundColor(AppTheme.textPrimary)
+            Text(label)
+                .font(.system(size: 9))
+                .foregroundColor(AppTheme.textMuted)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 6)
+        .background(AppTheme.bgCard.opacity(0.5))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+
+    @ViewBuilder
+    private func infoRow(icon: String, label: String, value: String) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: icon)
+                .font(.system(size: 10))
+                .foregroundColor(AppTheme.textMuted)
+                .frame(width: 14)
+            Text(label + ":")
+                .font(.system(size: 11))
+                .foregroundColor(AppTheme.textMuted)
+            Text(value)
+                .font(.system(size: 11))
+                .foregroundColor(AppTheme.textSecondary)
+            Spacer()
+        }
     }
 
     // MARK: - Bookmarks Panel
@@ -2179,6 +2415,15 @@ struct ConversationRow: View {
                         Text(timeLabel(conv.createdAt))
                             .font(.system(size: 9))
                             .foregroundColor(AppTheme.textMuted)
+                    }
+
+                    // Summary preview line
+                    if let summary = conv.summary {
+                        Text(summary)
+                            .font(.system(size: 9))
+                            .foregroundColor(AppTheme.textMuted.opacity(0.7))
+                            .lineLimit(1)
+                            .truncationMode(.tail)
                     }
 
                     if !conv.tags.isEmpty {

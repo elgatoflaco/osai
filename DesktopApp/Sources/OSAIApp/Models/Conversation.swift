@@ -80,6 +80,7 @@ struct Conversation: Identifiable {
     var branchedFromId: String?
     var branchedAtMessageIndex: Int?
     var titleManuallySet: Bool = false
+    var summary: String?
 
     /// Estimated cost based on typical rates ($3/M input, $15/M output for Sonnet)
     var estimatedCost: Double {

@@ -392,6 +392,13 @@ struct MessageBubble: View {
     @State private var isEditing = false
     @State private var editText = ""
     @State private var speakerPulse = false
+    /// Per-message raw markdown override: nil follows global, true/false overrides
+    @State private var localRawMode: Bool?
+
+    /// Whether raw markdown is active for this message
+    private var isRawMode: Bool {
+        localRawMode ?? appState.showRawMarkdown
+    }
 
     /// Whether this message is currently being spoken
     private var isSpeakingThis: Bool {
@@ -797,7 +804,11 @@ struct MessageBubble: View {
                         } else if message.isStreaming && message.content.isEmpty {
                             StreamingPlaceholder(hasActivities: !message.activities.isEmpty)
                         } else if !message.content.isEmpty {
-                            ResponseView(text: message.content, isStreaming: message.isStreaming, zenMode: zenMode)
+                            if isRawMode && !message.isStreaming {
+                                RawMarkdownView(text: message.content)
+                            } else {
+                                ResponseView(text: message.content, isStreaming: message.isStreaming, zenMode: zenMode)
+                            }
                         }
 
                         // Inline images detected in message content
@@ -824,6 +835,29 @@ struct MessageBubble: View {
                     // Copy, share, bookmark, speak & retry buttons on hover
                     if message.role == .assistant && !message.content.isEmpty && !message.isStreaming && (isHovered || copied || message.isBookmarked || isSpeakingThis) {
                         HStack(spacing: 4) {
+                            // Raw/Rendered markdown toggle
+                            Button(action: {
+                                withAnimation(.easeInOut(duration: 0.15)) {
+                                    localRawMode = !(localRawMode ?? appState.showRawMarkdown)
+                                }
+                            }) {
+                                HStack(spacing: 3) {
+                                    Image(systemName: isRawMode ? "doc.richtext" : "doc.plaintext").font(.system(size: 9))
+                                    Text(isRawMode ? "Rendered" : "Raw").font(.system(size: 9))
+                                }
+                                .foregroundColor(isRawMode ? AppTheme.accent : AppTheme.textMuted)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 3)
+                                .background(isRawMode ? AppTheme.accent.opacity(0.12) : AppTheme.bgCard.opacity(0.9))
+                                .clipShape(RoundedRectangle(cornerRadius: 6))
+                                .overlay(RoundedRectangle(cornerRadius: 6).stroke(
+                                    isRawMode ? AppTheme.accent.opacity(0.3) : AppTheme.borderGlass,
+                                    lineWidth: isRawMode ? 1.0 : 0.5
+                                ))
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(isRawMode ? "Show rendered markdown" : "Show raw markdown")
+
                             bookmarkButton
 
                             // Text-to-Speech button
@@ -968,6 +1002,9 @@ struct MessageBubble: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(message.isStreaming ? "Assistant is responding" : "Assistant said")
+        .onChange(of: appState.showRawMarkdown) { _ in
+            localRawMode = nil
+        }
     }
 
     private var reactionButtons: some View {
@@ -1526,6 +1563,78 @@ struct ImagePreviewView: View {
     private func openInPreview() {
         let clean = path.trimmingCharacters(in: CharacterSet(charactersIn: ".,;:"))
         NSWorkspace.shared.open(URL(fileURLWithPath: clean))
+    }
+}
+
+// MARK: - Raw Markdown View
+
+struct RawMarkdownView: View {
+    let text: String
+
+    private var lines: [String] {
+        text.components(separatedBy: "\n")
+    }
+
+    private var lineNumberWidth: CGFloat {
+        let digits = String(lines.count).count
+        return CGFloat(max(digits, 2)) * 8 + 12
+    }
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(alignment: .top, spacing: 0) {
+                    // Line numbers
+                    VStack(alignment: .trailing, spacing: 0) {
+                        ForEach(Array(lines.enumerated()), id: \.offset) { idx, _ in
+                            Text("\(idx + 1)")
+                                .font(.system(size: 12, design: .monospaced))
+                                .foregroundColor(AppTheme.textMuted.opacity(0.4))
+                                .frame(height: 18)
+                        }
+                    }
+                    .frame(width: lineNumberWidth)
+                    .padding(.trailing, 8)
+
+                    // Separator
+                    Rectangle()
+                        .fill(AppTheme.borderGlass)
+                        .frame(width: 1)
+                        .padding(.trailing, 10)
+
+                    // Raw text
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                            Text(line.isEmpty ? " " : line)
+                                .font(.system(size: 12, design: .monospaced))
+                                .foregroundColor(AppTheme.textPrimary)
+                                .frame(height: 18, alignment: .leading)
+                                .textSelection(.enabled)
+                        }
+                    }
+                }
+                .padding(12)
+            }
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(AppTheme.bgCard.opacity(0.5))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(AppTheme.borderGlass, lineWidth: 0.5)
+            )
+
+            // "Raw" badge
+            Text("Raw")
+                .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                .foregroundColor(AppTheme.textMuted.opacity(0.7))
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(AppTheme.bgCard.opacity(0.8))
+                .clipShape(RoundedRectangle(cornerRadius: 4))
+                .overlay(RoundedRectangle(cornerRadius: 4).stroke(AppTheme.borderGlass, lineWidth: 0.5))
+                .padding(8)
+        }
     }
 }
 

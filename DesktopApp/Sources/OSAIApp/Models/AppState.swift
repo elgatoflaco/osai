@@ -390,6 +390,83 @@ class AppState: ObservableObject {
         collapsedDashboardSections = []
     }
 
+    // MARK: - Input History
+
+    @Published var inputHistory: [String] = {
+        UserDefaults.standard.stringArray(forKey: "inputHistory") ?? []
+    }() {
+        didSet {
+            UserDefaults.standard.set(inputHistory, forKey: "inputHistory")
+        }
+    }
+
+    /// Current position in history (-1 = not browsing)
+    @Published private(set) var inputHistoryIndex: Int = -1
+
+    /// Saves the current unsent draft when the user starts browsing history
+    private var inputHistoryDraft: String = ""
+
+    /// Whether the user is currently browsing input history (for UI indicator)
+    var isBrowsingInputHistory: Bool {
+        inputHistoryIndex >= 0
+    }
+
+    /// Human-readable history position string, e.g. "3/12"
+    var inputHistoryPositionLabel: String {
+        guard inputHistoryIndex >= 0 else { return "" }
+        return "\(inputHistoryIndex + 1)/\(inputHistory.count)"
+    }
+
+    /// Appends text to the input history (max 50 items, dedup consecutive).
+    func addToInputHistory(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        // Deduplicate consecutive entries
+        if inputHistory.last == trimmed { return }
+        inputHistory.append(trimmed)
+        // Cap at 50 items
+        if inputHistory.count > 50 {
+            inputHistory.removeFirst(inputHistory.count - 50)
+        }
+        resetInputHistoryNavigation()
+    }
+
+    /// Navigate input history. direction: -1 = older, +1 = newer.
+    /// Returns the text to display, or nil if navigation is not possible.
+    func navigateInputHistory(direction: Int, currentText: String) -> String? {
+        guard !inputHistory.isEmpty else { return nil }
+
+        if inputHistoryIndex == -1 {
+            // Not browsing yet — only allow going backward
+            guard direction == -1 else { return nil }
+            inputHistoryDraft = currentText
+            inputHistoryIndex = inputHistory.count - 1
+            return inputHistory[inputHistoryIndex]
+        }
+
+        let newIndex = inputHistoryIndex + direction
+
+        if newIndex < 0 {
+            // Already at the oldest entry
+            return nil
+        }
+
+        if newIndex >= inputHistory.count {
+            // Past the newest — restore draft
+            inputHistoryIndex = -1
+            return inputHistoryDraft
+        }
+
+        inputHistoryIndex = newIndex
+        return inputHistory[inputHistoryIndex]
+    }
+
+    /// Reset history browsing state (call when user types manually or sends).
+    func resetInputHistoryNavigation() {
+        inputHistoryIndex = -1
+        inputHistoryDraft = ""
+    }
+
     @Published var selectedAccentColor: String = UserDefaults.standard.string(forKey: "selectedAccentColor") ?? "teal"
 
     /// Enabled quick actions shown in the chat toolbar. Persisted to UserDefaults.
@@ -519,10 +596,82 @@ class AppState: ObservableObject {
     private var messageSendTime: Date?
     @Published var conversationSortOrder: ConversationSortOrder = .recent
     @Published var showArchived: Bool = false
+    @Published var showRawMarkdown: Bool = false
     @Published var filterTag: String?
     @Published var notifications: [AppNotification] = []
     @Published var showNotificationPanel: Bool = false
     @Published var selectedModel: String = "anthropic/claude-sonnet-4-20250514"
+    @Published var showConversationInfo: Bool = false
+
+    // MARK: - Conversation Summary
+
+    func generateSummary(for conversation: Conversation) -> String {
+        let messages = conversation.messages
+        let userCount = messages.filter { $0.role == .user }.count
+        let assistantCount = messages.filter { $0.role == .assistant }.count
+        let totalCount = messages.count
+
+        // Duration
+        var durationStr = ""
+        if let first = messages.first?.timestamp, let last = messages.last?.timestamp {
+            let elapsed = last.timeIntervalSince(first)
+            if elapsed < 60 {
+                durationStr = "under a minute"
+            } else if elapsed < 3600 {
+                durationStr = "\(Int(elapsed / 60)) minutes"
+            } else {
+                let hours = Int(elapsed / 3600)
+                let mins = Int(elapsed.truncatingRemainder(dividingBy: 3600) / 60)
+                durationStr = mins > 0 ? "\(hours)h \(mins)m" : "\(hours)h"
+            }
+        }
+
+        // Tools used
+        var toolNames: [String] = []
+        for msg in messages {
+            for activity in msg.activities where activity.type == .toolCall {
+                let name = activity.label
+                if !toolNames.contains(name) { toolNames.append(name) }
+            }
+            if let tool = msg.toolName, !toolNames.contains(tool) {
+                toolNames.append(tool)
+            }
+        }
+
+        // Key topics from first few user messages
+        let firstUserMessages = messages.filter { $0.role == .user }.prefix(3)
+        let topics = firstUserMessages.compactMap { msg -> String? in
+            let trimmed = msg.content.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return nil }
+            let words = trimmed.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }
+            return words.prefix(6).joined(separator: " ") + (words.count > 6 ? "..." : "")
+        }
+
+        // Build summary
+        var parts: [String] = []
+
+        var msgLine = "\(totalCount) messages (\(userCount) user, \(assistantCount) assistant)"
+        if !durationStr.isEmpty {
+            msgLine += " over \(durationStr)"
+        }
+        parts.append(msgLine)
+
+        if !topics.isEmpty {
+            parts.append("Topics: " + topics.joined(separator: "; "))
+        }
+
+        if !toolNames.isEmpty {
+            parts.append("Tools used: " + toolNames.joined(separator: ", "))
+        }
+
+        if conversation.totalInputTokens > 0 || conversation.totalOutputTokens > 0 {
+            let input = conversation.totalInputTokens
+            let output = conversation.totalOutputTokens
+            parts.append("Tokens: \(input + output) (\(input) in, \(output) out)")
+        }
+
+        return parts.joined(separator: ". ")
+    }
 
     // MARK: - Text-to-Speech
 
