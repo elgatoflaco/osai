@@ -435,6 +435,79 @@ class AppState: ObservableObject {
         default: return 26
         }
     }
+    // MARK: - Budget Settings
+    @AppStorage("dailyBudget") var dailyBudget: Double = 5.0
+    @AppStorage("monthlyBudget") var monthlyBudget: Double = 100.0
+    @AppStorage("budgetAlertsEnabled") var budgetAlertsEnabled: Bool = true
+
+    /// Daily spending as a percentage of daily budget (0.0 to 1.0+).
+    var dailySpendingPercentage: Double {
+        guard dailyBudget > 0 else { return 0 }
+        return costToday / dailyBudget
+    }
+
+    /// Monthly spending as a percentage of monthly budget (0.0 to 1.0+).
+    var monthlySpendingPercentage: Double {
+        guard monthlyBudget > 0 else { return 0 }
+        return costMonth / monthlyBudget
+    }
+
+    /// Tracks whether we already sent a budget alert this session to avoid spam.
+    private var dailyBudgetAlertSent80 = false
+    private var dailyBudgetAlertSent100 = false
+    private var monthlyBudgetAlertSent80 = false
+    private var monthlyBudgetAlertSent100 = false
+
+    /// Check budget thresholds and send notifications when approaching or exceeding limits.
+    func checkBudgetAlert() {
+        guard budgetAlertsEnabled else { return }
+
+        // Daily budget checks
+        if dailyBudget > 0 {
+            let pct = dailySpendingPercentage
+            if pct >= 1.0 && !dailyBudgetAlertSent100 {
+                dailyBudgetAlertSent100 = true
+                let msg = String(format: "Daily budget of $%.2f exceeded ($%.2f spent)", dailyBudget, costToday)
+                sendNotification(title: "OSAI Budget Alert", body: msg)
+                addNotification(title: "Budget Exceeded", message: msg, type: .error)
+                showToast(msg, type: .error)
+            } else if pct >= 0.8 && !dailyBudgetAlertSent80 {
+                dailyBudgetAlertSent80 = true
+                let msg = String(format: "Approaching daily budget: $%.2f of $%.2f (%.0f%%)", costToday, dailyBudget, pct * 100)
+                sendNotification(title: "OSAI Budget Warning", body: msg)
+                addNotification(title: "Budget Warning", message: msg, type: .warning)
+                showToast(msg, type: .info)
+            }
+        }
+
+        // Monthly budget checks
+        if monthlyBudget > 0 {
+            let pct = monthlySpendingPercentage
+            if pct >= 1.0 && !monthlyBudgetAlertSent100 {
+                monthlyBudgetAlertSent100 = true
+                let msg = String(format: "Monthly budget of $%.2f exceeded ($%.2f spent)", monthlyBudget, costMonth)
+                sendNotification(title: "OSAI Budget Alert", body: msg)
+                addNotification(title: "Budget Exceeded", message: msg, type: .error)
+                showToast(msg, type: .error)
+            } else if pct >= 0.8 && !monthlyBudgetAlertSent80 {
+                monthlyBudgetAlertSent80 = true
+                let msg = String(format: "Approaching monthly budget: $%.2f of $%.2f (%.0f%%)", costMonth, monthlyBudget, pct * 100)
+                sendNotification(title: "OSAI Budget Warning", body: msg)
+                addNotification(title: "Budget Warning", message: msg, type: .warning)
+                showToast(msg, type: .info)
+            }
+        }
+    }
+
+    /// Reset the daily spending counter and alert flags.
+    func resetDailySpending() {
+        costToday = 0.0
+        tokensToday = 0
+        dailyBudgetAlertSent80 = false
+        dailyBudgetAlertSent100 = false
+        showToast("Daily spending counter reset", type: .success)
+    }
+
     @AppStorage("floatOnTop") var floatOnTop: Bool = false
     @AppStorage("windowOpacity") var windowOpacity: Double = 1.0
     @AppStorage("quickActionsCollapsed") var quickActionsCollapsed: Bool = false
@@ -767,6 +840,10 @@ class AppState: ObservableObject {
     @Published var activeConversation: Conversation?
     @Published var unreadConversationIds: Set<String> = []
     @Published var mergeTargetId: String?
+
+    // MARK: - Multi-Select Mode
+    @Published var isMultiSelectMode: Bool = false
+    @Published var selectedConversationIds: Set<String> = []
 
     /// Number of active (enabled) tasks.
     var activeTaskCount: Int {
@@ -1746,6 +1823,7 @@ class AppState: ObservableObject {
             activeConversation?.totalOutputTokens += output
             tokensToday += input + output
             recordDailyTokenUsage(input: input, output: output)
+            checkBudgetAlert()
 
         case .contextPressure(let percent):
             contextPressurePercent = percent
@@ -1989,6 +2067,61 @@ class AppState: ObservableObject {
             service.deleteConversation(id)
         }
         showToast("\(ids.count) conversation\(ids.count == 1 ? "" : "s") deleted", type: .success)
+    }
+
+    // MARK: - Multi-Select Actions
+
+    /// Delete all currently selected conversations and exit multi-select mode.
+    func deleteSelectedConversations() {
+        let toDelete = conversations.filter { selectedConversationIds.contains($0.id) }
+        guard !toDelete.isEmpty else { return }
+        deleteMultipleConversations(toDelete)
+        selectedConversationIds.removeAll()
+        isMultiSelectMode = false
+    }
+
+    /// Archive all currently selected conversations and exit multi-select mode.
+    func archiveSelectedConversations() {
+        var count = 0
+        for id in selectedConversationIds {
+            if let idx = conversations.firstIndex(where: { $0.id == id }), !conversations[idx].isArchived {
+                conversations[idx].isArchived = true
+                service.saveConversation(conversations[idx])
+                count += 1
+            }
+            if activeConversation?.id == id {
+                activeConversation = nil
+            }
+        }
+        selectedConversationIds.removeAll()
+        isMultiSelectMode = false
+        if count > 0 {
+            showToast("\(count) conversation\(count == 1 ? "" : "s") archived", type: .info)
+        }
+    }
+
+    /// Tag all currently selected conversations with the given tag.
+    func tagSelectedConversations(tag: String) {
+        let trimmed = tag.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        var count = 0
+        for id in selectedConversationIds {
+            if let idx = conversations.firstIndex(where: { $0.id == id }) {
+                if !conversations[idx].tags.contains(trimmed) {
+                    conversations[idx].tags.append(trimmed)
+                    service.saveConversation(conversations[idx])
+                    count += 1
+                }
+            }
+            if activeConversation?.id == id {
+                if !(activeConversation?.tags.contains(trimmed) ?? false) {
+                    activeConversation?.tags.append(trimmed)
+                }
+            }
+        }
+        if count > 0 {
+            showToast("Tagged \(count) conversation\(count == 1 ? "" : "s") with \"\(trimmed)\"", type: .success)
+        }
     }
 
     /// Merge source conversation into target: appends all messages, combines activities,

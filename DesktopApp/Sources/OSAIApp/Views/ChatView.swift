@@ -18,8 +18,9 @@ struct ChatView: View {
     @State private var showConversationSearch = false
     @State private var currentMatchIndex = 0
     @State private var showClearAllAlert = false
-    @State private var isSelecting = false
-    @State private var selectedConversationIds: Set<String> = []
+    @State private var lastSelectedConversationId: String? = nil
+    @State private var multiSelectTagText: String = ""
+    @State private var showMultiSelectTagPopover: Bool = false
     @State private var scrollToMessageId: String? = nil
     @State private var searchIncludesMessages = false
     @State private var renamingConversationId: String? = nil
@@ -1230,8 +1231,9 @@ struct ChatView: View {
                     if conv.id != sourceId {
                         appState.mergeConversations(sourceId: sourceId, targetId: conv.id)
                     }
-                } else if isSelecting {
-                    toggleSelection(conv.id)
+                } else if appState.isMultiSelectMode {
+                    let flags = NSEvent.modifierFlags
+                    toggleSelection(conv.id, shift: flags.contains(.shift), cmd: flags.contains(.command))
                 } else {
                     appState.openConversation(conv)
                 }
@@ -1489,12 +1491,33 @@ struct ChatView: View {
         )
     }
 
-    private func toggleSelection(_ id: String) {
-        if selectedConversationIds.contains(id) {
-            selectedConversationIds.remove(id)
+    private func toggleSelection(_ id: String, shift: Bool = false, cmd: Bool = false) {
+        let allIds = filteredConversations.map { $0.id }
+
+        if shift, let lastId = lastSelectedConversationId,
+           let lastIdx = allIds.firstIndex(of: lastId),
+           let currentIdx = allIds.firstIndex(of: id) {
+            // Shift+click: select range
+            let range = min(lastIdx, currentIdx)...max(lastIdx, currentIdx)
+            for i in range {
+                appState.selectedConversationIds.insert(allIds[i])
+            }
+        } else if cmd {
+            // Cmd+click: toggle individual
+            if appState.selectedConversationIds.contains(id) {
+                appState.selectedConversationIds.remove(id)
+            } else {
+                appState.selectedConversationIds.insert(id)
+            }
         } else {
-            selectedConversationIds.insert(id)
+            // Plain click in select mode: toggle individual
+            if appState.selectedConversationIds.contains(id) {
+                appState.selectedConversationIds.remove(id)
+            } else {
+                appState.selectedConversationIds.insert(id)
+            }
         }
+        lastSelectedConversationId = id
     }
 
     private func exportAllConversations() {
@@ -1522,6 +1545,38 @@ struct ChatView: View {
             }
         }
         appState.showToast("Exported \(count) conversation\(count == 1 ? "" : "s")", type: .success)
+    }
+
+    private func exportSelectedConversations() {
+        let selected = appState.conversations.filter { appState.selectedConversationIds.contains($0.id) }
+        guard !selected.isEmpty else { return }
+
+        let panel = NSOpenPanel()
+        panel.title = "Choose Export Folder"
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let folder = panel.url else { return }
+
+        var count = 0
+        for conv in selected {
+            let markdown = appState.exportConversation(conv)
+            let safeName = conv.title
+                .replacingOccurrences(of: "[^a-zA-Z0-9_ -]", with: "", options: .regularExpression)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let fileName = String(safeName.prefix(60)) + ".md"
+            let fileURL = folder.appendingPathComponent(fileName)
+            do {
+                try markdown.write(to: fileURL, atomically: true, encoding: .utf8)
+                count += 1
+            } catch {
+                // Skip failed exports
+            }
+        }
+        appState.showToast("Exported \(count) conversation\(count == 1 ? "" : "s")", type: .success)
+        appState.selectedConversationIds.removeAll()
+        appState.isMultiSelectMode = false
     }
 
     private func fileIcon(for url: URL) -> String {
@@ -2175,37 +2230,97 @@ struct ChatView: View {
         VStack(spacing: 0) {
             VStack(spacing: 0) {
                 HStack {
-                    Text("Chats")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(AppTheme.textPrimary)
-                    Spacer()
-                    Button(action: { appState.startNewChat() }) {
-                        Image(systemName: "square.and.pencil")
-                            .font(.system(size: 13))
-                            .foregroundColor(AppTheme.accent)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("New chat")
-
-                    Button(action: {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            showCalendarBrowser.toggle()
-                            if !showCalendarBrowser { calendarSelectedDate = nil }
+                    if appState.isMultiSelectMode {
+                        // Multi-select header
+                        HStack(spacing: 6) {
+                            Text("Select")
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundColor(AppTheme.textPrimary)
+                            if !appState.selectedConversationIds.isEmpty {
+                                Text("\(appState.selectedConversationIds.count)")
+                                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                                    .foregroundColor(.white)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(AppTheme.accent)
+                                    .clipShape(Capsule())
+                            }
                         }
-                    }) {
-                        Image(systemName: showCalendarBrowser ? "list.bullet" : "calendar")
-                            .font(.system(size: 13))
-                            .foregroundColor(showCalendarBrowser ? AppTheme.accent : AppTheme.textSecondary)
+                        Spacer()
+                        Button(action: {
+                            let allIds = Set(filteredConversations.map { $0.id })
+                            if appState.selectedConversationIds.isSuperset(of: allIds) {
+                                appState.selectedConversationIds.removeAll()
+                            } else {
+                                appState.selectedConversationIds.formUnion(allIds)
+                            }
+                        }) {
+                            Text(appState.selectedConversationIds.isSuperset(of: Set(filteredConversations.map { $0.id })) ? "Deselect All" : "Select All")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundColor(AppTheme.accent)
+                        }
+                        .buttonStyle(.plain)
+
+                        Button(action: {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                appState.isMultiSelectMode = false
+                                appState.selectedConversationIds.removeAll()
+                                lastSelectedConversationId = nil
+                            }
+                        }) {
+                            Text("Done")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundColor(AppTheme.accent)
+                        }
+                        .buttonStyle(.plain)
+                    } else {
+                        // Normal header
+                        Text("Chats")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundColor(AppTheme.textPrimary)
+                        Spacer()
+                        Button(action: {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                appState.isMultiSelectMode = true
+                                appState.selectedConversationIds.removeAll()
+                                lastSelectedConversationId = nil
+                            }
+                        }) {
+                            Image(systemName: "checkmark.circle")
+                                .font(.system(size: 13))
+                                .foregroundColor(AppTheme.textSecondary)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Select chats")
+
+                        Button(action: { appState.startNewChat() }) {
+                            Image(systemName: "square.and.pencil")
+                                .font(.system(size: 13))
+                                .foregroundColor(AppTheme.accent)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("New chat")
+
+                        Button(action: {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                showCalendarBrowser.toggle()
+                                if !showCalendarBrowser { calendarSelectedDate = nil }
+                            }
+                        }) {
+                            Image(systemName: showCalendarBrowser ? "list.bullet" : "calendar")
+                                .font(.system(size: 13))
+                                .foregroundColor(showCalendarBrowser ? AppTheme.accent : AppTheme.textSecondary)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(showCalendarBrowser ? "Show list view" : "Show calendar view")
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(showCalendarBrowser ? "Show list view" : "Show calendar view")
 
                     Menu {
                         Button(action: {
-                            isSelecting.toggle()
-                            if !isSelecting { selectedConversationIds.removeAll() }
+                            appState.isMultiSelectMode.toggle()
+                            if !appState.isMultiSelectMode { appState.selectedConversationIds.removeAll() }
                         }) {
-                            Label(isSelecting ? "Cancel Selection" : "Select Chats...", systemImage: "checkmark.circle")
+                            Label(appState.isMultiSelectMode ? "Cancel Selection" : "Select Chats...", systemImage: "checkmark.circle")
                         }
                         Divider()
                         Button(action: { showClearAllAlert = true }) {
@@ -2455,11 +2570,15 @@ struct ChatView: View {
                                 Section {
                                     ForEach(convs) { conv in
                                         HStack(spacing: 6) {
-                                            if isSelecting {
-                                                Image(systemName: selectedConversationIds.contains(conv.id) ? "checkmark.circle.fill" : "circle")
+                                            if appState.isMultiSelectMode {
+                                                Image(systemName: appState.selectedConversationIds.contains(conv.id) ? "checkmark.circle.fill" : "circle")
                                                     .font(.system(size: 14))
-                                                    .foregroundColor(selectedConversationIds.contains(conv.id) ? AppTheme.accent : AppTheme.textMuted)
-                                                    .onTapGesture { toggleSelection(conv.id) }
+                                                    .foregroundColor(appState.selectedConversationIds.contains(conv.id) ? AppTheme.accent : AppTheme.textMuted)
+                                                    .contentShape(Rectangle())
+                                                    .onTapGesture {
+                                                        let flags = NSEvent.modifierFlags
+                                                        toggleSelection(conv.id, shift: flags.contains(.shift), cmd: flags.contains(.command))
+                                                    }
                                             }
                                             conversationRowView(for: conv)
                                             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
@@ -2693,46 +2812,146 @@ struct ChatView: View {
                     .padding(.bottom, 4)
                 }
                 // Floating selection action bar
-                if isSelecting && !selectedConversationIds.isEmpty {
-                    HStack(spacing: 10) {
-                        Button(action: {
-                            let toDelete = appState.conversations.filter { selectedConversationIds.contains($0.id) }
-                            appState.deleteMultipleConversations(toDelete)
-                            selectedConversationIds.removeAll()
-                            isSelecting = false
-                        }) {
-                            Text("Delete Selected (\(selectedConversationIds.count))")
-                                .font(.system(size: 11, weight: .semibold))
+                if appState.isMultiSelectMode && !appState.selectedConversationIds.isEmpty {
+                    VStack(spacing: 0) {
+                        Rectangle().frame(height: 1).foregroundColor(AppTheme.borderGlass)
+                        HStack(spacing: 6) {
+                            // Delete
+                            Button(action: {
+                                appState.deleteSelectedConversations()
+                                lastSelectedConversationId = nil
+                            }) {
+                                HStack(spacing: 3) {
+                                    Image(systemName: "trash")
+                                        .font(.system(size: 10))
+                                    Text("Delete (\(appState.selectedConversationIds.count))")
+                                        .font(.system(size: 10, weight: .semibold))
+                                }
                                 .foregroundColor(.white)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 6)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 5)
                                 .background(AppTheme.error)
                                 .clipShape(Capsule())
-                        }
-                        .buttonStyle(.plain)
+                            }
+                            .buttonStyle(.plain)
 
-                        Button(action: {
-                            selectedConversationIds.removeAll()
-                            isSelecting = false
-                        }) {
-                            Text("Cancel")
-                                .font(.system(size: 11, weight: .medium))
-                                .foregroundColor(AppTheme.textSecondary)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 6)
+                            // Archive
+                            Button(action: {
+                                appState.archiveSelectedConversations()
+                                lastSelectedConversationId = nil
+                            }) {
+                                HStack(spacing: 3) {
+                                    Image(systemName: "archivebox")
+                                        .font(.system(size: 10))
+                                    Text("Archive (\(appState.selectedConversationIds.count))")
+                                        .font(.system(size: 10, weight: .semibold))
+                                }
+                                .foregroundColor(AppTheme.textPrimary)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 5)
                                 .background(AppTheme.bgCard.opacity(0.8))
                                 .clipShape(Capsule())
                                 .overlay(Capsule().stroke(AppTheme.borderGlass, lineWidth: 1))
+                            }
+                            .buttonStyle(.plain)
+
+                            // Tag
+                            Button(action: {
+                                showMultiSelectTagPopover = true
+                            }) {
+                                HStack(spacing: 3) {
+                                    Image(systemName: "tag")
+                                        .font(.system(size: 10))
+                                    Text("Tag (\(appState.selectedConversationIds.count))")
+                                        .font(.system(size: 10, weight: .semibold))
+                                }
+                                .foregroundColor(AppTheme.textPrimary)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 5)
+                                .background(AppTheme.bgCard.opacity(0.8))
+                                .clipShape(Capsule())
+                                .overlay(Capsule().stroke(AppTheme.borderGlass, lineWidth: 1))
+                            }
+                            .buttonStyle(.plain)
+                            .popover(isPresented: $showMultiSelectTagPopover) {
+                                VStack(spacing: 8) {
+                                    Text("Tag Selected")
+                                        .font(.system(size: 12, weight: .semibold))
+                                        .foregroundColor(AppTheme.textPrimary)
+
+                                    // Existing tags
+                                    if !appState.allTags.isEmpty {
+                                        ScrollView(.horizontal, showsIndicators: false) {
+                                            HStack(spacing: 4) {
+                                                ForEach(appState.allTags, id: \.self) { tag in
+                                                    Button(action: {
+                                                        appState.tagSelectedConversations(tag: tag)
+                                                        showMultiSelectTagPopover = false
+                                                    }) {
+                                                        Text(tag)
+                                                            .font(.system(size: 10, weight: .medium))
+                                                            .foregroundColor(AppTheme.accent)
+                                                            .padding(.horizontal, 8)
+                                                            .padding(.vertical, 3)
+                                                            .background(AppTheme.accent.opacity(0.15))
+                                                            .clipShape(Capsule())
+                                                    }
+                                                    .buttonStyle(.plain)
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    HStack(spacing: 4) {
+                                        TextField("New tag...", text: $multiSelectTagText)
+                                            .textFieldStyle(.plain)
+                                            .font(.system(size: 11))
+                                            .padding(.horizontal, 6)
+                                            .padding(.vertical, 4)
+                                            .background(AppTheme.bgCard.opacity(0.5))
+                                            .cornerRadius(6)
+                                            .onSubmit {
+                                                appState.tagSelectedConversations(tag: multiSelectTagText)
+                                                multiSelectTagText = ""
+                                                showMultiSelectTagPopover = false
+                                            }
+                                        Button("Add") {
+                                            appState.tagSelectedConversations(tag: multiSelectTagText)
+                                            multiSelectTagText = ""
+                                            showMultiSelectTagPopover = false
+                                        }
+                                        .font(.system(size: 11, weight: .medium))
+                                        .disabled(multiSelectTagText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                                    }
+                                }
+                                .padding(12)
+                                .frame(width: 220)
+                            }
+
+                            // Export
+                            Button(action: {
+                                exportSelectedConversations()
+                            }) {
+                                HStack(spacing: 3) {
+                                    Image(systemName: "square.and.arrow.up")
+                                        .font(.system(size: 10))
+                                    Text("Export (\(appState.selectedConversationIds.count))")
+                                        .font(.system(size: 10, weight: .semibold))
+                                }
+                                .foregroundColor(AppTheme.textPrimary)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 5)
+                                .background(AppTheme.bgCard.opacity(0.8))
+                                .clipShape(Capsule())
+                                .overlay(Capsule().stroke(AppTheme.borderGlass, lineWidth: 1))
+                            }
+                            .buttonStyle(.plain)
                         }
-                        .buttonStyle(.plain)
+                        .padding(.vertical, 8)
+                        .padding(.horizontal, 6)
+                        .frame(maxWidth: .infinity)
                     }
-                    .padding(.vertical, 8)
-                    .frame(maxWidth: .infinity)
-                    .background(AppTheme.bgSecondary.opacity(0.9))
-                    .overlay(
-                        Rectangle().frame(height: 1).foregroundColor(AppTheme.borderGlass),
-                        alignment: .top
-                    )
+                    .background(AppTheme.bgSecondary.opacity(0.95))
                 }
             }
             .frame(width: 220)

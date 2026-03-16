@@ -43,6 +43,9 @@ struct SettingsView: View {
                 // 4. Usage & Spending
                 spendingSection
 
+                // 4a. Budget
+                budgetSection
+
                 // 4b. Token Usage Chart
                 usageStatisticsSection
 
@@ -386,6 +389,140 @@ struct SettingsView: View {
                         .font(AppTheme.fontMono)
                         .foregroundColor(AppTheme.textPrimary)
                 }
+            }
+        }
+    }
+
+    // MARK: - Budget
+
+    private var budgetSection: some View {
+        SettingsSection(title: "Budget", icon: "shield.lefthalf.filled") {
+            VStack(spacing: 16) {
+                // Daily budget input
+                HStack {
+                    Text("Daily Budget")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(AppTheme.textPrimary)
+                    Spacer()
+                    HStack(spacing: 2) {
+                        Text("$")
+                            .font(AppTheme.fontMono)
+                            .foregroundColor(AppTheme.textSecondary)
+                        TextField("5.00", value: Binding(
+                            get: { appState.dailyBudget },
+                            set: { appState.dailyBudget = $0 }
+                        ), format: .number.precision(.fractionLength(2)))
+                            .font(AppTheme.fontMono)
+                            .foregroundColor(AppTheme.textPrimary)
+                            .textFieldStyle(.plain)
+                            .frame(width: 70)
+                            .multilineTextAlignment(.trailing)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(AppTheme.bgPrimary.opacity(0.3))
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                    }
+                }
+
+                // Daily progress
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Text("Today")
+                            .font(.system(size: 11))
+                            .foregroundColor(AppTheme.textMuted)
+                        Spacer()
+                        Text(String(format: "$%.2f / $%.2f (%.0f%%)", appState.costToday, appState.dailyBudget, appState.dailySpendingPercentage * 100))
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundColor(AppTheme.textSecondary)
+                    }
+                    let dp = min(appState.dailySpendingPercentage, 1.0)
+                    ProgressBar(progress: dp,
+                                color: dp > 0.8 ? AppTheme.error : dp > 0.6 ? AppTheme.warning : AppTheme.success)
+                        .frame(height: 6)
+                }
+
+                Divider().background(AppTheme.borderGlass)
+
+                // Monthly budget input
+                HStack {
+                    Text("Monthly Budget")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(AppTheme.textPrimary)
+                    Spacer()
+                    HStack(spacing: 2) {
+                        Text("$")
+                            .font(AppTheme.fontMono)
+                            .foregroundColor(AppTheme.textSecondary)
+                        TextField("100.00", value: Binding(
+                            get: { appState.monthlyBudget },
+                            set: { appState.monthlyBudget = $0 }
+                        ), format: .number.precision(.fractionLength(2)))
+                            .font(AppTheme.fontMono)
+                            .foregroundColor(AppTheme.textPrimary)
+                            .textFieldStyle(.plain)
+                            .frame(width: 70)
+                            .multilineTextAlignment(.trailing)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(AppTheme.bgPrimary.opacity(0.3))
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                    }
+                }
+
+                // Monthly progress
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Text("This Month")
+                            .font(.system(size: 11))
+                            .foregroundColor(AppTheme.textMuted)
+                        Spacer()
+                        Text(String(format: "$%.2f / $%.2f (%.0f%%)", appState.costMonth, appState.monthlyBudget, appState.monthlySpendingPercentage * 100))
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundColor(AppTheme.textSecondary)
+                    }
+                    let mp = min(appState.monthlySpendingPercentage, 1.0)
+                    ProgressBar(progress: mp,
+                                color: mp > 0.8 ? AppTheme.error : mp > 0.6 ? AppTheme.warning : AppTheme.success)
+                        .frame(height: 6)
+                }
+
+                Divider().background(AppTheme.borderGlass)
+
+                // Budget alerts toggle
+                Toggle(isOn: Binding(
+                    get: { appState.budgetAlertsEnabled },
+                    set: { appState.budgetAlertsEnabled = $0 }
+                )) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "bell.badge")
+                            .font(.system(size: 13))
+                            .foregroundColor(AppTheme.warning)
+                        Text("Budget Alerts")
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundColor(AppTheme.textPrimary)
+                    }
+                }
+                .toggleStyle(.switch)
+                .tint(AppTheme.accent)
+
+                Text("Notifies at 80% and 100% of daily/monthly budgets")
+                    .font(.system(size: 11))
+                    .foregroundColor(AppTheme.textMuted)
+
+                // Reset daily counter
+                Button(action: { appState.resetDailySpending() }) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "arrow.counterclockwise")
+                        Text("Reset Daily Counter")
+                    }
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(AppTheme.accent)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(AppTheme.accent.opacity(0.1))
+                    .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
             }
         }
     }

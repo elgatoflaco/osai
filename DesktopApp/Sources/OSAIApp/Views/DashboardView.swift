@@ -272,10 +272,11 @@ struct DashboardView: View {
             StatCard(
                 icon: "dollarsign.circle", label: "Cost today",
                 value: String(format: "$%.2f", appState.costToday),
-                color: appState.config.spendingLimits.dailyUSD > 0 && appState.costToday / appState.config.spendingLimits.dailyUSD > 0.7
+                color: appState.dailyBudget > 0 && appState.dailySpendingPercentage > 0.8
+                    ? AppTheme.error : appState.dailySpendingPercentage > 0.6
                     ? AppTheme.warning : AppTheme.accent,
-                progress: appState.config.spendingLimits.dailyUSD > 0
-                    ? appState.costToday / appState.config.spendingLimits.dailyUSD : nil
+                progress: appState.dailyBudget > 0
+                    ? appState.dailySpendingPercentage : nil
             )
             StatCard(
                 icon: "cpu", label: "Tokens today",
@@ -296,21 +297,43 @@ struct DashboardView: View {
     }
 
     private var spendingContent: some View {
-        GlassCard {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    SectionHeader(title: "Monthly Spending", icon: "chart.bar")
-                    Spacer()
-                    Text(String(format: "$%.2f / $%.0f", appState.costMonth, appState.config.spendingLimits.monthlyUSD))
-                        .font(AppTheme.fontMono)
-                        .foregroundColor(AppTheme.textSecondary)
-                }
+        VStack(spacing: 10) {
+            // Daily budget bar
+            GlassCard {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        SectionHeader(title: "Daily Budget", icon: "clock")
+                        Spacer()
+                        Text(String(format: "$%.2f / $%.2f", appState.costToday, appState.dailyBudget))
+                            .font(AppTheme.fontMono)
+                            .foregroundColor(AppTheme.textSecondary)
+                    }
 
-                let progress = appState.config.spendingLimits.monthlyUSD > 0
-                    ? min(appState.costMonth / appState.config.spendingLimits.monthlyUSD, 1.0) : 0
-                ProgressBar(progress: progress,
-                            color: progress > 0.7 ? AppTheme.warning : AppTheme.accent)
-                    .frame(height: 6)
+                    let dp = appState.dailyBudget > 0
+                        ? min(appState.dailySpendingPercentage, 1.0) : 0
+                    ProgressBar(progress: dp,
+                                color: dp > 0.8 ? AppTheme.error : dp > 0.6 ? AppTheme.warning : AppTheme.success)
+                        .frame(height: 6)
+                }
+            }
+
+            // Monthly budget bar
+            GlassCard {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        SectionHeader(title: "Monthly Budget", icon: "calendar")
+                        Spacer()
+                        Text(String(format: "$%.2f / $%.2f", appState.costMonth, appState.monthlyBudget))
+                            .font(AppTheme.fontMono)
+                            .foregroundColor(AppTheme.textSecondary)
+                    }
+
+                    let mp = appState.monthlyBudget > 0
+                        ? min(appState.monthlySpendingPercentage, 1.0) : 0
+                    ProgressBar(progress: mp,
+                                color: mp > 0.8 ? AppTheme.error : mp > 0.6 ? AppTheme.warning : AppTheme.success)
+                        .frame(height: 6)
+                }
             }
         }
     }

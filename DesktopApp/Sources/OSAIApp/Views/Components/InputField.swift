@@ -19,6 +19,8 @@ struct TaskInputField: View {
                 .font(.system(size: 15))
                 .foregroundColor(AppTheme.textPrimary)
                 .focused($fieldFocused)
+                .accessibilityLabel("Message input")
+                .accessibilityHint("Type a message and press Enter to send")
                 .onSubmit {
                     if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                         onSubmit()
@@ -346,7 +348,9 @@ struct ModelSelectorButton: View {
             .overlay(Capsule().stroke(AppTheme.borderGlass, lineWidth: 1))
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Select model, currently \(appState.selectedModelShortName)")
+        .accessibilityLabel("Select model")
+        .accessibilityValue(appState.selectedModelShortName)
+        .accessibilityHint("Double tap to change the AI model")
         .help("Change model")
         .popover(isPresented: $showPopover, arrowEdge: .top) {
             ModelSelectorPopover(isPresented: $showPopover)
@@ -555,6 +559,7 @@ struct ChatInputBar: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Prompt templates")
+                .accessibilityHint("Double tap to browse and insert prompt templates")
                 .help("Prompt templates")
                 .padding(.bottom, 2)
                 .popover(isPresented: $showTemplatePopover, arrowEdge: .top) {
@@ -589,6 +594,8 @@ struct ChatInputBar: View {
                     },
                     isBrowsingHistory: appState.isBrowsingInputHistory
                 )
+                .accessibilityLabel("Message input")
+                .accessibilityHint("Type a message and press Enter to send. Shift+Enter for new line.")
 
                 Button(action: submitIfValid) {
                     Image(systemName: "arrow.up.circle.fill")
@@ -634,6 +641,7 @@ struct ChatInputBar: View {
                 .transition(.opacity.combined(with: .move(edge: .bottom)))
                 .animation(.easeOut(duration: 0.15), value: appState.isBrowsingInputHistory)
                 .padding(.top, 4)
+                .accessibilityLabel("Browsing input history, position \(appState.inputHistoryPositionLabel)")
             }
         }
         .onChange(of: text) { _, newValue in

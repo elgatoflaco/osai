@@ -28,6 +28,9 @@ struct Sidebar: View {
             }
             .padding(.top, 28)
             .padding(.bottom, 24)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("OSAI")
+            .accessibilityAddTraits(.isHeader)
 
             // Navigation
             VStack(spacing: 4) {
@@ -53,6 +56,7 @@ struct Sidebar: View {
                 }
             }
             .padding(.horizontal, 12)
+            .accessibilityLabel("Navigation")
 
             Spacer()
 
@@ -132,6 +136,7 @@ struct Sidebar: View {
             .buttonStyle(.plain)
             .accessibilityLabel("Notifications")
             .accessibilityValue(appState.unreadNotificationCount > 0 ? "\(appState.unreadNotificationCount) unread" : "No unread")
+            .accessibilityHint("Double tap to \(appState.showNotificationPanel ? "close" : "open") notification panel")
             .help("Notifications")
             .padding(.horizontal, 16)
             .padding(.bottom, 4)
@@ -208,6 +213,7 @@ struct Sidebar: View {
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("Collapse sidebar")
+                    .accessibilityHint("Double tap to collapse the sidebar")
                     .help("Collapse sidebar")
                 }
             }
@@ -220,11 +226,13 @@ struct Sidebar: View {
                     .font(.system(size: 10, weight: .medium, design: .monospaced))
                     .foregroundColor(AppTheme.textMuted)
                     .padding(.bottom, 12)
+                    .accessibilityLabel("OSAI version 0.1")
             } else {
                 Text("v0.1")
                     .font(.system(size: 9, weight: .medium, design: .monospaced))
                     .foregroundColor(AppTheme.textMuted)
                     .padding(.bottom, 12)
+                    .accessibilityLabel("OSAI version 0.1")
             }
         }
         .frame(width: appState.sidebarCollapsed ? 64 : appState.sidebarWidth)
@@ -250,6 +258,7 @@ struct ProcessingStatusBar: View {
             VStack(spacing: 4) {
                 GhostIcon(size: 18, animate: true, isProcessing: true, tint: AppTheme.accent)
                     .opacity(pulseOpacity)
+                    .accessibilityHidden(true)
 
                 Button(action: onCancel) {
                     Image(systemName: "xmark")
@@ -261,8 +270,11 @@ struct ProcessingStatusBar: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Cancel processing")
+                .accessibilityHint("Double tap to stop the current task")
                 .help("Cancel")
             }
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Processing in progress")
             .onAppear {
                 withAnimation(.easeInOut(duration: 1.2).repeatForever(autoreverses: true)) {
                     pulseOpacity = 1.0
@@ -290,6 +302,7 @@ struct ProcessingStatusBar: View {
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("Cancel processing")
+                    .accessibilityHint("Double tap to stop the current task")
                     .help("Cancel processing")
                 }
 
@@ -318,6 +331,8 @@ struct ProcessingStatusBar: View {
                             .strokeBorder(AppTheme.accent.opacity(0.15), lineWidth: 1)
                     )
             )
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Processing in progress\(contextPressurePercent > 75 ? ", context pressure at \(contextPressurePercent) percent" : "")")
             .onAppear {
                 withAnimation(.easeInOut(duration: 1.2).repeatForever(autoreverses: true)) {
                     pulseOpacity = 1.0

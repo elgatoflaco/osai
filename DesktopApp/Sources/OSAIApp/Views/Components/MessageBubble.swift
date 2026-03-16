@@ -1069,7 +1069,13 @@ struct MessageBubble: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("You said: \(message.content)")
-        .accessibilityValue("at \(timeString(message.timestamp))")
+        .accessibilityValue("\(message.isBookmarked ? "Bookmarked. " : "")at \(timeString(message.timestamp))\(message.reaction != nil ? ". Reaction: \(reactionAccessibilityName(message.reaction!))" : "")")
+        .accessibilityAction(named: "Copy message") {
+            copyToClipboard(message.content, label: "Message")
+        }
+        .accessibilityAction(named: "Bookmark") {
+            onBookmark?()
+        }
     }
 
     // MARK: - Editing View
@@ -1201,6 +1207,7 @@ struct MessageBubble: View {
                 .buttonStyle(.plain)
                 .transition(.opacity)
                 .accessibilityLabel("Reply to this message")
+                .accessibilityHint("Double tap to quote and reply")
             }
         }
     }
@@ -1222,6 +1229,7 @@ struct MessageBubble: View {
                 .buttonStyle(.plain)
                 .transition(.opacity)
                 .accessibilityLabel(message.isBookmarked ? "Remove bookmark" : "Bookmark message")
+                .accessibilityHint(message.isBookmarked ? "Double tap to remove bookmark" : "Double tap to bookmark this message")
             }
         }
     }
@@ -1248,6 +1256,7 @@ struct MessageBubble: View {
                 .buttonStyle(.plain)
                 .transition(.opacity)
                 .accessibilityLabel("Share message")
+                .accessibilityHint("Double tap to share this message")
 
                 if onEdit != nil {
                     Button(action: {
@@ -1270,6 +1279,7 @@ struct MessageBubble: View {
                     .buttonStyle(.plain)
                     .transition(.opacity)
                     .accessibilityLabel("Edit this message")
+                    .accessibilityHint("Double tap to edit and resend")
                 }
 
                 if let onBranch = onBranch {
@@ -1290,6 +1300,7 @@ struct MessageBubble: View {
                     .buttonStyle(.plain)
                     .transition(.opacity)
                     .accessibilityLabel("Branch conversation from this message")
+                    .accessibilityHint("Double tap to create a new conversation branch")
                 }
 
                 replyActionButton
@@ -1545,6 +1556,7 @@ struct MessageBubble: View {
                             }
                             .buttonStyle(.plain)
                             .accessibilityLabel("Share message")
+                            .accessibilityHint("Double tap to share this response")
 
                             Button(action: {
                                 copyToClipboard(message.content, label: "Message")
@@ -1562,6 +1574,7 @@ struct MessageBubble: View {
                             }
                             .buttonStyle(.plain)
                             .accessibilityLabel(copied ? "Copied to clipboard" : "Copy response")
+                            .accessibilityHint("Double tap to copy message text")
 
                             if isLastAssistantMessage, let onRetry = onRetry {
                                 Button(action: onRetry) {
@@ -1578,6 +1591,7 @@ struct MessageBubble: View {
                                 }
                                 .buttonStyle(.plain)
                                 .accessibilityLabel("Retry response")
+                                .accessibilityHint("Double tap to regenerate this response")
                             }
 
                             replyActionButton
@@ -1661,7 +1675,14 @@ struct MessageBubble: View {
             }
         )
         .accessibilityElement(children: .contain)
-        .accessibilityLabel(message.isStreaming ? "Assistant is responding" : "Assistant said")
+        .accessibilityLabel(message.isStreaming ? "Assistant is responding" : "Assistant said: \(String(message.content.prefix(200)))")
+        .accessibilityValue("\(message.isBookmarked ? "Bookmarked. " : "")\(message.agentName != nil ? "Via \(message.agentName!) agent. " : "")at \(timeString(message.timestamp))\(message.reaction != nil ? ". Reaction: \(reactionAccessibilityName(message.reaction!))" : "")")
+        .accessibilityAction(named: "Copy message") {
+            copyToClipboard(message.content, label: "Message")
+        }
+        .accessibilityAction(named: "Bookmark") {
+            onBookmark?()
+        }
         .onChange(of: appState.showRawMarkdown) { _ in
             localRawMode = nil
         }
@@ -1699,7 +1720,8 @@ struct MessageBubble: View {
         .popover(isPresented: $showReactionPicker, arrowEdge: .top) {
             reactionPickerPopover
         }
-        .accessibilityLabel(message.reaction != nil ? "Change reaction" : "Add reaction")
+        .accessibilityLabel(message.reaction != nil ? "Change reaction, currently \(reactionAccessibilityName(message.reaction!))" : "Add reaction")
+        .accessibilityHint("Double tap to open reaction picker")
     }
 
     private var reactionPickerPopover: some View {
@@ -1723,11 +1745,23 @@ struct MessageBubble: View {
                         .clipShape(RoundedRectangle(cornerRadius: 8))
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel(reaction.emoji)
+                .accessibilityLabel("\(reactionAccessibilityName(reaction)) reaction\(isSelected ? ", selected" : "")")
+                .accessibilityHint(isSelected ? "Double tap to remove reaction" : "Double tap to react")
             }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
+    }
+
+    private func reactionAccessibilityName(_ reaction: MessageReaction) -> String {
+        switch reaction {
+        case .thumbsUp: return "thumbs up"
+        case .thumbsDown: return "thumbs down"
+        case .heart: return "heart"
+        case .laugh: return "laughing"
+        case .thinking: return "thinking"
+        case .party: return "party"
+        }
     }
 
     private func reactionBadge(_ reaction: MessageReaction) -> some View {
@@ -1740,6 +1774,8 @@ struct MessageBubble: View {
             .shadow(color: .black.opacity(0.1), radius: 2, y: 1)
             .scaleEffect(reactionAppeared ? 1.0 : 0.3)
             .opacity(reactionAppeared ? 1.0 : 0.0)
+            .accessibilityLabel("Reaction: \(reactionAccessibilityName(reaction))")
+            .accessibilityValue(reactionAccessibilityName(reaction))
             .onAppear {
                 withAnimation(.spring(response: 0.4, dampingFraction: 0.6)) {
                     reactionAppeared = true
@@ -2353,7 +2389,10 @@ struct RawMarkdownView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 4))
                 .overlay(RoundedRectangle(cornerRadius: 4).stroke(AppTheme.borderGlass, lineWidth: 0.5))
                 .padding(8)
+                .accessibilityHidden(true)
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Raw markdown, \(lines.count) line\(lines.count == 1 ? "" : "s")")
     }
 }
 
@@ -3082,6 +3121,13 @@ struct CodeBlockView: View {
                 .stroke(Color.white.opacity(0.08), lineWidth: 0.5)
         )
         .clipped()
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(displayLang) code block, \(lineCount) line\(lineCount == 1 ? "" : "s")")
+        .accessibilityHint("Right-click or use actions to copy code")
+        .accessibilityAction(named: "Copy code") {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(code, forType: .string)
+        }
     }
 
     // MARK: - Code Content (word wrap aware)
@@ -3156,6 +3202,8 @@ struct StreamingPlaceholder: View {
                 Text("Working...").font(.system(size: 12)).foregroundColor(AppTheme.textMuted)
             }
             .transition(.opacity.animation(.easeOut(duration: 0.25)))
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Working on tasks")
         } else {
             VStack(alignment: .leading, spacing: 6) {
                 TypingIndicator()
@@ -3164,6 +3212,8 @@ struct StreamingPlaceholder: View {
                     .foregroundColor(AppTheme.textMuted)
             }
             .transition(.opacity.animation(.easeOut(duration: 0.25)))
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Agent is thinking")
         }
     }
 }
@@ -3326,6 +3376,10 @@ struct ToolCallCard: View {
         .background(AppTheme.bgPrimary.opacity(0.4))
         .clipShape(RoundedRectangle(cornerRadius: 10))
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(AppTheme.accent.opacity(0.15), lineWidth: 0.5))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Tool call: \(name)")
+        .accessibilityValue(expanded ? "Expanded" : "Collapsed")
+        .accessibilityHint("Double tap to \(expanded ? "collapse" : "expand") result")
     }
 }
 
@@ -3980,5 +4034,6 @@ struct AgentBadge: View {
         .background(agentColor(name).opacity(0.1))
         .clipShape(Capsule())
         .overlay(Capsule().stroke(agentColor(name).opacity(0.2), lineWidth: 0.5))
+        .accessibilityLabel("Agent: \(name)")
     }
 }
