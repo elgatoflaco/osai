@@ -588,6 +588,65 @@ class AppState: ObservableObject {
         default: return 26
         }
     }
+    // MARK: - Backup & Restore
+    @AppStorage("lastBackupDate") var lastBackupDate: String = ""
+
+    /// All @AppStorage key names used by the app, for backup/restore/reset.
+    static let allSettingsKeys: [String] = [
+        "isDarkMode", "sidebarCollapsed", "hasCompletedOnboarding",
+        "globalHotkeyEnabled", "notificationsEnabled", "notificationSound",
+        "notifyOnTaskComplete", "notifyOnAgentRoute", "notifySoundEnabled",
+        "compactMode", "smartPasteEnabled", "displayDensity",
+        "dailyBudget", "monthlyBudget", "budgetAlertsEnabled",
+        "floatOnTop", "windowOpacity", "quickActionsCollapsed",
+        "textToSpeechEnabled", "sidebarWidth", "sidebarWidthPreset",
+        "timestampDisplay", "chatFontSize", "syntaxTheme",
+        "autoScrollEnabled", "codeWordWrap", "showLineNumbers",
+        "currentStreak", "longestStreak", "lastActiveDate",
+        "totalConversationsCreated", "totalMessagesCount", "dailyActivityHeatmap",
+        "showSidebarCalendar", "conversationSortOption", "conversationSortAscending",
+        "lastBackupDate"
+    ]
+
+    /// Collects all @AppStorage values into a JSON-serialized Data blob.
+    func exportSettings() -> Data {
+        var dict: [String: Any] = [:]
+        let defaults = UserDefaults.standard
+        for key in Self.allSettingsKeys {
+            if let value = defaults.object(forKey: key) {
+                // Store primitives that are JSON-safe
+                if let v = value as? Bool { dict[key] = v }
+                else if let v = value as? Int { dict[key] = v }
+                else if let v = value as? Double { dict[key] = v }
+                else if let v = value as? String { dict[key] = v }
+            }
+        }
+        dict["_exportVersion"] = 1
+        dict["_exportDate"] = ISO8601DateFormatter().string(from: Date())
+        return (try? JSONSerialization.data(withJSONObject: dict, options: [.prettyPrinted, .sortedKeys])) ?? Data()
+    }
+
+    /// Deserializes and applies all settings from a JSON Data blob.
+    func importSettings(from data: Data) {
+        guard let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+        let defaults = UserDefaults.standard
+        for key in Self.allSettingsKeys {
+            guard let value = dict[key] else { continue }
+            defaults.set(value, forKey: key)
+        }
+        // Force published properties to refresh from UserDefaults
+        objectWillChange.send()
+    }
+
+    /// Removes all UserDefaults keys used by the app, resetting to defaults.
+    func resetAllSettings() {
+        let defaults = UserDefaults.standard
+        for key in Self.allSettingsKeys {
+            defaults.removeObject(forKey: key)
+        }
+        objectWillChange.send()
+    }
+
     // MARK: - Budget Settings
     @AppStorage("dailyBudget") var dailyBudget: Double = 5.0
     @AppStorage("monthlyBudget") var monthlyBudget: Double = 100.0

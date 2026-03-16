@@ -3,6 +3,7 @@ import SwiftUI
 struct SettingsView: View {
     @EnvironmentObject var appState: AppState
     private let configService = ConfigService()
+    @State private var showResetConfirmation = false
 
     // Well-known providers to always show status for
     private let knownProviders = ["anthropic", "openai", "google", "openrouter", "xai", "deepseek"]
@@ -54,6 +55,9 @@ struct SettingsView: View {
 
                 // 5b. Notifications
                 notificationsSection
+
+                // 5c. Backup & Restore
+                backupRestoreSection
 
                 // 6. Quick Actions & Paths
                 pathsSection
@@ -1188,6 +1192,138 @@ struct SettingsView: View {
                     }
                 }
             }
+        }
+    }
+
+    // MARK: - Backup & Restore
+
+    private var backupRestoreSection: some View {
+        SettingsSection(title: "Backup & Restore", icon: "externaldrive.fill") {
+            VStack(spacing: 12) {
+                // What's included
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Included in backup:")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(AppTheme.textSecondary)
+                    HStack(spacing: 16) {
+                        ForEach(["Appearance", "Notifications", "Budgets", "Preferences"], id: \.self) { item in
+                            HStack(spacing: 4) {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .font(.system(size: 10))
+                                    .foregroundColor(AppTheme.success)
+                                Text(item)
+                                    .font(.system(size: 11))
+                                    .foregroundColor(AppTheme.textMuted)
+                            }
+                        }
+                    }
+                }
+
+                Divider().background(AppTheme.borderGlass)
+
+                // Last backup date
+                if !appState.lastBackupDate.isEmpty {
+                    HStack {
+                        Image(systemName: "clock")
+                            .font(.system(size: 11))
+                            .foregroundColor(AppTheme.textMuted)
+                        Text("Last backup: \(appState.lastBackupDate)")
+                            .font(.system(size: 12))
+                            .foregroundColor(AppTheme.textMuted)
+                        Spacer()
+                    }
+                }
+
+                // Buttons
+                HStack(spacing: 10) {
+                    // Export
+                    Button(action: {
+                        let panel = NSSavePanel()
+                        panel.title = "Export Settings"
+                        panel.nameFieldStringValue = "osai-settings.json"
+                        panel.allowedContentTypes = [.json]
+                        panel.canCreateDirectories = true
+                        if panel.runModal() == .OK, let url = panel.url {
+                            let data = appState.exportSettings()
+                            try? data.write(to: url)
+                            let formatter = DateFormatter()
+                            formatter.dateStyle = .medium
+                            formatter.timeStyle = .short
+                            appState.lastBackupDate = formatter.string(from: Date())
+                            appState.showToast("Settings exported successfully", type: .success)
+                        }
+                    }) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "square.and.arrow.up")
+                            Text("Export Settings")
+                        }
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(AppTheme.accent)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(AppTheme.accent.opacity(0.1))
+                        .clipShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+
+                    // Import
+                    Button(action: {
+                        let panel = NSOpenPanel()
+                        panel.title = "Import Settings"
+                        panel.allowedContentTypes = [.json]
+                        panel.allowsMultipleSelection = false
+                        panel.canChooseDirectories = false
+                        if panel.runModal() == .OK, let url = panel.url {
+                            if let data = try? Data(contentsOf: url) {
+                                appState.importSettings(from: data)
+                                appState.showToast("Settings imported successfully", type: .success)
+                            } else {
+                                appState.showToast("Failed to read settings file", type: .error)
+                            }
+                        }
+                    }) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "square.and.arrow.down")
+                            Text("Import Settings")
+                        }
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(AppTheme.accent)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(AppTheme.accent.opacity(0.1))
+                        .clipShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+
+                    Spacer()
+
+                    // Reset
+                    Button(action: {
+                        showResetConfirmation = true
+                    }) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "arrow.counterclockwise")
+                            Text("Reset All Settings")
+                        }
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(AppTheme.error)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(AppTheme.error.opacity(0.1))
+                        .clipShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .alert("Reset All Settings", isPresented: $showResetConfirmation) {
+            Button("Cancel", role: .cancel) {}
+            Button("Reset", role: .destructive) {
+                appState.resetAllSettings()
+                appState.showToast("All settings reset to defaults", type: .success)
+            }
+        } message: {
+            Text("This will reset all appearance, notification, budget, and preference settings to their default values. This action cannot be undone.")
         }
     }
 

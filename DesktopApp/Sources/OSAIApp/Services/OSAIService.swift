@@ -330,6 +330,7 @@ class OSAIService {
             if let rt = msg.responseTimeMs { m["responseTimeMs"] = rt }
             if let replyTo = msg.replyToMessageId { m["replyToMessageId"] = replyTo }
             if let annotation = msg.annotation { m["annotation"] = annotation }
+            if msg.isPinned { m["isPinned"] = true }
             if !msg.editHistory.isEmpty {
                 m["editHistory"] = msg.editHistory.map { record in
                     [
@@ -405,6 +406,7 @@ class OSAIService {
             }
             let replyToMessageId = m["replyToMessageId"] as? String
             let annotation = m["annotation"] as? String
+            let isPinned = m["isPinned"] as? Bool ?? false
             return ChatMessage(
                 id: msgId, role: role, content: content, timestamp: ts,
                 toolName: m["toolName"] as? String,
@@ -414,7 +416,8 @@ class OSAIService {
                 responseTimeMs: responseTimeMs,
                 editHistory: editHistory,
                 replyToMessageId: replyToMessageId,
-                annotation: annotation
+                annotation: annotation,
+                isPinned: isPinned
             )
         }
 

@@ -51,6 +51,7 @@ struct ChatView: View {
     @State private var showSnapshotNamePopover: Bool = false
     @State private var snapshotNameText: String = ""
     @State private var snapshotRestoreConfirm: ConversationSnapshot? = nil
+    @State private var showPinnedStrip: Bool = true
 
     private var filteredConversations: [Conversation] {
         var sorted = appState.sortedConversations
@@ -686,6 +687,15 @@ struct ChatView: View {
                 if showBookmarksPanel {
                     bookmarksPanel
                         .transition(.move(edge: .top).combined(with: .opacity))
+                }
+
+                // Pinned messages strip
+                if let conv = appState.activeConversation {
+                    let pinnedMessages = conv.messages.filter { $0.isPinned }
+                    if !pinnedMessages.isEmpty {
+                        pinnedMessagesStrip(pinnedMessages: pinnedMessages)
+                            .transition(.move(edge: .top).combined(with: .opacity))
+                    }
                 }
 
                 // Conversation info panel
@@ -1819,6 +1829,128 @@ struct ChatView: View {
             insertion: .move(edge: .bottom).combined(with: .opacity),
             removal: .opacity
         ))
+        .contextMenu {
+            Button(action: { togglePinMessage(msg.id) }) {
+                Label(msg.isPinned ? "Unpin Message" : "Pin Message",
+                      systemImage: msg.isPinned ? "pin.slash" : "pin")
+            }
+        }
+    }
+
+    // MARK: - Pin Message Helpers
+
+    private func togglePinMessage(_ messageId: String) {
+        // Toggle in activeConversation
+        if let msgIdx = appState.activeConversation?.messages.firstIndex(where: { $0.id == messageId }) {
+            appState.activeConversation?.messages[msgIdx].isPinned.toggle()
+        }
+        // Toggle in conversations array and persist
+        for convIdx in appState.conversations.indices {
+            if let msgIdx = appState.conversations[convIdx].messages.firstIndex(where: { $0.id == messageId }) {
+                appState.conversations[convIdx].messages[msgIdx].isPinned.toggle()
+                appState.service.saveConversation(appState.conversations[convIdx])
+                break
+            }
+        }
+    }
+
+    // MARK: - Pinned Messages Strip
+
+    @ViewBuilder
+    private func pinnedMessagesStrip(pinnedMessages: [ChatMessage]) -> some View {
+        VStack(spacing: 0) {
+            // Toggle button
+            Button(action: { withAnimation(.easeInOut(duration: 0.2)) { showPinnedStrip.toggle() } }) {
+                HStack(spacing: 6) {
+                    Image(systemName: "pin.fill")
+                        .font(.system(size: 10))
+                        .foregroundColor(AppTheme.accent)
+                    Text("Pinned Messages")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(AppTheme.textSecondary)
+                    Text("\(pinnedMessages.count)")
+                        .font(.system(size: 10, weight: .bold, design: .rounded))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1)
+                        .background(AppTheme.accent.opacity(0.8))
+                        .clipShape(Capsule())
+                    Spacer()
+                    Image(systemName: showPinnedStrip ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundColor(AppTheme.textMuted)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+            }
+            .buttonStyle(.plain)
+
+            // Collapsible pinned cards
+            if showPinnedStrip {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(pinnedMessages) { msg in
+                            pinnedMessageCard(msg)
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 8)
+                }
+            }
+        }
+        .background(AppTheme.bgCard.opacity(0.5))
+        .overlay(
+            Rectangle()
+                .frame(height: 1)
+                .foregroundColor(AppTheme.borderGlass),
+            alignment: .bottom
+        )
+    }
+
+    private func pinnedMessageCard(_ msg: ChatMessage) -> some View {
+        Button(action: { scrollToMessageId = msg.id }) {
+            HStack(spacing: 6) {
+                // Role icon
+                Image(systemName: msg.role == .user ? "person.fill" : "cpu")
+                    .font(.system(size: 10))
+                    .foregroundColor(msg.role == .user ? AppTheme.accent : AppTheme.success)
+
+                // Truncated content
+                Text(msg.content.prefix(60) + (msg.content.count > 60 ? "..." : ""))
+                    .font(.system(size: 11))
+                    .foregroundColor(AppTheme.textPrimary)
+                    .lineLimit(1)
+
+                // Timestamp
+                Text(pinnedTimeLabel(msg.timestamp))
+                    .font(.system(size: 9))
+                    .foregroundColor(AppTheme.textMuted)
+
+                // Unpin button
+                Button(action: { togglePinMessage(msg.id) }) {
+                    Image(systemName: "pin.slash.fill")
+                        .font(.system(size: 9))
+                        .foregroundColor(AppTheme.textMuted)
+                }
+                .buttonStyle(.plain)
+                .help("Unpin")
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(AppTheme.bgSecondary.opacity(0.6))
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(AppTheme.borderGlass, lineWidth: 0.5)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func pinnedTimeLabel(_ date: Date) -> String {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .abbreviated
+        return formatter.localizedString(for: date, relativeTo: Date())
     }
 
     // MARK: - Message Grouping Helpers

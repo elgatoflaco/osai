@@ -3394,14 +3394,142 @@ private struct SyntaxHighlighter {
 
 // MARK: - Code Block
 
+// MARK: - Code Execution Runner
+
+@MainActor
+final class CodeRunner: ObservableObject {
+    @Published var isRunning = false
+    @Published var output: String?
+    @Published var hasError = false
+
+    private var runTask: Task<Void, Never>?
+
+    private static let supportedLanguages: Set<String> = [
+        "bash", "sh", "zsh", "shell",
+        "python", "python3", "py",
+        "javascript", "js", "node"
+    ]
+
+    static func isRunnable(_ language: String) -> Bool {
+        supportedLanguages.contains(language.lowercased())
+    }
+
+    func run(code: String, language: String) {
+        guard !isRunning else { return }
+        isRunning = true
+        output = nil
+        hasError = false
+
+        runTask = Task {
+            let result = await Self.execute(code: code, language: language)
+            if !Task.isCancelled {
+                self.output = result.output
+                self.hasError = result.isError
+                self.isRunning = false
+            }
+        }
+    }
+
+    func cancel() {
+        runTask?.cancel()
+        isRunning = false
+    }
+
+    func clearOutput() {
+        output = nil
+        hasError = false
+    }
+
+    private static func execute(code: String, language: String) async -> (output: String, isError: Bool) {
+        let lang = language.lowercased()
+        let executable: String
+        let arguments: [String]
+
+        switch lang {
+        case "bash", "sh", "zsh", "shell":
+            executable = "/bin/zsh"
+            arguments = ["-c", code]
+        case "python", "python3", "py":
+            executable = "/usr/bin/env"
+            arguments = ["python3", "-c", code]
+        case "javascript", "js", "node":
+            executable = "/usr/bin/env"
+            arguments = ["node", "-e", code]
+        default:
+            return ("Unsupported language: \(language)", true)
+        }
+
+        return await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: executable)
+                process.arguments = arguments
+
+                // Minimal environment for safety
+                var env = ProcessInfo.processInfo.environment
+                env["HOME"] = NSHomeDirectory()
+                process.environment = env
+
+                let stdoutPipe = Pipe()
+                let stderrPipe = Pipe()
+                process.standardOutput = stdoutPipe
+                process.standardError = stderrPipe
+
+                // Timeout timer
+                let timeoutItem = DispatchWorkItem {
+                    if process.isRunning {
+                        process.terminate()
+                    }
+                }
+                DispatchQueue.global().asyncAfter(deadline: .now() + 10, execute: timeoutItem)
+
+                do {
+                    try process.run()
+                    process.waitUntilExit()
+                    timeoutItem.cancel()
+
+                    let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
+                    let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+
+                    let stdoutStr = String(data: stdoutData, encoding: .utf8) ?? ""
+                    let stderrStr = String(data: stderrData, encoding: .utf8) ?? ""
+
+                    let timedOut = process.terminationReason == .uncaughtSignal
+                    let isError = process.terminationStatus != 0 || timedOut
+
+                    var combined = ""
+                    if !stdoutStr.isEmpty { combined += stdoutStr }
+                    if !stderrStr.isEmpty {
+                        if !combined.isEmpty { combined += "\n" }
+                        combined += stderrStr
+                    }
+                    if timedOut {
+                        if !combined.isEmpty { combined += "\n" }
+                        combined += "[Timed out after 10 seconds]"
+                    }
+                    if combined.isEmpty { combined = "(no output)" }
+
+                    continuation.resume(returning: (combined.trimmingCharacters(in: .whitespacesAndNewlines), isError))
+                } catch {
+                    timeoutItem.cancel()
+                    continuation.resume(returning: ("Failed to run: \(error.localizedDescription)", true))
+                }
+            }
+        }
+    }
+}
+
 struct CodeBlockView: View {
     let code: String
     let language: String
     @State private var copied = false
     @State private var isExpanded = true
+    @State private var showRunConfirmation = false
+    @StateObject private var runner = CodeRunner()
     @AppStorage("syntaxTheme") private var syntaxThemeName: String = "Monokai"
     @AppStorage("codeWordWrap") private var codeWordWrap: Bool = false
     @AppStorage("showLineNumbers") private var showLineNumbers: Bool = true
+    @AppStorage("confirmCodeExecution") private var confirmCodeExecution: Bool = true
 
     private var currentTheme: SyntaxTheme { SyntaxTheme.named(syntaxThemeName) }
     private var lines: [String] { code.components(separatedBy: "\n") }
@@ -3412,6 +3540,7 @@ struct CodeBlockView: View {
     }
     private var langColor: Color { SyntaxHighlighter.languageColor(for: language) }
     private var displayLang: String { language.isEmpty ? "code" : language.lowercased() }
+    private var isRunnable: Bool { CodeRunner.isRunnable(language) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -3420,7 +3549,7 @@ struct CodeBlockView: View {
                 .fill(langColor.opacity(0.6))
                 .frame(height: 2)
 
-            // Header bar with language badge, line count, collapse toggle, and copy button
+            // Header bar with language badge, line count, run, collapse toggle, and copy button
             HStack(spacing: 0) {
                 // Language label (left)
                 Text(displayLang)
@@ -3430,6 +3559,84 @@ struct CodeBlockView: View {
                     .padding(.vertical, 3)
                     .background(AppTheme.accent.opacity(0.12))
                     .clipShape(RoundedRectangle(cornerRadius: 4))
+
+                // Run button (only for supported languages)
+                if isRunnable {
+                    Button(action: {
+                        if confirmCodeExecution {
+                            showRunConfirmation = true
+                        } else {
+                            runner.run(code: code, language: language)
+                        }
+                    }) {
+                        if runner.isRunning {
+                            ProgressView()
+                                .controlSize(.mini)
+                                .frame(width: 24, height: 24)
+                        } else {
+                            Image(systemName: "play.fill")
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundColor(AppTheme.success)
+                                .frame(width: 24, height: 24)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 5)
+                                        .fill(AppTheme.success.opacity(0.12))
+                                )
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(runner.isRunning)
+                    .help("Run code")
+                    .padding(.leading, 6)
+                    .popover(isPresented: $showRunConfirmation, arrowEdge: .bottom) {
+                        VStack(spacing: 10) {
+                            HStack(spacing: 6) {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                    .foregroundColor(AppTheme.warning)
+                                    .font(.system(size: 14))
+                                Text("Run this code?")
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundColor(AppTheme.textPrimary)
+                            }
+
+                            Text("This will execute the code on your machine.")
+                                .font(.system(size: 11))
+                                .foregroundColor(AppTheme.textSecondary)
+                                .multilineTextAlignment(.center)
+
+                            HStack(spacing: 8) {
+                                Button("Cancel") {
+                                    showRunConfirmation = false
+                                }
+                                .buttonStyle(.plain)
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundColor(AppTheme.textSecondary)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 5)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 6)
+                                        .fill(Color.white.opacity(0.08))
+                                )
+
+                                Button("Run") {
+                                    showRunConfirmation = false
+                                    runner.run(code: code, language: language)
+                                }
+                                .buttonStyle(.plain)
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 5)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 6)
+                                        .fill(AppTheme.success)
+                                )
+                            }
+                        }
+                        .padding(14)
+                        .background(AppTheme.bgCard)
+                    }
+                }
 
                 Spacer()
 
@@ -3522,6 +3729,11 @@ struct CodeBlockView: View {
                 }
                 .background(currentTheme.background)
             }
+
+            // Output section
+            if runner.isRunning || runner.output != nil {
+                codeOutputView
+            }
         }
         .background(currentTheme.background)
         .clipShape(RoundedRectangle(cornerRadius: 10))
@@ -3536,6 +3748,92 @@ struct CodeBlockView: View {
         .accessibilityAction(named: "Copy code") {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(code, forType: .string)
+        }
+    }
+
+    // MARK: - Output View
+
+    @ViewBuilder
+    private var codeOutputView: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Output header
+            Rectangle()
+                .fill(Color.white.opacity(0.06))
+                .frame(height: 1)
+
+            HStack(spacing: 6) {
+                Image(systemName: "terminal.fill")
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundColor(AppTheme.textMuted)
+                Text("Output")
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .foregroundColor(AppTheme.textMuted)
+
+                if runner.isRunning {
+                    ProgressView()
+                        .controlSize(.mini)
+                }
+
+                Spacer()
+
+                if runner.output != nil {
+                    // Copy output
+                    Button(action: {
+                        if let out = runner.output {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(out, forType: .string)
+                        }
+                    }) {
+                        Image(systemName: "doc.on.doc")
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundColor(AppTheme.textMuted)
+                            .frame(width: 20, height: 20)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Copy output")
+
+                    // Clear output
+                    Button(action: {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            runner.clearOutput()
+                        }
+                    }) {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundColor(AppTheme.textMuted)
+                            .frame(width: 20, height: 20)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Clear output")
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(Color.black.opacity(0.25))
+
+            // Output content
+            if let output = runner.output {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    Text(output)
+                        .font(.system(size: 12, weight: .regular, design: .monospaced))
+                        .foregroundColor(runner.hasError ? AppTheme.error : Color(red: 0.7, green: 0.9, blue: 0.7))
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: true, vertical: false)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                }
+                .frame(maxHeight: 200)
+                .background(Color.black.opacity(0.35))
+            } else if runner.isRunning {
+                HStack(spacing: 6) {
+                    Text("Running...")
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .foregroundColor(AppTheme.textMuted)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(Color.black.opacity(0.35))
+            }
         }
     }
 
