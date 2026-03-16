@@ -100,6 +100,35 @@ private func extractPreviewURLs(from text: String) -> [URL] {
     return urls
 }
 
+// MARK: - Code Block Extraction
+
+/// Extracts fenced code blocks from markdown text, returning the code content of each block.
+private func extractCodeBlocks(from text: String) -> [String] {
+    let pattern = #"```(?:\w*)\n?([\s\S]*?)```"#
+    guard let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]) else { return [] }
+    let nsText = text as NSString
+    let range = NSRange(location: 0, length: nsText.length)
+    return regex.matches(in: text, range: range).compactMap { match in
+        guard match.range(at: 1).location != NSNotFound else { return nil }
+        let code = nsText.substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
+        return code.isEmpty ? nil : code
+    }
+}
+
+/// Extracts the first http/https URL found in message text (including inside code blocks).
+private func extractFirstURL(from text: String) -> String? {
+    let pattern = #"https?://[^\s\"\]\)>',]+"#
+    guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else { return nil }
+    let range = NSRange(text.startIndex..., in: text)
+    guard let match = regex.firstMatch(in: text, range: range),
+          let r = Range(match.range, in: text) else { return nil }
+    var raw = String(text[r])
+    while raw.last == "." || raw.last == "," || raw.last == ";" || raw.last == ":" {
+        raw = String(raw.dropLast())
+    }
+    return raw
+}
+
 // MARK: - Link Preview Card
 
 struct LinkPreviewCard: View {
@@ -388,6 +417,8 @@ struct MessageBubble: View {
     @State private var appeared = false
     @State private var copied = false
     @State private var isHovered = false
+    @State private var copyToastText: String?
+    @State private var copyToastOpacity: Double = 0
     @State private var reactionBounce: MessageReaction?
     @State private var showReactionPicker = false
     @State private var reactionAppeared = false
@@ -447,6 +478,21 @@ struct MessageBubble: View {
             removal: .opacity
         ))
         .contextMenu { messageContextMenu }
+        .overlay(alignment: .top) {
+            if copyToastText != nil {
+                Text(copyToastText ?? "")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(AppTheme.accent.opacity(0.9))
+                    .clipShape(Capsule())
+                    .shadow(color: AppTheme.accent.opacity(0.3), radius: 6, y: 2)
+                    .opacity(copyToastOpacity)
+                    .allowsHitTesting(false)
+                    .padding(.top, 8)
+            }
+        }
     }
 
     // MARK: - Context Menu
@@ -454,15 +500,49 @@ struct MessageBubble: View {
     @ViewBuilder
     private var messageContextMenu: some View {
         if !message.content.isEmpty && !message.isStreaming {
-            Button(action: shareMessage) {
-                Label("Share", systemImage: "square.and.arrow.up")
+            Button(action: {
+                copyToClipboard(message.content, label: "Message")
+            }) {
+                Label("Copy Message", systemImage: "doc.on.doc")
+            }
+
+            let codeBlocks = extractCodeBlocks(from: message.content)
+            if codeBlocks.count == 1 {
+                Button(action: {
+                    copyToClipboard(codeBlocks[0], label: "Code")
+                }) {
+                    Label("Copy Code Block", systemImage: "chevron.left.forwardslash.chevron.right")
+                }
+            } else if codeBlocks.count > 1 {
+                Menu {
+                    ForEach(Array(codeBlocks.enumerated()), id: \.offset) { index, code in
+                        let preview = String(code.prefix(40)).replacingOccurrences(of: "\n", with: " ")
+                        Button(action: {
+                            copyToClipboard(code, label: "Code block \(index + 1)")
+                        }) {
+                            Label("Block \(index + 1): \(preview)\(code.count > 40 ? "..." : "")", systemImage: "chevron.left.forwardslash.chevron.right")
+                        }
+                    }
+                } label: {
+                    Label("Copy Code Block", systemImage: "chevron.left.forwardslash.chevron.right")
+                }
+            }
+
+            Button(action: {
+                copyToClipboard(message.content, label: "Markdown")
+            }) {
+                Label("Copy as Markdown", systemImage: "doc.richtext")
+            }
+
+            if let url = extractFirstURL(from: message.content) {
+                Button(action: {
+                    copyToClipboard(url, label: "Link")
+                }) {
+                    Label("Copy Link", systemImage: "link")
+                }
             }
 
             Divider()
-
-            Button(action: copyAsMarkdown) {
-                Label("Copy as Markdown", systemImage: "doc.richtext")
-            }
 
             Button(action: copyAsRichText) {
                 Label("Copy as Rich Text", systemImage: "doc.text.fill")
@@ -471,10 +551,39 @@ struct MessageBubble: View {
             Button(action: copyAsPlainText) {
                 Label("Copy as Plain Text", systemImage: "doc.plaintext")
             }
+
+            Divider()
+
+            Button(action: shareMessage) {
+                Label("Share", systemImage: "square.and.arrow.up")
+            }
         }
     }
 
     // MARK: - Sharing & Copy Actions
+
+    private func copyToClipboard(_ text: String, label: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        copied = true
+        showCopyToast("Copied!")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { copied = false }
+    }
+
+    private func showCopyToast(_ text: String) {
+        copyToastText = text
+        withAnimation(.easeIn(duration: 0.2)) {
+            copyToastOpacity = 1.0
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+            withAnimation(.easeOut(duration: 0.5)) {
+                copyToastOpacity = 0
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            copyToastText = nil
+        }
+    }
 
     private func shareMessage() {
         let label = message.role == .user ? "You:" : "Assistant:"
@@ -484,10 +593,7 @@ struct MessageBubble: View {
     }
 
     private func copyAsMarkdown() {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(message.content, forType: .string)
-        copied = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { copied = false }
+        copyToClipboard(message.content, label: "Markdown")
     }
 
     private func copyAsRichText() {
@@ -498,9 +604,9 @@ struct MessageBubble: View {
         if let rtfData = attrString.rtf(from: NSRange(location: 0, length: attrString.length), documentAttributes: [:]) {
             pb.setData(rtfData, forType: .rtf)
         }
-        // Also set plain text fallback
         pb.setString(attrString.string, forType: .string)
         copied = true
+        showCopyToast("Copied!")
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { copied = false }
     }
 
@@ -509,6 +615,7 @@ struct MessageBubble: View {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(stripped, forType: .string)
         copied = true
+        showCopyToast("Copied!")
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { copied = false }
     }
 
@@ -927,10 +1034,7 @@ struct MessageBubble: View {
                             .accessibilityLabel("Share message")
 
                             Button(action: {
-                                NSPasteboard.general.clearContents()
-                                NSPasteboard.general.setString(message.content, forType: .string)
-                                copied = true
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 2) { copied = false }
+                                copyToClipboard(message.content, label: "Message")
                             }) {
                                 HStack(spacing: 3) {
                                     Image(systemName: copied ? "checkmark" : "doc.on.doc").font(.system(size: 9))

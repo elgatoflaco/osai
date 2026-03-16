@@ -341,6 +341,30 @@ struct DailyTokenUsage: Identifiable, Codable, Equatable {
     }
 }
 
+// MARK: - Agent Status
+
+enum AgentStatus {
+    case recentlyUsed   // Used within last 24 hours
+    case available      // API key configured, ready to use
+    case noKey          // No API key for the agent's provider
+
+    var dotColor: Color {
+        switch self {
+        case .recentlyUsed: return AppTheme.success
+        case .available: return AppTheme.warning
+        case .noKey: return AppTheme.textMuted
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .recentlyUsed: return "Recently used"
+        case .available: return "Available"
+        case .noKey: return "No API key"
+        }
+    }
+}
+
 class AppState: ObservableObject {
     @AppStorage("isDarkMode") var isDarkMode: Bool = true
     @AppStorage("sidebarCollapsed") var sidebarCollapsed: Bool = false
@@ -640,6 +664,67 @@ class AppState: ObservableObject {
     @Published var showNotificationPanel: Bool = false
     @Published var selectedModel: String = "anthropic/claude-sonnet-4-20250514"
     @Published var showConversationInfo: Bool = false
+
+    // MARK: - Agent Usage Tracking
+
+    @Published var agentUsageCounts: [String: Int] = {
+        (UserDefaults.standard.dictionary(forKey: "agentUsageCounts") as? [String: Int]) ?? [:]
+    }() {
+        didSet {
+            UserDefaults.standard.set(agentUsageCounts, forKey: "agentUsageCounts")
+        }
+    }
+
+    @Published var agentLastUsed: [String: Date] = {
+        guard let data = UserDefaults.standard.data(forKey: "agentLastUsed"),
+              let decoded = try? JSONDecoder().decode([String: Date].self, from: data) else { return [:] }
+        return decoded
+    }() {
+        didSet {
+            if let data = try? JSONEncoder().encode(agentLastUsed) {
+                UserDefaults.standard.set(data, forKey: "agentLastUsed")
+            }
+        }
+    }
+
+    func recordAgentUsage(agentName: String) {
+        agentUsageCounts[agentName, default: 0] += 1
+        agentLastUsed[agentName] = Date()
+    }
+
+    func agentStatus(for agentName: String) -> AgentStatus {
+        // Check if used within last 24 hours
+        if let lastUsed = agentLastUsed[agentName],
+           Date().timeIntervalSince(lastUsed) < 86400 {
+            return .recentlyUsed
+        }
+
+        // Check if the agent's model provider has an API key
+        if let agent = agents.first(where: { $0.name == agentName }) {
+            if agent.backend == "claude-code" {
+                return .available
+            }
+            let providerKey = agent.model.split(separator: "/").first.map(String.init) ?? ""
+            if hasAPIKey(for: providerKey) {
+                return .available
+            }
+            return .noKey
+        }
+
+        return .noKey
+    }
+
+    func agentLastUsedLabel(for agentName: String) -> String? {
+        guard let lastUsed = agentLastUsed[agentName] else { return nil }
+        let elapsed = Date().timeIntervalSince(lastUsed)
+        if elapsed < 60 { return "Last used: just now" }
+        let minutes = Int(elapsed / 60)
+        if minutes < 60 { return "Last used: \(minutes)m ago" }
+        let hours = Int(elapsed / 3600)
+        if hours < 24 { return "Last used: \(hours)h ago" }
+        let days = Int(elapsed / 86400)
+        return "Last used: \(days)d ago"
+    }
 
     // MARK: - Conversation Templates
 
@@ -1333,6 +1418,7 @@ class AppState: ObservableObject {
             if activeConversation?.agentName == nil {
                 activeConversation?.agentName = agent
             }
+            recordAgentUsage(agentName: agent)
             let activity = ActivityItem(
                 id: UUID().uuidString,
                 type: .agentRoute,
@@ -1511,6 +1597,52 @@ class AppState: ObservableObject {
         if newIdx >= 0, newIdx < conversations.count {
             openConversation(conversations[newIdx])
         }
+    }
+
+    // MARK: - Conversation List Navigation
+
+    /// Selects the next conversation below the current one in the sorted list.
+    func selectNextConversation() {
+        let sorted = sortedConversations
+        guard !sorted.isEmpty else { return }
+        selectedTab = .chat
+
+        guard let active = activeConversation,
+              let currentIdx = sorted.firstIndex(where: { $0.id == active.id }) else {
+            openConversation(sorted[0])
+            return
+        }
+
+        let nextIdx = currentIdx + 1
+        if nextIdx < sorted.count {
+            openConversation(sorted[nextIdx])
+        }
+    }
+
+    /// Selects the previous conversation above the current one in the sorted list.
+    func selectPreviousConversation() {
+        let sorted = sortedConversations
+        guard !sorted.isEmpty else { return }
+        selectedTab = .chat
+
+        guard let active = activeConversation,
+              let currentIdx = sorted.firstIndex(where: { $0.id == active.id }) else {
+            openConversation(sorted[sorted.count - 1])
+            return
+        }
+
+        let prevIdx = currentIdx - 1
+        if prevIdx >= 0 {
+            openConversation(sorted[prevIdx])
+        }
+    }
+
+    /// Selects the conversation at the given 0-based index in the sorted list.
+    func selectConversationByIndex(_ index: Int) {
+        let sorted = sortedConversations
+        guard index >= 0, index < sorted.count else { return }
+        selectedTab = .chat
+        openConversation(sorted[index])
     }
 
     /// Returns the content of the last user message in the active conversation, if any.

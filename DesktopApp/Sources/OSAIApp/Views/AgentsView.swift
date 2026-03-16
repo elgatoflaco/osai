@@ -161,7 +161,12 @@ struct AgentsView: View {
                                 exportSingleAgent(agent)
                             }, onCopyToClipboard: {
                                 copyAgentToClipboard(agent)
-                            })
+                            }, onTestAgent: {
+                                testAgent(agent)
+                            },
+                            status: appState.agentStatus(for: agent.name),
+                            usageCount: appState.agentUsageCounts[agent.name] ?? 0,
+                            lastUsedLabel: appState.agentLastUsedLabel(for: agent.name))
                         }
                     }
                 }
@@ -186,7 +191,23 @@ struct AgentsView: View {
         }
     }
 
+    private func testAgent(_ agent: AgentInfo) {
+        appState.recordAgentUsage(agentName: agent.name)
+        let conv = Conversation(
+            id: UUID().uuidString,
+            title: "Test: \(agent.name)",
+            messages: [],
+            createdAt: Date(),
+            agentName: agent.name
+        )
+        appState.activeConversation = conv
+        appState.conversations.insert(conv, at: 0)
+        appState.selectedTab = .chat
+        appState.sendMessage("Hello! This is a quick test message to verify you are working correctly. Please respond with a brief confirmation and describe your role.")
+    }
+
     private func startChatWith(_ agent: AgentInfo) {
+        appState.recordAgentUsage(agentName: agent.name)
         let conv = Conversation(
             id: UUID().uuidString,
             title: "Chat with \(agent.name)",
@@ -306,24 +327,64 @@ struct AgentCard: View {
     let onDelete: () -> Void
     let onExport: () -> Void
     let onCopyToClipboard: () -> Void
+    let onTestAgent: () -> Void
+    let status: AgentStatus
+    let usageCount: Int
+    let lastUsedLabel: String?
     @State private var isHovered = false
     @State private var showConfirmDelete = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            // Top row: icon + name + actions
+            // Top row: icon + name + status dot + actions
             HStack(spacing: 12) {
-                GhostIcon(size: 36, animate: false, tint: agentColor(agent.name))
+                ZStack(alignment: .bottomTrailing) {
+                    GhostIcon(size: 36, animate: false, tint: agentColor(agent.name))
+
+                    // Status dot indicator
+                    Circle()
+                        .fill(status.dotColor)
+                        .frame(width: 10, height: 10)
+                        .overlay(
+                            Circle()
+                                .stroke(AppTheme.bgCard, lineWidth: 2)
+                        )
+                        .offset(x: 2, y: 2)
+                }
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(agent.name.capitalized)
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundColor(AppTheme.textPrimary)
-                        .lineLimit(1)
+                    HStack(spacing: 6) {
+                        Text(agent.name.capitalized)
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundColor(AppTheme.textPrimary)
+                            .lineLimit(1)
 
-                    Text(agent.backendLabel)
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundColor(AppTheme.textMuted)
+                        // Usage count badge
+                        if usageCount > 0 {
+                            Text("\(usageCount)")
+                                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                                .foregroundColor(agentColor(agent.name))
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(agentColor(agent.name).opacity(0.12))
+                                .clipShape(Capsule())
+                        }
+                    }
+
+                    HStack(spacing: 4) {
+                        Text(agent.backendLabel)
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundColor(AppTheme.textMuted)
+
+                        if let lastUsedLabel = lastUsedLabel {
+                            Text("·")
+                                .font(.system(size: 10))
+                                .foregroundColor(AppTheme.textMuted)
+                            Text(lastUsedLabel)
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundColor(status == .recentlyUsed ? AppTheme.success : AppTheme.textMuted)
+                        }
+                    }
                 }
 
                 Spacer()
@@ -404,21 +465,44 @@ struct AgentCard: View {
 
             Spacer(minLength: 0)
 
-            // Chat button
-            Button(action: onChat) {
-                HStack(spacing: 6) {
-                    Image(systemName: "bubble.left.fill")
-                        .font(.system(size: 11))
-                    Text("Chat with \(agent.name.capitalized)")
-                        .font(.system(size: 12, weight: .semibold))
+            // Action buttons row
+            HStack(spacing: 8) {
+                // Test Agent button
+                Button(action: onTestAgent) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "bolt.fill")
+                            .font(.system(size: 10))
+                        Text("Test")
+                            .font(.system(size: 11, weight: .medium))
+                    }
+                    .foregroundColor(agentColor(agent.name))
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 9)
+                    .background(agentColor(agent.name).opacity(0.1))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(agentColor(agent.name).opacity(0.25), lineWidth: 0.5)
+                    )
                 }
-                .foregroundColor(.white)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 9)
-                .background(agentColor(agent.name))
-                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .buttonStyle(.plain)
+
+                // Chat button
+                Button(action: onChat) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "bubble.left.fill")
+                            .font(.system(size: 11))
+                        Text("Chat with \(agent.name.capitalized)")
+                            .font(.system(size: 12, weight: .semibold))
+                    }
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 9)
+                    .background(agentColor(agent.name))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
         }
         .padding(16)
         .background(.ultraThinMaterial)
@@ -434,7 +518,7 @@ struct AgentCard: View {
         .onHover { isHovered = $0 }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Agent: \(agent.name.capitalized)")
-        .accessibilityValue("Model: \(agent.model)\(agent.description.isEmpty ? "" : ", \(agent.description)")")
+        .accessibilityValue("Model: \(agent.model), Status: \(status.label)\(agent.description.isEmpty ? "" : ", \(agent.description)")")
         .alert("Delete Agent", isPresented: $showConfirmDelete) {
             Button("Cancel", role: .cancel) {}
             Button("Delete", role: .destructive, action: onDelete)

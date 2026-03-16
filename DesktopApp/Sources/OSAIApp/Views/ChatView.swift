@@ -922,6 +922,45 @@ struct ChatView: View {
                 }
                 .keyboardShortcut("r", modifiers: [.command, .shift])
                 .hidden()
+
+                // Cmd+Down: Next conversation in sidebar list
+                Button("") { appState.selectNextConversation() }
+                    .keyboardShortcut(.downArrow, modifiers: .command)
+                    .hidden()
+
+                // Cmd+Up: Previous conversation in sidebar list
+                Button("") { appState.selectPreviousConversation() }
+                    .keyboardShortcut(.upArrow, modifiers: .command)
+                    .hidden()
+
+                // Ctrl+1 through Ctrl+9: Jump to conversation by position
+                Button("") { appState.selectConversationByIndex(0) }
+                    .keyboardShortcut("1", modifiers: .control)
+                    .hidden()
+                Button("") { appState.selectConversationByIndex(1) }
+                    .keyboardShortcut("2", modifiers: .control)
+                    .hidden()
+                Button("") { appState.selectConversationByIndex(2) }
+                    .keyboardShortcut("3", modifiers: .control)
+                    .hidden()
+                Button("") { appState.selectConversationByIndex(3) }
+                    .keyboardShortcut("4", modifiers: .control)
+                    .hidden()
+                Button("") { appState.selectConversationByIndex(4) }
+                    .keyboardShortcut("5", modifiers: .control)
+                    .hidden()
+                Button("") { appState.selectConversationByIndex(5) }
+                    .keyboardShortcut("6", modifiers: .control)
+                    .hidden()
+                Button("") { appState.selectConversationByIndex(6) }
+                    .keyboardShortcut("7", modifiers: .control)
+                    .hidden()
+                Button("") { appState.selectConversationByIndex(7) }
+                    .keyboardShortcut("8", modifiers: .control)
+                    .hidden()
+                Button("") { appState.selectConversationByIndex(8) }
+                    .keyboardShortcut("9", modifiers: .control)
+                    .hidden()
             }
         )
         .sheet(isPresented: $appState.showExportSheet) {
