@@ -2,16 +2,23 @@ import Foundation
 
 class OSAIService {
     private let binaryPath: String = {
-        // 1. Look inside the app bundle first
+        // 1. Look in Contents/Helpers/ inside the app bundle
+        if let bundleURL = Bundle.main.bundleURL as URL? {
+            let helpersPath = bundleURL.appendingPathComponent("Contents/Helpers/osai").path
+            if FileManager.default.isExecutableFile(atPath: helpersPath) {
+                return helpersPath
+            }
+        }
+        // 2. Look inside Contents/MacOS/
         if let bundlePath = Bundle.main.path(forAuxiliaryExecutable: "osai") {
             return bundlePath
         }
-        // 2. Check ~/.desktop-agent/DesktopAgent
+        // 3. Check ~/.desktop-agent/DesktopAgent
         let homeBinary = NSHomeDirectory() + "/.desktop-agent/DesktopAgent"
         if FileManager.default.isExecutableFile(atPath: homeBinary) {
             return homeBinary
         }
-        // 3. Fallback to /usr/local/bin/osai
+        // 4. Fallback to /usr/local/bin/osai
         return "/usr/local/bin/osai"
     }()
     private let configDir = NSHomeDirectory() + "/.desktop-agent"
