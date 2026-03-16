@@ -79,15 +79,14 @@ struct ToastView: View {
     }
 }
 
-// MARK: - Onboarding View (Multi-Step)
+// MARK: - Onboarding View (Multi-Step Tutorial)
 
 struct OnboardingView: View {
     @EnvironmentObject var appState: AppState
     @State private var showContent = false
     @State private var currentStep = 0
-    @State private var anthropicKey = ""
-    @State private var openAIKey = ""
     @State private var slideDirection: Edge = .trailing
+    @State private var ghostBounce = false
 
     private let totalSteps = 5
 
@@ -100,19 +99,32 @@ struct OnboardingView: View {
 
             // Modal card
             VStack(spacing: 0) {
+                // Skip Tutorial button — always visible at top-right
+                HStack {
+                    Spacer()
+                    Button(action: completeOnboarding) {
+                        Text("Skip Tutorial")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(AppTheme.textMuted)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.top, 16)
+                    .padding(.trailing, 20)
+                }
+
                 // Step content area
                 ZStack {
                     switch currentStep {
                     case 0: onboardingWelcome.transition(.asymmetric(
                         insertion: .move(edge: .trailing).combined(with: .opacity),
                         removal: .move(edge: .leading).combined(with: .opacity)))
-                    case 1: onboardingAPIKeys.transition(.asymmetric(
+                    case 1: onboardingChat.transition(.asymmetric(
                         insertion: .move(edge: slideDirection).combined(with: .opacity),
                         removal: .move(edge: slideDirection == .trailing ? .leading : .trailing).combined(with: .opacity)))
-                    case 2: onboardingStyle.transition(.asymmetric(
+                    case 2: onboardingAgents.transition(.asymmetric(
                         insertion: .move(edge: slideDirection).combined(with: .opacity),
                         removal: .move(edge: slideDirection == .trailing ? .leading : .trailing).combined(with: .opacity)))
-                    case 3: onboardingTour.transition(.asymmetric(
+                    case 3: onboardingCustomize.transition(.asymmetric(
                         insertion: .move(edge: slideDirection).combined(with: .opacity),
                         removal: .move(edge: slideDirection == .trailing ? .leading : .trailing).combined(with: .opacity)))
                     case 4: onboardingReady.transition(.asymmetric(
@@ -182,11 +194,11 @@ struct OnboardingView: View {
 
             Spacer()
 
-            // Next / finish button (hidden on last step since it has its own CTA)
+            // Next button (hidden on last step since it has its own CTA)
             if currentStep < totalSteps - 1 {
                 Button(action: goNext) {
                     HStack(spacing: 4) {
-                        Text(currentStep == 1 ? "Skip" : "Next")
+                        Text("Next")
                             .font(.system(size: 13, weight: .medium))
                         Image(systemName: "chevron.right")
                             .font(.system(size: 11, weight: .semibold))
@@ -225,13 +237,20 @@ struct OnboardingView: View {
         }
     }
 
-    // MARK: - Step 1: Welcome
+    // MARK: - Step 1: Welcome to OSAI
 
     private var onboardingWelcome: some View {
         VStack(spacing: 0) {
-            Spacer().frame(height: 40)
+            Spacer().frame(height: 28)
 
+            // Animated ghost icon
             GhostIcon(size: 96)
+                .offset(y: ghostBounce ? -6 : 6)
+                .animation(
+                    .easeInOut(duration: 1.4).repeatForever(autoreverses: true),
+                    value: ghostBounce
+                )
+                .onAppear { ghostBounce = true }
                 .padding(.bottom, 24)
 
             Text("Welcome to OSAI")
@@ -242,7 +261,28 @@ struct OnboardingView: View {
             Text("Your AI-powered desktop assistant")
                 .font(.system(size: 16, weight: .regular))
                 .foregroundColor(AppTheme.textSecondary)
-                .padding(.bottom, 32)
+                .padding(.bottom, 20)
+
+            // App overview highlights
+            VStack(spacing: 12) {
+                OnboardingFeatureRow(
+                    icon: "bubble.left.and.bubble.right.fill",
+                    title: "Natural conversations",
+                    subtitle: "Chat with AI right from your desktop"
+                )
+                OnboardingFeatureRow(
+                    icon: "cpu.fill",
+                    title: "Specialized agents",
+                    subtitle: "Expert agents for coding, writing, research, and more"
+                )
+                OnboardingFeatureRow(
+                    icon: "wand.and.stars",
+                    title: "Fully customizable",
+                    subtitle: "Themes, shortcuts, and workflows tailored to you"
+                )
+            }
+            .padding(.horizontal, 32)
+            .padding(.bottom, 24)
 
             Button(action: goNext) {
                 Text("Get Started")
@@ -256,283 +296,101 @@ struct OnboardingView: View {
             }
             .buttonStyle(.plain)
 
-            Spacer().frame(height: 40)
-        }
-        .padding(.horizontal, 40)
-    }
-
-    // MARK: - Step 2: API Key Setup
-
-    private var onboardingAPIKeys: some View {
-        VStack(spacing: 0) {
-            Spacer().frame(height: 32)
-
-            Image(systemName: "key.fill")
-                .font(.system(size: 36))
-                .foregroundColor(AppTheme.accent)
-                .padding(.bottom, 16)
-
-            Text("Connect Your AI Providers")
-                .font(.system(size: 24, weight: .bold, design: .rounded))
-                .foregroundColor(AppTheme.textPrimary)
-                .padding(.bottom, 6)
-
-            Text("Enter API keys to unlock AI capabilities. You can always add more later in Settings.")
-                .font(.system(size: 13))
-                .foregroundColor(AppTheme.textSecondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 20)
-                .padding(.bottom, 24)
-
-            VStack(spacing: 16) {
-                // Anthropic key
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack(spacing: 6) {
-                        Circle()
-                            .fill(anthropicKey.isEmpty ? AppTheme.textMuted.opacity(0.3) : AppTheme.success)
-                            .frame(width: 8, height: 8)
-                        Text("Anthropic")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundColor(AppTheme.textPrimary)
-                    }
-                    SecureField("sk-ant-...", text: $anthropicKey)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 13, design: .monospaced))
-                        .padding(10)
-                        .background(AppTheme.bgPrimary.opacity(0.5))
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 8)
-                                .stroke(anthropicKey.isEmpty ? AppTheme.borderGlass : AppTheme.accent.opacity(0.5), lineWidth: 1)
-                        )
-                }
-
-                // OpenAI key
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack(spacing: 6) {
-                        Circle()
-                            .fill(openAIKey.isEmpty ? AppTheme.textMuted.opacity(0.3) : AppTheme.success)
-                            .frame(width: 8, height: 8)
-                        Text("OpenAI")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundColor(AppTheme.textPrimary)
-                    }
-                    SecureField("sk-...", text: $openAIKey)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 13, design: .monospaced))
-                        .padding(10)
-                        .background(AppTheme.bgPrimary.opacity(0.5))
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 8)
-                                .stroke(openAIKey.isEmpty ? AppTheme.borderGlass : AppTheme.accent.opacity(0.5), lineWidth: 1)
-                        )
-                }
-            }
-            .padding(.horizontal, 32)
-            .padding(.bottom, 16)
-
-            // Save keys button (only if at least one key entered)
-            if !anthropicKey.isEmpty || !openAIKey.isEmpty {
-                Button(action: {
-                    saveOnboardingKeys()
-                    goNext()
-                }) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "checkmark.circle.fill")
-                            .font(.system(size: 14))
-                        Text("Save & Continue")
-                            .font(.system(size: 14, weight: .semibold))
-                    }
-                    .foregroundColor(.white)
-                    .frame(maxWidth: 200)
-                    .padding(.vertical, 10)
-                    .background(AppTheme.success)
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
-                }
-                .buttonStyle(.plain)
-                .padding(.bottom, 8)
-            }
-
-            // Hint
-            HStack(spacing: 6) {
-                Image(systemName: "link")
-                    .font(.system(size: 11))
-                    .foregroundColor(AppTheme.textMuted)
-                Text("Get an API key from your provider's dashboard")
-                    .font(.system(size: 11))
-                    .foregroundColor(AppTheme.textMuted)
-            }
-            .padding(.bottom, 6)
-
-            Text("You can also use: osai config set-key <provider> <key>")
-                .font(.system(size: 10, design: .monospaced))
-                .foregroundColor(AppTheme.textMuted.opacity(0.7))
-
-            Spacer().frame(height: 24)
+            Spacer().frame(height: 28)
         }
         .padding(.horizontal, 8)
     }
 
-    private func saveOnboardingKeys() {
-        let configDir = NSString("~/.desktop-agent").expandingTildeInPath
-        let configPath = "\(configDir)/config.json"
+    // MARK: - Step 2: Chat with AI
 
-        guard let data = FileManager.default.contents(atPath: configPath),
-              var json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
-
-        var apiKeys = json["api_keys"] as? [String: [String: Any]] ?? [:]
-
-        if !anthropicKey.isEmpty {
-            apiKeys["anthropic"] = ["api_key": anthropicKey]
-        }
-        if !openAIKey.isEmpty {
-            apiKeys["openai"] = ["api_key": openAIKey]
-        }
-
-        json["api_keys"] = apiKeys
-
-        if let newData = try? JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys]) {
-            try? newData.write(to: URL(fileURLWithPath: configPath))
-        }
-
-        // Reload config to pick up new keys
-        appState.loadAll()
-    }
-
-    // MARK: - Step 3: Choose Your Style
-
-    private var onboardingStyle: some View {
+    private var onboardingChat: some View {
         VStack(spacing: 0) {
-            Spacer().frame(height: 32)
+            Spacer().frame(height: 28)
 
-            Image(systemName: "paintbrush.fill")
-                .font(.system(size: 36))
-                .foregroundColor(AppTheme.accent)
+            Image(systemName: "bubble.left.and.bubble.right.fill")
+                .font(.system(size: 40))
+                .foregroundStyle(
+                    LinearGradient(
+                        colors: [AppTheme.accent, AppTheme.accent.opacity(0.6)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
                 .padding(.bottom, 16)
 
-            Text("Choose Your Style")
+            Text("Chat with AI")
                 .font(.system(size: 24, weight: .bold, design: .rounded))
                 .foregroundColor(AppTheme.textPrimary)
                 .padding(.bottom, 6)
 
-            Text("Make OSAI feel like yours")
+            Text("Have natural conversations with powerful AI models. Ask questions, get help with tasks, or brainstorm ideas.")
                 .font(.system(size: 13))
                 .foregroundColor(AppTheme.textSecondary)
-                .padding(.bottom, 28)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 28)
+                .padding(.bottom, 24)
 
-            // Dark/Light mode toggle
-            VStack(spacing: 20) {
-                HStack {
-                    HStack(spacing: 10) {
-                        Image(systemName: appState.isDarkMode ? "moon.fill" : "sun.max.fill")
-                            .font(.system(size: 16))
-                            .foregroundColor(AppTheme.accent)
-                        Text(appState.isDarkMode ? "Dark Mode" : "Light Mode")
-                            .font(.system(size: 14, weight: .medium))
+            // Screenshot-style chat mockup
+            VStack(spacing: 10) {
+                // AI message
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "ghost.fill")
+                        .font(.system(size: 14))
+                        .foregroundColor(AppTheme.accent)
+                        .frame(width: 26, height: 26)
+                        .background(AppTheme.accent.opacity(0.15))
+                        .clipShape(Circle())
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("OSAI")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundColor(AppTheme.textMuted)
+                        Text("Hello! I can help you write code, research topics, draft emails, and much more. What would you like to do?")
+                            .font(.system(size: 11))
                             .foregroundColor(AppTheme.textPrimary)
+                            .padding(10)
+                            .background(AppTheme.bgPrimary.opacity(0.5))
+                            .clipShape(RoundedRectangle(cornerRadius: 10))
                     }
                     Spacer()
-                    Toggle("", isOn: $appState.isDarkMode)
-                        .toggleStyle(.switch)
-                        .tint(AppTheme.accent)
-                        .labelsHidden()
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
-                .background(AppTheme.bgPrimary.opacity(0.3))
-                .clipShape(RoundedRectangle(cornerRadius: 10))
 
-                // Accent color picker
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Accent Color")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundColor(AppTheme.textPrimary)
-
-                    HStack(spacing: 14) {
-                        ForEach(accentColorPresets) { preset in
-                            Button(action: {
-                                appState.changeAccentColor(preset.id)
-                            }) {
-                                ZStack {
-                                    Circle()
-                                        .fill(preset.color)
-                                        .frame(width: 32, height: 32)
-                                        .shadow(color: appState.selectedAccentColor == preset.id
-                                                ? preset.color.opacity(0.6) : .clear,
-                                                radius: 6)
-
-                                    if appState.selectedAccentColor == preset.id {
-                                        Circle()
-                                            .stroke(Color.white, lineWidth: 2.5)
-                                            .frame(width: 32, height: 32)
-                                        Image(systemName: "checkmark")
-                                            .font(.system(size: 13, weight: .bold))
-                                            .foregroundColor(.white)
-                                    }
-                                }
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
-                .background(AppTheme.bgPrimary.opacity(0.3))
-                .clipShape(RoundedRectangle(cornerRadius: 10))
-
-                // Preview strip
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Preview")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundColor(AppTheme.textMuted)
-
-                    HStack(spacing: 12) {
-                        // Simulated mini sidebar
-                        VStack(spacing: 6) {
-                            RoundedRectangle(cornerRadius: 4)
-                                .fill(AppTheme.accent.opacity(0.2))
-                                .frame(width: 50, height: 14)
-                            RoundedRectangle(cornerRadius: 4)
-                                .fill(AppTheme.accent)
-                                .frame(width: 50, height: 14)
-                            RoundedRectangle(cornerRadius: 4)
-                                .fill(AppTheme.accent.opacity(0.2))
-                                .frame(width: 50, height: 14)
-                        }
-                        .padding(8)
-                        .background(AppTheme.bgSecondary)
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
-
-                        // Simulated chat area
-                        VStack(alignment: .leading, spacing: 6) {
-                            HStack {
-                                RoundedRectangle(cornerRadius: 8)
-                                    .fill(AppTheme.accent.opacity(0.15))
-                                    .frame(width: 120, height: 22)
-                                Spacer()
-                            }
-                            HStack {
-                                Spacer()
-                                RoundedRectangle(cornerRadius: 8)
-                                    .fill(AppTheme.accent.opacity(0.3))
-                                    .frame(width: 100, height: 22)
-                            }
-                            RoundedRectangle(cornerRadius: 6)
-                                .fill(AppTheme.bgPrimary.opacity(0.5))
-                                .frame(height: 20)
-                        }
+                // User message
+                HStack {
+                    Spacer()
+                    Text("Help me write a Python script")
+                        .font(.system(size: 11))
+                        .foregroundColor(.white)
                         .padding(10)
-                        .background(AppTheme.bgCard)
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
-                    }
-                    .frame(height: 80)
+                        .background(AppTheme.accent)
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
-                .background(AppTheme.bgPrimary.opacity(0.3))
-                .clipShape(RoundedRectangle(cornerRadius: 10))
+
+                // Input bar mockup
+                HStack(spacing: 8) {
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(AppTheme.bgPrimary.opacity(0.5))
+                        .frame(height: 28)
+                        .overlay(
+                            HStack {
+                                Text("Type a message...")
+                                    .font(.system(size: 10))
+                                    .foregroundColor(AppTheme.textMuted)
+                                    .padding(.leading, 10)
+                                Spacer()
+                            }
+                        )
+                    Image(systemName: "paperplane.fill")
+                        .font(.system(size: 12))
+                        .foregroundColor(AppTheme.accent)
+                }
             }
+            .padding(14)
+            .background(AppTheme.bgCard)
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(AppTheme.borderGlass, lineWidth: 1)
+            )
             .padding(.horizontal, 32)
 
             Spacer().frame(height: 28)
@@ -540,41 +398,53 @@ struct OnboardingView: View {
         .padding(.horizontal, 8)
     }
 
-    // MARK: - Step 4: Quick Tour
+    // MARK: - Step 3: Meet Your Agents
 
-    private var onboardingTour: some View {
+    private var onboardingAgents: some View {
         VStack(spacing: 0) {
-            Spacer().frame(height: 32)
+            Spacer().frame(height: 28)
 
-            Image(systemName: "sparkles")
-                .font(.system(size: 36))
-                .foregroundColor(AppTheme.accent)
-                .padding(.bottom, 16)
+            // Agents icon composition
+            ZStack {
+                Image(systemName: "person.3.fill")
+                    .font(.system(size: 36))
+                    .foregroundStyle(
+                        LinearGradient(
+                            colors: [AppTheme.accent, .purple],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+            }
+            .padding(.bottom, 16)
 
-            Text("What You Can Do")
+            Text("Meet Your Agents")
                 .font(.system(size: 24, weight: .bold, design: .rounded))
                 .foregroundColor(AppTheme.textPrimary)
                 .padding(.bottom, 6)
 
-            Text("A quick look at your superpowers")
+            Text("Specialized AI agents are automatically dispatched based on your intent. Each one is an expert in its domain.")
                 .font(.system(size: 13))
                 .foregroundColor(AppTheme.textSecondary)
-                .padding(.bottom, 28)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 28)
+                .padding(.bottom, 24)
 
+            // Agent cards grid
             VStack(spacing: 0) {
                 OnboardingFeatureRow(
-                    icon: "bubble.left.and.bubble.right.fill",
-                    title: "Chat with AI agents",
-                    subtitle: "Converse with multiple AI models, auto-routed to the best agent"
+                    icon: "chevron.left.forwardslash.chevron.right",
+                    title: "Product Agent",
+                    subtitle: "Code generation, debugging, and technical problem solving"
                 )
                 .padding(.vertical, 14)
 
                 Divider().background(AppTheme.borderGlass)
 
                 OnboardingFeatureRow(
-                    icon: "gearshape.2.fill",
-                    title: "Automate your Mac",
-                    subtitle: "Run shell commands, manage files, and control apps with AI"
+                    icon: "doc.text.fill",
+                    title: "Writer Agent",
+                    subtitle: "Draft emails, articles, summaries, and creative content"
                 )
                 .padding(.vertical, 14)
 
@@ -582,17 +452,17 @@ struct OnboardingView: View {
 
                 OnboardingFeatureRow(
                     icon: "magnifyingglass",
-                    title: "Research anything",
-                    subtitle: "Search the web, summarize articles, and gather information"
+                    title: "Research Agent",
+                    subtitle: "Search the web, analyze data, and gather information"
                 )
                 .padding(.vertical, 14)
 
                 Divider().background(AppTheme.borderGlass)
 
                 OnboardingFeatureRow(
-                    icon: "calendar.badge.clock",
-                    title: "Schedule tasks",
-                    subtitle: "Set up recurring AI jobs that run on autopilot"
+                    icon: "tray.full.fill",
+                    title: "Organizer Agent",
+                    subtitle: "Manage tasks, schedule events, and keep things tidy"
                 )
                 .padding(.vertical, 14)
             }
@@ -606,11 +476,157 @@ struct OnboardingView: View {
         .padding(.horizontal, 8)
     }
 
-    // MARK: - Step 5: Ready
+    // MARK: - Step 4: Customize Everything
+
+    private var onboardingCustomize: some View {
+        VStack(spacing: 0) {
+            Spacer().frame(height: 28)
+
+            Image(systemName: "slider.horizontal.3")
+                .font(.system(size: 40))
+                .foregroundStyle(
+                    LinearGradient(
+                        colors: [AppTheme.accent, .orange],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .padding(.bottom, 16)
+
+            Text("Customize Everything")
+                .font(.system(size: 24, weight: .bold, design: .rounded))
+                .foregroundColor(AppTheme.textPrimary)
+                .padding(.bottom, 6)
+
+            Text("Make OSAI truly yours with deep customization options.")
+                .font(.system(size: 13))
+                .foregroundColor(AppTheme.textSecondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 28)
+                .padding(.bottom, 24)
+
+            VStack(spacing: 14) {
+                // Theme row
+                HStack(spacing: 12) {
+                    Image(systemName: "paintpalette.fill")
+                        .font(.system(size: 16))
+                        .foregroundColor(AppTheme.accent)
+                        .frame(width: 32, height: 32)
+                        .background(AppTheme.accent.opacity(0.1))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Themes & Colors")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundColor(AppTheme.textPrimary)
+                        Text("Dark/light mode, 7 accent colors")
+                            .font(.system(size: 11))
+                            .foregroundColor(AppTheme.textSecondary)
+                    }
+                    Spacer()
+                    // Mini accent color dots
+                    HStack(spacing: 4) {
+                        ForEach(accentColorPresets.prefix(5)) { preset in
+                            Circle()
+                                .fill(preset.color)
+                                .frame(width: 10, height: 10)
+                        }
+                    }
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+                .background(AppTheme.bgPrimary.opacity(0.3))
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+
+                // Density row
+                HStack(spacing: 12) {
+                    Image(systemName: "text.alignleft")
+                        .font(.system(size: 16))
+                        .foregroundColor(.purple)
+                        .frame(width: 32, height: 32)
+                        .background(Color.purple.opacity(0.1))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Display Density")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundColor(AppTheme.textPrimary)
+                        Text("Compact, comfortable, or spacious layout")
+                            .font(.system(size: 11))
+                            .foregroundColor(AppTheme.textSecondary)
+                    }
+                    Spacer()
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+                .background(AppTheme.bgPrimary.opacity(0.3))
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+
+                // Font row
+                HStack(spacing: 12) {
+                    Image(systemName: "textformat.size")
+                        .font(.system(size: 16))
+                        .foregroundColor(.blue)
+                        .frame(width: 32, height: 32)
+                        .background(Color.blue.opacity(0.1))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Font & Typography")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundColor(AppTheme.textPrimary)
+                        Text("Adjustable chat font size, code syntax themes")
+                            .font(.system(size: 11))
+                            .foregroundColor(AppTheme.textSecondary)
+                    }
+                    Spacer()
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+                .background(AppTheme.bgPrimary.opacity(0.3))
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+
+                // Keyboard shortcuts row
+                HStack(spacing: 12) {
+                    Image(systemName: "keyboard.fill")
+                        .font(.system(size: 16))
+                        .foregroundColor(.orange)
+                        .frame(width: 32, height: 32)
+                        .background(Color.orange.opacity(0.1))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Keyboard Shortcuts")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundColor(AppTheme.textPrimary)
+                        HStack(spacing: 4) {
+                            Text("Summon with")
+                                .font(.system(size: 11))
+                                .foregroundColor(AppTheme.textSecondary)
+                            Text("Cmd+Shift+Space")
+                                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                                .foregroundColor(AppTheme.accent)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(AppTheme.accent.opacity(0.1))
+                                .clipShape(RoundedRectangle(cornerRadius: 4))
+                        }
+                    }
+                    Spacer()
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+                .background(AppTheme.bgPrimary.opacity(0.3))
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+            }
+            .padding(.horizontal, 32)
+
+            Spacer().frame(height: 28)
+        }
+        .padding(.horizontal, 8)
+    }
+
+    // MARK: - Step 5: You're Ready!
 
     private var onboardingReady: some View {
         VStack(spacing: 0) {
-            Spacer().frame(height: 36)
+            Spacer().frame(height: 28)
 
             // Starburst effect
             ZStack {
@@ -623,37 +639,96 @@ struct OnboardingView: View {
                 GhostIcon(size: 80)
             }
             .frame(width: 160, height: 160)
-            .padding(.bottom, 20)
+            .padding(.bottom, 16)
 
-            Text("You're All Set!")
+            Text("You're Ready!")
                 .font(.system(size: 28, weight: .bold, design: .rounded))
                 .foregroundColor(AppTheme.textPrimary)
                 .padding(.bottom, 8)
 
-            Text("OSAI is ready to assist you. Start a conversation or explore the dashboard.")
+            Text("OSAI is set up and ready to assist you. Choose how you'd like to begin:")
                 .font(.system(size: 14))
                 .foregroundColor(AppTheme.textSecondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 40)
-                .padding(.bottom, 32)
+                .padding(.bottom, 28)
 
-            Button(action: completeOnboarding) {
-                HStack(spacing: 8) {
-                    Image(systemName: "paperplane.fill")
-                        .font(.system(size: 14))
-                    Text("Start Chatting")
-                        .font(.system(size: 16, weight: .semibold))
+            // Quick action buttons
+            VStack(spacing: 12) {
+                Button(action: {
+                    completeOnboarding()
+                }) {
+                    HStack(spacing: 10) {
+                        Image(systemName: "paperplane.fill")
+                            .font(.system(size: 14))
+                        Text("Start Chatting")
+                            .font(.system(size: 15, weight: .semibold))
+                        Spacer()
+                        Image(systemName: "arrow.right")
+                            .font(.system(size: 12, weight: .semibold))
+                    }
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 14)
+                    .background(AppTheme.accent)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .shadow(color: AppTheme.accent.opacity(0.4), radius: 12, x: 0, y: 6)
                 }
-                .foregroundColor(.white)
-                .frame(maxWidth: 240)
-                .padding(.vertical, 14)
-                .background(AppTheme.accent)
-                .clipShape(RoundedRectangle(cornerRadius: 12))
-                .shadow(color: AppTheme.accent.opacity(0.4), radius: 16, x: 0, y: 8)
-            }
-            .buttonStyle(.plain)
+                .buttonStyle(.plain)
 
-            Spacer().frame(height: 36)
+                Button(action: {
+                    appState.selectedTab = .agents
+                    completeOnboarding()
+                }) {
+                    HStack(spacing: 10) {
+                        Image(systemName: "person.3.fill")
+                            .font(.system(size: 14))
+                        Text("Explore Agents")
+                            .font(.system(size: 15, weight: .medium))
+                        Spacer()
+                        Image(systemName: "arrow.right")
+                            .font(.system(size: 12, weight: .semibold))
+                    }
+                    .foregroundColor(AppTheme.textPrimary)
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 14)
+                    .background(AppTheme.bgPrimary.opacity(0.5))
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(AppTheme.borderGlass, lineWidth: 1)
+                    )
+                }
+                .buttonStyle(.plain)
+
+                Button(action: {
+                    appState.selectedTab = .settings
+                    completeOnboarding()
+                }) {
+                    HStack(spacing: 10) {
+                        Image(systemName: "gearshape.fill")
+                            .font(.system(size: 14))
+                        Text("Open Settings")
+                            .font(.system(size: 15, weight: .medium))
+                        Spacer()
+                        Image(systemName: "arrow.right")
+                            .font(.system(size: 12, weight: .semibold))
+                    }
+                    .foregroundColor(AppTheme.textPrimary)
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 14)
+                    .background(AppTheme.bgPrimary.opacity(0.5))
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(AppTheme.borderGlass, lineWidth: 1)
+                    )
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 32)
+
+            Spacer().frame(height: 28)
         }
         .padding(.horizontal, 8)
     }

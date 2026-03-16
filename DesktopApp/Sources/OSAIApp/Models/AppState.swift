@@ -582,6 +582,7 @@ class AppState: ObservableObject {
     @AppStorage("notifySoundEnabled") var notifySoundEnabled: Bool = true
     @AppStorage("compactMode") var compactMode: Bool = false
     @AppStorage("smartPasteEnabled") var smartPasteEnabled: Bool = true
+    @AppStorage("showQuickReplies") var showQuickReplies: Bool = true
     @AppStorage("displayDensity") var displayDensity: String = "comfortable"
 
     /// Message bubble padding based on display density
@@ -666,6 +667,12 @@ class AppState: ObservableObject {
         for key in Self.allSettingsKeys {
             defaults.removeObject(forKey: key)
         }
+        objectWillChange.send()
+    }
+
+    /// Reset onboarding so the tutorial can be re-run from Settings.
+    func resetOnboarding() {
+        hasCompletedOnboarding = false
         objectWillChange.send()
     }
 
@@ -3474,32 +3481,53 @@ class AppState: ObservableObject {
     }
 
     /// Generate contextual quick-reply suggestions based on the assistant's response.
-    private func generateSuggestedReplies(from content: String) {
-        let lower = content.lowercased()
+    /// Public method for external use (e.g. previews, tests).
+    func generateQuickReplies(for message: String) -> [String] {
+        let lower = message.lowercased()
 
-        // If the response ends with or contains a question
+        // Detect message type patterns
         let hasQuestion = lower.contains("?")
-        // If the response contains a numbered/bulleted list or plan
         let hasList = lower.contains("1.") || lower.contains("- ") || lower.contains("step ")
             || lower.contains("plan") || lower.contains("here's what")
-        // If the response mentions code
+            || lower.contains("option") || lower.contains("alternative")
         let hasCode = lower.contains("```") || lower.contains("function ") || lower.contains("def ")
             || lower.contains("class ") || lower.contains("import ") || lower.contains("var ")
-            || lower.contains("let ") || lower.contains("const ")
+            || lower.contains("let ") || lower.contains("const ") || lower.contains("return ")
+            || lower.contains("print(") || lower.contains("console.log")
+        let hasComparison = lower.contains("vs") || lower.contains("versus") || lower.contains("compared to")
+            || lower.contains("difference between") || lower.contains("pros and cons")
+            || lower.contains("advantages") || lower.contains("disadvantages")
+        let hasExplanation = lower.contains("means") || lower.contains("because") || lower.contains("essentially")
+            || lower.contains("in other words") || lower.contains("basically")
+            || lower.contains("this is") || lower.contains("that is")
 
-        if hasQuestion && hasList {
-            suggestedReplies = ["Yes, proceed", "Tell me more", "No, change approach"]
-        } else if hasQuestion {
-            suggestedReplies = ["Yes", "No", "Tell me more"]
-        } else if hasCode && hasList {
-            suggestedReplies = ["Run it", "Explain more", "Modify it"]
+        // Priority-based pattern matching for contextual suggestions
+        if hasCode && hasQuestion {
+            return ["Run this code", "Modify it to...", "Explain this code"]
         } else if hasCode {
-            suggestedReplies = ["Run it", "Explain more", "Modify it"]
+            return ["Run this code", "Modify it to...", "Explain this code"]
+        } else if hasComparison {
+            return ["Compare more options", "Which do you recommend?", "Go deeper"]
+        } else if hasQuestion && hasList {
+            return ["Yes", "No", "Tell me more"]
+        } else if hasQuestion {
+            return ["Yes", "No", "Tell me more"]
         } else if hasList {
-            suggestedReplies = ["Proceed", "Tell me more", "Change approach"]
+            return ["Compare more options", "Which do you recommend?", "Go deeper"]
+        } else if hasExplanation {
+            return ["Give me an example", "Simplify this", "Go deeper"]
         } else {
-            suggestedReplies = ["Continue", "Elaborate", "New topic"]
+            return ["Tell me more", "Show me an example", "Explain in detail"]
         }
+    }
+
+    /// Generate and store contextual quick-reply suggestions based on the assistant's response.
+    private func generateSuggestedReplies(from content: String) {
+        guard showQuickReplies else {
+            suggestedReplies = []
+            return
+        }
+        suggestedReplies = generateQuickReplies(for: content)
     }
 
     /// Generate a clean, readable title from the user's first message.

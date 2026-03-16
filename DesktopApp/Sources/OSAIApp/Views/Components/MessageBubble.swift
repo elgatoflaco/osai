@@ -2902,7 +2902,11 @@ struct ResponseView: View {
             }
 
         case .codeBlock(let code, let lang):
-            CodeBlockView(code: code, language: lang)
+            if lang.lowercased() == "mermaid", let mermaidGraph = MermaidParser.parse(code) {
+                MermaidDiagramView(graph: mermaidGraph, code: code)
+            } else {
+                CodeBlockView(code: code, language: lang)
+            }
 
         case .table(let headers, let alignments, let rows):
             MarkdownTableView(headers: headers, alignments: alignments, rows: rows)
@@ -5217,6 +5221,565 @@ struct RichTextView: View {
     private func abbreviate(_ path: String) -> String {
         let home = NSHomeDirectory()
         if path.hasPrefix(home) { return "~" + path.dropFirst(home.count) }
+        return path
+    }
+}
+
+// MARK: - Mermaid Diagram Support
+
+/// Shape classification for Mermaid flowchart nodes.
+enum MermaidNodeShape {
+    case rectangle   // A[label]
+    case decision    // A{label}
+    case rounded     // A(label)
+    case stadium     // A([label])
+    case defaultRect // bare A
+}
+
+/// A single node in a Mermaid flowchart.
+struct MermaidNode: Identifiable {
+    let id: String
+    var label: String
+    var shape: MermaidNodeShape
+}
+
+/// A directed edge between two Mermaid nodes.
+struct MermaidEdge: Identifiable {
+    let id = UUID()
+    let from: String
+    let to: String
+    var label: String?
+}
+
+/// Direction of the flowchart layout.
+enum MermaidDirection {
+    case topDown  // TD / TB
+    case leftRight // LR
+}
+
+/// Parsed Mermaid flowchart graph.
+struct MermaidGraph {
+    var direction: MermaidDirection = .topDown
+    var nodes: [MermaidNode] = []
+    var edges: [MermaidEdge] = []
+
+    /// Look up a node by id.
+    func node(by id: String) -> MermaidNode? {
+        nodes.first { $0.id == id }
+    }
+}
+
+/// Parses a subset of Mermaid flowchart syntax into a `MermaidGraph`.
+struct MermaidParser {
+    /// Attempt to parse a mermaid code string. Returns nil if not a flowchart or parsing fails.
+    static func parse(_ code: String) -> MermaidGraph? {
+        let lines = code.components(separatedBy: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty && !$0.hasPrefix("%%") }
+
+        guard let firstLine = lines.first else { return nil }
+
+        // Must start with graph or flowchart
+        let header = firstLine.lowercased()
+        guard header.hasPrefix("graph") || header.hasPrefix("flowchart") else { return nil }
+
+        var graph = MermaidGraph()
+
+        // Parse direction
+        let parts = firstLine.split(separator: " ", maxSplits: 2).map { String($0) }
+        if parts.count >= 2 {
+            let dir = parts[1].uppercased()
+            switch dir {
+            case "LR", "RL": graph.direction = .leftRight
+            default: graph.direction = .topDown
+            }
+        }
+
+        var nodeMap: [String: MermaidNode] = [:]
+
+        /// Ensures a node exists in the map and returns it.
+        func ensureNode(_ id: String, label: String? = nil, shape: MermaidNodeShape? = nil) {
+            if var existing = nodeMap[id] {
+                if let label = label { existing.label = label }
+                if let shape = shape { existing.shape = shape }
+                nodeMap[id] = existing
+            } else {
+                nodeMap[id] = MermaidNode(
+                    id: id,
+                    label: label ?? id,
+                    shape: shape ?? .defaultRect
+                )
+            }
+        }
+
+        /// Parse a node reference like A, A[text], A{text}, A(text), A([text])
+        func parseNodeRef(_ raw: String) -> (id: String, label: String?, shape: MermaidNodeShape?)? {
+            let s = raw.trimmingCharacters(in: .whitespaces)
+            guard !s.isEmpty else { return nil }
+
+            // A{label} - decision
+            if let openIdx = s.firstIndex(of: "{"), s.last == "}" {
+                let id = String(s[s.startIndex..<openIdx])
+                let label = String(s[s.index(after: openIdx)..<s.index(before: s.endIndex)])
+                return (id, label, .decision)
+            }
+            // A([label]) - stadium
+            if let openIdx = s.firstIndex(of: "("), s.hasSuffix(")") {
+                let id = String(s[s.startIndex..<openIdx])
+                var inner = String(s[s.index(after: openIdx)..<s.index(before: s.endIndex)])
+                var shape: MermaidNodeShape = .rounded
+                if inner.hasPrefix("[") && inner.hasSuffix("]") {
+                    inner = String(inner.dropFirst().dropLast())
+                    shape = .stadium
+                }
+                return (id, inner, shape)
+            }
+            // A[label] - rectangle
+            if let openIdx = s.firstIndex(of: "["), s.last == "]" {
+                let id = String(s[s.startIndex..<openIdx])
+                let label = String(s[s.index(after: openIdx)..<s.index(before: s.endIndex)])
+                return (id, label, .rectangle)
+            }
+            // Bare id
+            let id = s.components(separatedBy: .whitespaces).first ?? s
+            guard !id.isEmpty else { return nil }
+            return (id, nil, nil)
+        }
+
+        // Edge patterns: -->, --->, --, ---|text|, -->|text|
+        // We split lines by common arrow patterns
+        let arrowPattern = #"(-->|---|-\.-?>?|==>)"#
+        let labelOnArrow = #"\|([^|]*)\|"#
+
+        for lineIdx in 1..<lines.count {
+            let line = lines[lineIdx]
+            // Skip subgraph, end, style, class directives
+            let lower = line.lowercased()
+            if lower.hasPrefix("subgraph") || lower == "end" || lower.hasPrefix("style") ||
+               lower.hasPrefix("class ") || lower.hasPrefix("click ") { continue }
+
+            // Try to split by arrow
+            guard let arrowRegex = try? NSRegularExpression(pattern: arrowPattern, options: []) else { continue }
+            let nsLine = line as NSString
+            let range = NSRange(location: 0, length: nsLine.length)
+            let arrowMatches = arrowRegex.matches(in: line, range: range)
+
+            if arrowMatches.isEmpty {
+                // Standalone node definition
+                if let ref = parseNodeRef(line) {
+                    ensureNode(ref.id, label: ref.label, shape: ref.shape)
+                }
+                continue
+            }
+
+            // Split the line around arrows
+            var segments: [String] = []
+            var arrowLabels: [String?] = []
+            var lastEnd = 0
+            for match in arrowMatches {
+                let seg = nsLine.substring(with: NSRange(location: lastEnd, length: match.range.location - lastEnd))
+                segments.append(seg.trimmingCharacters(in: .whitespaces))
+                lastEnd = match.range.location + match.range.length
+
+                // Check for label on arrow: -->|text| or ---|text|
+                let afterArrow = nsLine.substring(from: lastEnd).trimmingCharacters(in: .whitespaces)
+                if let labelRegex = try? NSRegularExpression(pattern: #"^\|([^|]*)\|"#, options: []),
+                   let labelMatch = labelRegex.firstMatch(in: afterArrow, range: NSRange(location: 0, length: (afterArrow as NSString).length)) {
+                    let lbl = (afterArrow as NSString).substring(with: labelMatch.range(at: 1))
+                    arrowLabels.append(lbl)
+                    lastEnd += labelMatch.range.length
+                } else {
+                    arrowLabels.append(nil)
+                }
+            }
+            // Remaining text after last arrow
+            let remaining = nsLine.substring(from: lastEnd).trimmingCharacters(in: .whitespaces)
+            if !remaining.isEmpty {
+                segments.append(remaining)
+            }
+
+            // Build nodes and edges from segments
+            var nodeIds: [String] = []
+            for seg in segments {
+                if let ref = parseNodeRef(seg) {
+                    ensureNode(ref.id, label: ref.label, shape: ref.shape)
+                    nodeIds.append(ref.id)
+                }
+            }
+
+            for j in 0..<(nodeIds.count - 1) {
+                let edgeLabel = j < arrowLabels.count ? arrowLabels[j] : nil
+                graph.edges.append(MermaidEdge(from: nodeIds[j], to: nodeIds[j + 1], label: edgeLabel))
+            }
+        }
+
+        // Preserve insertion order
+        graph.nodes = Array(nodeMap.values).sorted { a, b in
+            let aIdx = lines.joined().range(of: a.id)?.lowerBound ?? lines.joined().endIndex
+            let bIdx = lines.joined().range(of: b.id)?.lowerBound ?? lines.joined().endIndex
+            return aIdx < bIdx
+        }
+
+        guard !graph.nodes.isEmpty else { return nil }
+        return graph
+    }
+}
+
+/// Renders a parsed MermaidGraph as a SwiftUI diagram.
+struct MermaidDiagramView: View {
+    let graph: MermaidGraph
+    let code: String
+    @State private var showCode = false
+
+    private let nodeWidth: CGFloat = 120
+    private let nodeHeight: CGFloat = 44
+    private let decisionSize: CGFloat = 60
+    private let hSpacing: CGFloat = 40
+    private let vSpacing: CGFloat = 36
+
+    /// Compute position for each node based on graph direction and simple sequential layout.
+    private var nodePositions: [String: CGPoint] {
+        var positions: [String: CGPoint] = [:]
+
+        // Build a simple layered layout using topological ordering
+        // Layer 0 = nodes with no incoming edges, etc.
+        var inDegree: [String: Int] = [:]
+        var outNeighbors: [String: [String]] = [:]
+        for node in graph.nodes {
+            inDegree[node.id] = 0
+            outNeighbors[node.id] = []
+        }
+        for edge in graph.edges {
+            inDegree[edge.to, default: 0] += 1
+            outNeighbors[edge.from, default: []].append(edge.to)
+        }
+
+        // BFS layering
+        var layers: [[String]] = []
+        var assigned = Set<String>()
+        var queue = graph.nodes.filter { inDegree[$0.id, default: 0] == 0 }.map { $0.id }
+        if queue.isEmpty {
+            // Fallback: just use first node
+            queue = [graph.nodes[0].id]
+        }
+
+        while !queue.isEmpty {
+            layers.append(queue)
+            assigned.formUnion(queue)
+            var next: [String] = []
+            for nodeId in queue {
+                for neighbor in outNeighbors[nodeId, default: []] {
+                    if !assigned.contains(neighbor) && !next.contains(neighbor) {
+                        // Check all incoming edges are from assigned nodes
+                        let allIncoming = graph.edges.filter { $0.to == neighbor }.map { $0.from }
+                        if allIncoming.allSatisfy({ assigned.contains($0) || queue.contains($0) }) {
+                            next.append(neighbor)
+                        }
+                    }
+                }
+            }
+            // If no progress, add remaining unassigned nodes
+            if next.isEmpty {
+                let remaining = graph.nodes.filter { !assigned.contains($0.id) }.map { $0.id }
+                if remaining.isEmpty { break }
+                next = [remaining[0]]
+            }
+            queue = next
+        }
+
+        // Add any remaining nodes
+        let unassigned = graph.nodes.filter { !assigned.contains($0.id) }.map { $0.id }
+        if !unassigned.isEmpty { layers.append(unassigned) }
+
+        let isHorizontal = graph.direction == .leftRight
+
+        for (layerIdx, layer) in layers.enumerated() {
+            for (nodeIdx, nodeId) in layer.enumerated() {
+                let layerOffset = CGFloat(layerIdx) * (isHorizontal ? (nodeWidth + hSpacing) : (nodeHeight + vSpacing))
+                let nodeOffset = CGFloat(nodeIdx) * (isHorizontal ? (nodeHeight + vSpacing) : (nodeWidth + hSpacing))
+
+                // Center the layer
+                let layerWidth = CGFloat(layer.count) * (isHorizontal ? (nodeHeight + vSpacing) : (nodeWidth + hSpacing)) - (isHorizontal ? vSpacing : hSpacing)
+                let centering = -layerWidth / 2 + (isHorizontal ? (nodeHeight + vSpacing) : (nodeWidth + hSpacing)) / 2
+
+                if isHorizontal {
+                    positions[nodeId] = CGPoint(
+                        x: layerOffset + nodeWidth / 2,
+                        y: nodeOffset + centering
+                    )
+                } else {
+                    positions[nodeId] = CGPoint(
+                        x: nodeOffset + centering,
+                        y: layerOffset + nodeHeight / 2
+                    )
+                }
+            }
+        }
+
+        return positions
+    }
+
+    /// Canvas size needed to contain all nodes.
+    private var canvasSize: CGSize {
+        let positions = nodePositions
+        guard !positions.isEmpty else { return CGSize(width: 200, height: 100) }
+        let xs = positions.values.map { $0.x }
+        let ys = positions.values.map { $0.y }
+        let minX = (xs.min() ?? 0) - nodeWidth / 2
+        let maxX = (xs.max() ?? 0) + nodeWidth / 2
+        let minY = (ys.min() ?? 0) - nodeHeight / 2
+        let maxY = (ys.max() ?? 0) + nodeHeight / 2
+        return CGSize(
+            width: maxX - minX + 40,
+            height: maxY - minY + 40
+        )
+    }
+
+    /// Offset to apply so all positions are positive with padding.
+    private var canvasOffset: CGPoint {
+        let positions = nodePositions
+        let xs = positions.values.map { $0.x }
+        let ys = positions.values.map { $0.y }
+        return CGPoint(
+            x: -(xs.min() ?? 0) + nodeWidth / 2 + 20,
+            y: -(ys.min() ?? 0) + nodeHeight / 2 + 20
+        )
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Header with toggle
+            HStack {
+                Image(systemName: "flowchart")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(AppTheme.accent)
+                Text("Flowchart")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(AppTheme.textSecondary)
+                Spacer()
+                Button(action: { showCode.toggle() }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: showCode ? "eye" : "chevron.left.forwardslash.chevron.right")
+                            .font(.system(size: 10, weight: .medium))
+                        Text(showCode ? "View Diagram" : "View as Code")
+                            .font(.system(size: 11, weight: .medium))
+                    }
+                    .foregroundColor(AppTheme.accent)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(AppTheme.accent.opacity(0.1))
+                    .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(AppTheme.bgSecondary.opacity(0.5))
+
+            if showCode {
+                // Raw code view
+                ScrollView(.horizontal, showsIndicators: false) {
+                    Text(code)
+                        .font(AppTheme.fontMono)
+                        .foregroundColor(AppTheme.textPrimary)
+                        .padding(12)
+                }
+            } else {
+                // Diagram view
+                let positions = nodePositions
+                let offset = canvasOffset
+                let size = canvasSize
+
+                ScrollView([.horizontal, .vertical], showsIndicators: false) {
+                    ZStack(alignment: .topLeading) {
+                        // Draw edges first (below nodes)
+                        ForEach(graph.edges) { edge in
+                            if let fromPos = positions[edge.from],
+                               let toPos = positions[edge.to] {
+                                MermaidEdgeView(
+                                    from: CGPoint(x: fromPos.x + offset.x, y: fromPos.y + offset.y),
+                                    to: CGPoint(x: toPos.x + offset.x, y: toPos.y + offset.y),
+                                    label: edge.label,
+                                    nodeWidth: nodeWidth,
+                                    nodeHeight: nodeHeight,
+                                    direction: graph.direction
+                                )
+                            }
+                        }
+                        // Draw nodes
+                        ForEach(graph.nodes) { node in
+                            if let pos = positions[node.id] {
+                                MermaidNodeView(node: node, width: nodeWidth, height: nodeHeight)
+                                    .position(x: pos.x + offset.x, y: pos.y + offset.y)
+                            }
+                        }
+                    }
+                    .frame(width: size.width, height: size.height)
+                }
+                .frame(maxHeight: min(size.height, 400))
+            }
+        }
+        .background(AppTheme.bgCard)
+        .clipShape(RoundedRectangle(cornerRadius: AppTheme.cornerRadiusSm))
+        .overlay(
+            RoundedRectangle(cornerRadius: AppTheme.cornerRadiusSm)
+                .stroke(AppTheme.borderGlass, lineWidth: 0.5)
+        )
+    }
+}
+
+/// Renders a single Mermaid node as a SwiftUI shape.
+private struct MermaidNodeView: View {
+    let node: MermaidNode
+    let width: CGFloat
+    let height: CGFloat
+
+    var body: some View {
+        ZStack {
+            switch node.shape {
+            case .decision:
+                // Diamond shape
+                Diamond()
+                    .fill(AppTheme.bgCard)
+                Diamond()
+                    .stroke(AppTheme.accent, lineWidth: 1.5)
+            case .rounded, .stadium:
+                RoundedRectangle(cornerRadius: height / 2)
+                    .fill(AppTheme.bgCard)
+                RoundedRectangle(cornerRadius: height / 2)
+                    .stroke(AppTheme.accent, lineWidth: 1.5)
+            default:
+                // Rectangle with rounded corners
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(AppTheme.bgCard)
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(AppTheme.accent, lineWidth: 1.5)
+            }
+
+            Text(node.label)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(AppTheme.textPrimary)
+                .lineLimit(2)
+                .minimumScaleFactor(0.7)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 8)
+        }
+        .frame(width: node.shape == .decision ? width : width, height: height)
+    }
+}
+
+/// Diamond shape for decision nodes.
+private struct Diamond: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.move(to: CGPoint(x: rect.midX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.midY))
+        path.addLine(to: CGPoint(x: rect.midX, y: rect.maxY))
+        path.addLine(to: CGPoint(x: rect.minX, y: rect.midY))
+        path.closeSubpath()
+        return path
+    }
+}
+
+/// Renders an edge (arrow) between two node positions.
+private struct MermaidEdgeView: View {
+    let from: CGPoint
+    let to: CGPoint
+    let label: String?
+    let nodeWidth: CGFloat
+    let nodeHeight: CGFloat
+    let direction: MermaidDirection
+
+    var body: some View {
+        ZStack {
+            // Arrow line with arrowhead
+            ArrowLine(from: adjustedFrom, to: adjustedTo)
+                .stroke(AppTheme.accent.opacity(0.6), lineWidth: 1.2)
+
+            // Arrowhead
+            ArrowHead(at: adjustedTo, from: adjustedFrom)
+                .fill(AppTheme.accent.opacity(0.6))
+
+            // Edge label
+            if let label = label, !label.isEmpty {
+                let mid = CGPoint(x: (from.x + to.x) / 2, y: (from.y + to.y) / 2)
+                Text(label)
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundColor(AppTheme.textSecondary)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 2)
+                    .background(AppTheme.bgCard.opacity(0.9))
+                    .clipShape(RoundedRectangle(cornerRadius: 4))
+                    .position(x: mid.x, y: mid.y)
+            }
+        }
+    }
+
+    /// Adjust start point to edge of source node.
+    private var adjustedFrom: CGPoint {
+        let dx = to.x - from.x
+        let dy = to.y - from.y
+        let len = sqrt(dx * dx + dy * dy)
+        guard len > 0 else { return from }
+        let offsetX = (dx / len) * (nodeWidth / 2)
+        let offsetY = (dy / len) * (nodeHeight / 2)
+        return CGPoint(x: from.x + offsetX, y: from.y + offsetY)
+    }
+
+    /// Adjust end point to edge of target node.
+    private var adjustedTo: CGPoint {
+        let dx = from.x - to.x
+        let dy = from.y - to.y
+        let len = sqrt(dx * dx + dy * dy)
+        guard len > 0 else { return to }
+        let offsetX = (dx / len) * (nodeWidth / 2)
+        let offsetY = (dy / len) * (nodeHeight / 2)
+        return CGPoint(x: to.x + offsetX, y: to.y + offsetY)
+    }
+}
+
+/// A simple line shape between two points.
+private struct ArrowLine: Shape {
+    let from: CGPoint
+    let to: CGPoint
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.move(to: from)
+        path.addLine(to: to)
+        return path
+    }
+}
+
+/// Arrowhead triangle at the end of an edge.
+private struct ArrowHead: Shape {
+    let at: CGPoint
+    let from: CGPoint
+    private let size: CGFloat = 8
+
+    func path(in rect: CGRect) -> Path {
+        let dx = at.x - from.x
+        let dy = at.y - from.y
+        let len = sqrt(dx * dx + dy * dy)
+        guard len > 0 else { return Path() }
+
+        let ux = dx / len
+        let uy = dy / len
+        // Perpendicular
+        let px = -uy
+        let py = ux
+
+        let tip = at
+        let left = CGPoint(x: tip.x - ux * size + px * size * 0.4,
+                           y: tip.y - uy * size + py * size * 0.4)
+        let right = CGPoint(x: tip.x - ux * size - px * size * 0.4,
+                            y: tip.y - uy * size - py * size * 0.4)
+
+        var path = Path()
+        path.move(to: tip)
+        path.addLine(to: left)
+        path.addLine(to: right)
+        path.closeSubpath()
         return path
     }
 }

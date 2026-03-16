@@ -1102,11 +1102,11 @@ struct ChatView: View {
                     conversationStarterView
                 }
 
-                // Quick reply suggestions
-                if !appState.isProcessing && !appState.suggestedReplies.isEmpty {
+                // Quick reply suggestion chips
+                if appState.showQuickReplies && !appState.isProcessing && !appState.suggestedReplies.isEmpty && messageText.isEmpty {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 8) {
-                            ForEach(appState.suggestedReplies, id: \.self) { suggestion in
+                            ForEach(Array(appState.suggestedReplies.enumerated()), id: \.element) { index, suggestion in
                                 Button(action: {
                                     messageText = suggestion
                                     appState.sendMessage(suggestion)
@@ -1115,22 +1115,31 @@ struct ChatView: View {
                                     Text(suggestion)
                                         .font(.system(size: 12, weight: .medium))
                                         .foregroundColor(AppTheme.accent)
-                                        .padding(.horizontal, 12)
-                                        .padding(.vertical, 6)
-                                        .background(Color.clear)
+                                        .padding(.horizontal, 14)
+                                        .padding(.vertical, 7)
+                                        .background(AppTheme.accent.opacity(0.08))
                                         .clipShape(Capsule())
                                         .overlay(
                                             Capsule()
-                                                .stroke(AppTheme.accent.opacity(0.5), lineWidth: 1)
+                                                .stroke(AppTheme.accent.opacity(0.35), lineWidth: 1)
                                         )
                                 }
                                 .buttonStyle(.plain)
+                                .transition(.opacity.combined(with: .scale(scale: 0.9)).combined(with: .offset(y: 6)))
+                                .animation(
+                                    .spring(response: 0.4, dampingFraction: 0.75).delay(Double(index) * 0.08),
+                                    value: appState.suggestedReplies
+                                )
                             }
                         }
                         .padding(.horizontal, AppTheme.paddingLg)
                         .padding(.vertical, 8)
                     }
-                    .transition(.opacity.animation(.easeIn(duration: 0.3)))
+                    .transition(.asymmetric(
+                        insertion: .opacity.animation(.easeOut(duration: 0.3).delay(0.15)),
+                        removal: .opacity.animation(.easeIn(duration: 0.15))
+                    ))
+                    .animation(.easeInOut(duration: 0.2), value: messageText.isEmpty)
                 }
 
                 // Share mode bottom bar
