@@ -2929,6 +2929,9 @@ struct ResponseView: View {
 
         case .divider:
             Rectangle().fill(AppTheme.borderGlass).frame(height: 1).padding(.vertical, 4)
+
+        case .mathBlock(let latex):
+            MathBlockView(latex: latex)
         }
     }
 }
@@ -4219,6 +4222,298 @@ enum ResponseSection {
     case table(headers: [String], alignments: [ColumnAlignment], rows: [[String]])
     case blockquote([String])
     case divider
+    case mathBlock(String) // Display math: $$...$$ or \[...\]
+}
+
+// MARK: - LaTeX Math Rendering
+
+/// Substitutes common LaTeX commands with Unicode equivalents.
+struct LaTeXRenderer {
+
+    /// All symbol replacements, applied in order.
+    private static let symbolMap: [(String, String)] = [
+        ("\\alpha", "\u{03B1}"),
+        ("\\beta", "\u{03B2}"),
+        ("\\gamma", "\u{03B3}"),
+        ("\\delta", "\u{03B4}"),
+        ("\\pi", "\u{03C0}"),
+        ("\\theta", "\u{03B8}"),
+        ("\\sum", "\u{03A3}"),
+        ("\\prod", "\u{03A0}"),
+        ("\\int", "\u{222B}"),
+        ("\\infty", "\u{221E}"),
+        ("\\sqrt", "\u{221A}"),
+        ("\\pm", "\u{00B1}"),
+        ("\\leq", "\u{2264}"),
+        ("\\geq", "\u{2265}"),
+        ("\\neq", "\u{2260}"),
+        ("\\approx", "\u{2248}"),
+        ("\\times", "\u{00D7}"),
+        ("\\div", "\u{00F7}"),
+        ("\\in", "\u{2208}"),
+        ("\\subset", "\u{2282}"),
+        ("\\cup", "\u{222A}"),
+        ("\\cap", "\u{2229}"),
+    ]
+
+    /// Unicode superscript digit mapping
+    private static let superscriptDigits: [Character: Character] = [
+        "0": "\u{2070}", "1": "\u{00B9}", "2": "\u{00B2}", "3": "\u{00B3}",
+        "4": "\u{2074}", "5": "\u{2075}", "6": "\u{2076}", "7": "\u{2077}",
+        "8": "\u{2078}", "9": "\u{2079}", "+": "\u{207A}", "-": "\u{207B}",
+        "=": "\u{207C}", "(": "\u{207D}", ")": "\u{207E}", "n": "\u{207F}",
+        "i": "\u{2071}",
+    ]
+
+    /// Unicode subscript digit mapping
+    private static let subscriptDigits: [Character: Character] = [
+        "0": "\u{2080}", "1": "\u{2081}", "2": "\u{2082}", "3": "\u{2083}",
+        "4": "\u{2084}", "5": "\u{2085}", "6": "\u{2086}", "7": "\u{2087}",
+        "8": "\u{2088}", "9": "\u{2089}", "+": "\u{208A}", "-": "\u{208B}",
+        "=": "\u{208C}", "(": "\u{208D}", ")": "\u{208E}",
+        "a": "\u{2090}", "e": "\u{2091}", "o": "\u{2092}", "x": "\u{2093}",
+    ]
+
+    /// Render a LaTeX math string into a displayable Unicode string.
+    static func render(_ latex: String) -> String {
+        var result = latex.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // \frac{a}{b} -> a/b
+        if let fracRegex = try? NSRegularExpression(pattern: #"\\frac\{([^}]*)\}\{([^}]*)\}"#, options: []) {
+            var nsResult = result as NSString
+            var offset = 0
+            let matches = fracRegex.matches(in: result, range: NSRange(location: 0, length: nsResult.length))
+            for match in matches {
+                let num = nsResult.substring(with: NSRange(location: match.range(at: 1).location + offset, length: match.range(at: 1).length))
+                let den = nsResult.substring(with: NSRange(location: match.range(at: 2).location + offset, length: match.range(at: 2).length))
+                let replacement = "\(num)/\(den)"
+                let adjustedRange = NSRange(location: match.range.location + offset, length: match.range.length)
+                nsResult = nsResult.replacingCharacters(in: adjustedRange, with: replacement) as NSString
+                offset += replacement.count - match.range.length
+            }
+            result = nsResult as String
+        }
+
+        // Apply symbol substitutions
+        for (cmd, symbol) in symbolMap {
+            result = result.replacingOccurrences(of: cmd, with: symbol)
+        }
+
+        // ^{...} -> superscript
+        if let supRegex = try? NSRegularExpression(pattern: #"\^\{([^}]*)\}"#, options: []) {
+            var nsResult = result as NSString
+            var offset = 0
+            let matches = supRegex.matches(in: result, range: NSRange(location: 0, length: nsResult.length))
+            for match in matches {
+                let inner = nsResult.substring(with: NSRange(location: match.range(at: 1).location + offset, length: match.range(at: 1).length))
+                let sup = String(inner.map { superscriptDigits[$0] ?? $0 })
+                let adjustedRange = NSRange(location: match.range.location + offset, length: match.range.length)
+                nsResult = nsResult.replacingCharacters(in: adjustedRange, with: sup) as NSString
+                offset += sup.count - match.range.length
+            }
+            result = nsResult as String
+        }
+
+        // Single char superscript: ^x where x is a single char (not {)
+        if let supSingleRegex = try? NSRegularExpression(pattern: #"\^([^{\s])"#, options: []) {
+            var nsResult = result as NSString
+            var offset = 0
+            let matches = supSingleRegex.matches(in: result, range: NSRange(location: 0, length: nsResult.length))
+            for match in matches {
+                let inner = nsResult.substring(with: NSRange(location: match.range(at: 1).location + offset, length: match.range(at: 1).length))
+                let ch = inner.first ?? Character(" ")
+                let sup = String(superscriptDigits[ch] ?? ch)
+                let adjustedRange = NSRange(location: match.range.location + offset, length: match.range.length)
+                nsResult = nsResult.replacingCharacters(in: adjustedRange, with: sup) as NSString
+                offset += sup.count - match.range.length
+            }
+            result = nsResult as String
+        }
+
+        // _{...} -> subscript
+        if let subRegex = try? NSRegularExpression(pattern: #"_\{([^}]*)\}"#, options: []) {
+            var nsResult = result as NSString
+            var offset = 0
+            let matches = subRegex.matches(in: result, range: NSRange(location: 0, length: nsResult.length))
+            for match in matches {
+                let inner = nsResult.substring(with: NSRange(location: match.range(at: 1).location + offset, length: match.range(at: 1).length))
+                let sub = String(inner.map { subscriptDigits[$0] ?? $0 })
+                let adjustedRange = NSRange(location: match.range.location + offset, length: match.range.length)
+                nsResult = nsResult.replacingCharacters(in: adjustedRange, with: sub) as NSString
+                offset += sub.count - match.range.length
+            }
+            result = nsResult as String
+        }
+
+        // Single char subscript: _x where x is a single char (not {)
+        if let subSingleRegex = try? NSRegularExpression(pattern: #"_([^{\s])"#, options: []) {
+            var nsResult = result as NSString
+            var offset = 0
+            let matches = subSingleRegex.matches(in: result, range: NSRange(location: 0, length: nsResult.length))
+            for match in matches {
+                let inner = nsResult.substring(with: NSRange(location: match.range(at: 1).location + offset, length: match.range(at: 1).length))
+                let ch = inner.first ?? Character(" ")
+                let sub = String(subscriptDigits[ch] ?? ch)
+                let adjustedRange = NSRange(location: match.range.location + offset, length: match.range.length)
+                nsResult = nsResult.replacingCharacters(in: adjustedRange, with: sub) as NSString
+                offset += sub.count - match.range.length
+            }
+            result = nsResult as String
+        }
+
+        // Clean up remaining braces
+        result = result.replacingOccurrences(of: "\\left", with: "")
+        result = result.replacingOccurrences(of: "\\right", with: "")
+        result = result.replacingOccurrences(of: "\\,", with: " ")
+        result = result.replacingOccurrences(of: "\\;", with: " ")
+        result = result.replacingOccurrences(of: "\\quad", with: "  ")
+        result = result.replacingOccurrences(of: "\\qquad", with: "    ")
+        result = result.replacingOccurrences(of: "\\\\", with: "\n")
+        result = result.replacingOccurrences(of: "\\text{", with: "").replacingOccurrences(of: "}", with: "")
+
+        return result
+    }
+
+    /// Checks whether a string contains inline math delimiters.
+    static func containsInlineMath(_ text: String) -> Bool {
+        // $...$ (single dollar, not $$)
+        if let regex = try? NSRegularExpression(pattern: #"(?<!\$)\$(?!\$)(.+?)(?<!\$)\$(?!\$)"#, options: []) {
+            let range = NSRange(text.startIndex..., in: text)
+            if regex.firstMatch(in: text, range: range) != nil { return true }
+        }
+        // \(...\)
+        if text.contains("\\(") && text.contains("\\)") { return true }
+        return false
+    }
+
+    /// Splits text into segments of plain text and inline math.
+    static func splitInlineMath(_ text: String) -> [InlineMathSegment] {
+        var segments: [InlineMathSegment] = []
+        let nsText = text as NSString
+
+        // Combined pattern for $...$ and \(...\)
+        // $...$ : single dollar not preceded/followed by $
+        // \(...\) : literal backslash parens
+        let patterns = [
+            #"(?<!\$)\$(?!\$)((?:[^$\\]|\\.)+?)(?<!\$)\$(?!\$)"#,
+            #"\\\((.+?)\\\)"#
+        ]
+
+        // Collect all math ranges
+        struct MathRange {
+            let fullRange: NSRange
+            let innerRange: NSRange
+        }
+        var mathRanges: [MathRange] = []
+
+        for pattern in patterns {
+            if let regex = try? NSRegularExpression(pattern: pattern, options: []) {
+                let range = NSRange(location: 0, length: nsText.length)
+                for match in regex.matches(in: text, range: range) {
+                    mathRanges.append(MathRange(fullRange: match.range, innerRange: match.range(at: 1)))
+                }
+            }
+        }
+
+        // Sort by location
+        mathRanges.sort { $0.fullRange.location < $1.fullRange.location }
+
+        // Remove overlapping ranges
+        var filtered: [MathRange] = []
+        var lastEnd = 0
+        for mr in mathRanges {
+            if mr.fullRange.location >= lastEnd {
+                filtered.append(mr)
+                lastEnd = mr.fullRange.location + mr.fullRange.length
+            }
+        }
+
+        // Build segments
+        var pos = 0
+        for mr in filtered {
+            if mr.fullRange.location > pos {
+                let plain = nsText.substring(with: NSRange(location: pos, length: mr.fullRange.location - pos))
+                if !plain.isEmpty { segments.append(.text(plain)) }
+            }
+            let inner = nsText.substring(with: mr.innerRange)
+            segments.append(.math(inner))
+            pos = mr.fullRange.location + mr.fullRange.length
+        }
+        if pos < nsText.length {
+            let remaining = nsText.substring(from: pos)
+            if !remaining.isEmpty { segments.append(.text(remaining)) }
+        }
+
+        return segments
+    }
+}
+
+/// Segment type for inline math splitting.
+enum InlineMathSegment {
+    case text(String)
+    case math(String)
+}
+
+// MARK: - Display Math Block View
+
+struct MathBlockView: View {
+    let latex: String
+    @State private var copied = false
+
+    private var rendered: String {
+        LaTeXRenderer.render(latex)
+    }
+
+    var body: some View {
+        VStack(alignment: .center, spacing: 0) {
+            // Rendered math content
+            Text(rendered)
+                .font(.system(size: 15, weight: .regular, design: .monospaced))
+                .foregroundColor(AppTheme.textPrimary)
+                .multilineTextAlignment(.center)
+                .lineSpacing(6)
+                .textSelection(.enabled)
+                .padding(.horizontal, 20)
+                .padding(.top, 14)
+                .padding(.bottom, 10)
+                .frame(maxWidth: .infinity)
+
+            // Bottom bar with Copy LaTeX button
+            HStack {
+                Spacer()
+                Button(action: {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(latex, forType: .string)
+                    copied = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { copied = false }
+                }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                            .font(.system(size: 10, weight: .medium))
+                        Text(copied ? "Copied" : "Copy LaTeX")
+                            .font(.system(size: 10, weight: .medium))
+                    }
+                    .foregroundColor(copied ? AppTheme.success : AppTheme.textMuted)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                }
+                .buttonStyle(.plain)
+                .onHover { inside in
+                    if inside { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.bottom, 8)
+        }
+        .background(
+            RoundedRectangle(cornerRadius: AppTheme.cornerRadiusSm)
+                .fill(AppTheme.bgCard.opacity(0.6))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: AppTheme.cornerRadiusSm)
+                .stroke(AppTheme.borderGlass, lineWidth: 0.5)
+        )
+    }
 }
 
 struct ResponseParser {
@@ -4233,6 +4528,92 @@ struct ResponseParser {
         while i < lines.count {
             let trimmed = lines[i].trimmingCharacters(in: .whitespaces)
             if trimmed.isEmpty { i += 1; continue }
+
+            // Display math blocks: $$ ... $$ (may span multiple lines)
+            if trimmed.hasPrefix("$$") {
+                // Check for single-line $$...$$ (content between $$ on same line)
+                let afterOpen = String(trimmed.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+                if afterOpen.hasSuffix("$$") && afterOpen.count > 2 {
+                    let inner = String(afterOpen.dropLast(2)).trimmingCharacters(in: .whitespaces)
+                    if !inner.isEmpty {
+                        sections.append(.mathBlock(inner))
+                        i += 1
+                        continue
+                    }
+                }
+                // Multi-line $$...$$
+                var mathLines: [String] = []
+                if afterOpen.isEmpty || afterOpen == "$$" {
+                    i += 1
+                } else {
+                    mathLines.append(afterOpen)
+                    i += 1
+                }
+                var foundClose = false
+                while i < lines.count {
+                    let ml = lines[i]
+                    let mlt = ml.trimmingCharacters(in: .whitespaces)
+                    if mlt.hasSuffix("$$") {
+                        let before = String(mlt.dropLast(2)).trimmingCharacters(in: .whitespaces)
+                        if !before.isEmpty { mathLines.append(before) }
+                        foundClose = true
+                        i += 1
+                        break
+                    }
+                    mathLines.append(ml)
+                    i += 1
+                }
+                let mathContent = mathLines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+                if !mathContent.isEmpty {
+                    sections.append(.mathBlock(mathContent))
+                } else {
+                    sections.append(.paragraph(trimmed))
+                }
+                if !foundClose && i < lines.count { /* unclosed, we consumed what we could */ }
+                continue
+            }
+
+            // Display math blocks: \[ ... \]
+            if trimmed.hasPrefix("\\[") {
+                let afterOpen = String(trimmed.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+                if afterOpen.hasSuffix("\\]") && afterOpen.count > 2 {
+                    let inner = String(afterOpen.dropLast(2)).trimmingCharacters(in: .whitespaces)
+                    if !inner.isEmpty {
+                        sections.append(.mathBlock(inner))
+                        i += 1
+                        continue
+                    }
+                }
+                var mathLines: [String] = []
+                if afterOpen.isEmpty {
+                    i += 1
+                } else {
+                    mathLines.append(afterOpen)
+                    i += 1
+                }
+                var foundClose = false
+                while i < lines.count {
+                    let ml = lines[i]
+                    let mlt = ml.trimmingCharacters(in: .whitespaces)
+                    if mlt.hasSuffix("\\]") {
+                        let before = String(mlt.dropLast(2)).trimmingCharacters(in: .whitespaces)
+                        if !before.isEmpty { mathLines.append(before) }
+                        foundClose = true
+                        i += 1
+                        break
+                    }
+                    mathLines.append(ml)
+                    i += 1
+                }
+                let mathContent = mathLines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+                if !mathContent.isEmpty {
+                    sections.append(.mathBlock(mathContent))
+                } else {
+                    sections.append(.paragraph(trimmed))
+                }
+                if !foundClose && i < lines.count { /* unclosed */ }
+                continue
+            }
 
             // Code blocks
             if trimmed.hasPrefix("```") {
@@ -4568,10 +4949,40 @@ struct RichTextView: View {
     private var codeInlineFontSize: CGFloat { zenMode ? 13.5 : 12.5 }
     private var lineSpacingValue: CGFloat { zenMode ? 5.5 : 4 }
 
-    /// Renders text with AttributedString markdown and highlights inline code with a background
+    /// Renders text with AttributedString markdown, inline code highlighting, and inline math.
     @ViewBuilder
     private func inlineMarkdownText(_ str: String) -> some View {
-        if str.contains("`") {
+        if LaTeXRenderer.containsInlineMath(str) {
+            // Render with inline math support
+            let mathSegments = LaTeXRenderer.splitInlineMath(str)
+            let combined = mathSegments.reduce(AttributedString()) { result, segment in
+                var combined = result
+                switch segment {
+                case .text(let t):
+                    // Process the text part normally (with inline code if present)
+                    let attributed = Self.buildAttributedText(t, bodySize: bodyFontSize, codeSize: codeInlineFontSize)
+                    combined.append(attributed)
+                case .math(let m):
+                    let rendered = LaTeXRenderer.render(m)
+                    var space = AttributedString("\u{200A}")
+                    space.font = .system(size: 2)
+                    combined.append(space)
+                    var attr = AttributedString(rendered)
+                    attr.font = .system(size: codeInlineFontSize, design: .monospaced)
+                    attr.foregroundColor = AppTheme.accent
+                    attr.backgroundColor = AppTheme.bgCard
+                    combined.append(attr)
+                    combined.append(space)
+                }
+                return combined
+            }
+            Text(combined)
+                .lineSpacing(lineSpacingValue).textSelection(.enabled)
+                .environment(\.openURL, OpenURLAction { url in
+                    NSWorkspace.shared.open(url)
+                    return .handled
+                })
+        } else if str.contains("`") {
             // Split on inline code to render code spans with background
             let segments = parseInlineCode(str)
             let combined = segments.reduce(AttributedString()) { result, segment in
@@ -4621,6 +5032,92 @@ struct RichTextView: View {
                 Text(str)
                     .font(.system(size: bodyFontSize)).foregroundColor(AppTheme.textPrimary)
                     .lineSpacing(lineSpacingValue).textSelection(.enabled)
+            }
+        }
+    }
+
+    /// Builds an AttributedString from text that may contain inline code backticks.
+    private static func buildAttributedText(_ str: String, bodySize: CGFloat, codeSize: CGFloat) -> AttributedString {
+        if str.contains("`") {
+            var result = AttributedString()
+            var current = ""
+            var inCode = false
+            var i = str.startIndex
+            while i < str.endIndex {
+                let ch = str[i]
+                if ch == "`" {
+                    if inCode {
+                        if !current.isEmpty {
+                            var attr = AttributedString(current)
+                            attr.font = .system(size: codeSize, design: .monospaced)
+                            attr.foregroundColor = AppTheme.accent
+                            attr.backgroundColor = AppTheme.bgCard
+                            var space = AttributedString("\u{200A}")
+                            space.font = .system(size: 2)
+                            result.append(space)
+                            result.append(attr)
+                            result.append(space)
+                        }
+                        current = ""
+                        inCode = false
+                    } else {
+                        if !current.isEmpty {
+                            if var attr = try? AttributedString(markdown: current, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)) {
+                                attr.font = .system(size: bodySize)
+                                styleLinks(&attr)
+                                result.append(attr)
+                            } else {
+                                var attr = AttributedString(current)
+                                attr.font = .system(size: bodySize)
+                                attr.foregroundColor = AppTheme.textPrimary
+                                result.append(attr)
+                            }
+                        }
+                        current = ""
+                        inCode = true
+                    }
+                } else {
+                    current.append(ch)
+                }
+                i = str.index(after: i)
+            }
+            if !current.isEmpty {
+                if inCode {
+                    // Unclosed backtick
+                    if var attr = try? AttributedString(markdown: "`" + current, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)) {
+                        attr.font = .system(size: bodySize)
+                        styleLinks(&attr)
+                        result.append(attr)
+                    } else {
+                        var attr = AttributedString("`" + current)
+                        attr.font = .system(size: bodySize)
+                        attr.foregroundColor = AppTheme.textPrimary
+                        result.append(attr)
+                    }
+                } else {
+                    if var attr = try? AttributedString(markdown: current, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)) {
+                        attr.font = .system(size: bodySize)
+                        styleLinks(&attr)
+                        result.append(attr)
+                    } else {
+                        var attr = AttributedString(current)
+                        attr.font = .system(size: bodySize)
+                        attr.foregroundColor = AppTheme.textPrimary
+                        result.append(attr)
+                    }
+                }
+            }
+            return result
+        } else {
+            if var attr = try? AttributedString(markdown: str, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)) {
+                attr.font = .system(size: bodySize)
+                styleLinks(&attr)
+                return attr
+            } else {
+                var attr = AttributedString(str)
+                attr.font = .system(size: bodySize)
+                attr.foregroundColor = AppTheme.textPrimary
+                return attr
             }
         }
     }

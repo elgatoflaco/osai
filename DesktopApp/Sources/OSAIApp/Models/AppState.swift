@@ -530,6 +530,28 @@ struct ConversationSnapshot: Codable, Identifiable {
     }
 }
 
+// MARK: - Workspace
+
+struct Workspace: Codable, Identifiable, Equatable {
+    let id: String
+    var name: String
+    var icon: String
+    var conversationIds: [String]
+    let createdAt: Date
+
+    init(id: String = UUID().uuidString, name: String, icon: String = "folder.fill", conversationIds: [String] = [], createdAt: Date = Date()) {
+        self.id = id
+        self.name = name
+        self.icon = icon
+        self.conversationIds = conversationIds
+        self.createdAt = createdAt
+    }
+
+    static func == (lhs: Workspace, rhs: Workspace) -> Bool {
+        lhs.id == rhs.id && lhs.name == rhs.name && lhs.icon == rhs.icon && lhs.conversationIds == rhs.conversationIds
+    }
+}
+
 class AppState: ObservableObject {
     // MARK: - Conversation Color Labels
     static let conversationColors: [(name: String, color: Color)] = [
@@ -1534,6 +1556,28 @@ class AppState: ObservableObject {
     @Published var showRawMarkdown: Bool = false
     @Published var filterTag: String?
     @Published var selectedFilterTags: Set<String> = []
+
+    // MARK: - Workspaces
+    @Published var workspaces: [Workspace] = {
+        guard let data = UserDefaults.standard.data(forKey: "workspaces"),
+              let decoded = try? JSONDecoder().decode([Workspace].self, from: data) else { return [] }
+        return decoded
+    }() {
+        didSet {
+            if let encoded = try? JSONEncoder().encode(workspaces) {
+                UserDefaults.standard.set(encoded, forKey: "workspaces")
+            }
+        }
+    }
+    @Published var activeWorkspaceId: String? = UserDefaults.standard.string(forKey: "activeWorkspaceId") {
+        didSet {
+            if let id = activeWorkspaceId {
+                UserDefaults.standard.set(id, forKey: "activeWorkspaceId")
+            } else {
+                UserDefaults.standard.removeObject(forKey: "activeWorkspaceId")
+            }
+        }
+    }
     @Published var tagColors: [String: String] = {
         (UserDefaults.standard.dictionary(forKey: "tagColors") as? [String: String]) ?? [:]
     }() {
@@ -2298,6 +2342,74 @@ class AppState: ObservableObject {
 
     func clearNotifications() {
         notifications.removeAll()
+    }
+
+    // MARK: - Workspace Methods
+
+    /// The currently active workspace, if any.
+    var activeWorkspace: Workspace? {
+        guard let id = activeWorkspaceId else { return nil }
+        return workspaces.first(where: { $0.id == id })
+    }
+
+    /// Creates a new workspace with the given name and optional icon.
+    func createWorkspace(name: String, icon: String = "folder.fill") {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        let workspace = Workspace(name: trimmed, icon: icon)
+        workspaces.append(workspace)
+    }
+
+    /// Deletes a workspace by id. If the deleted workspace is active, clears the filter.
+    func deleteWorkspace(id: String) {
+        workspaces.removeAll(where: { $0.id == id })
+        if activeWorkspaceId == id {
+            activeWorkspaceId = nil
+        }
+    }
+
+    /// Adds a conversation to a workspace.
+    func addToWorkspace(conversationId: String, workspaceId: String) {
+        guard let idx = workspaces.firstIndex(where: { $0.id == workspaceId }) else { return }
+        if !workspaces[idx].conversationIds.contains(conversationId) {
+            workspaces[idx].conversationIds.append(conversationId)
+        }
+    }
+
+    /// Removes a conversation from a workspace.
+    func removeFromWorkspace(conversationId: String, workspaceId: String) {
+        guard let idx = workspaces.firstIndex(where: { $0.id == workspaceId }) else { return }
+        workspaces[idx].conversationIds.removeAll(where: { $0 == conversationId })
+    }
+
+    /// Renames a workspace.
+    func renameWorkspace(id: String, name: String) {
+        guard let idx = workspaces.firstIndex(where: { $0.id == id }) else { return }
+        workspaces[idx].name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Updates a workspace icon.
+    func setWorkspaceIcon(id: String, icon: String) {
+        guard let idx = workspaces.firstIndex(where: { $0.id == id }) else { return }
+        workspaces[idx].icon = icon
+    }
+
+    /// Returns conversations filtered by the active workspace, or all if no workspace is active.
+    func workspaceFilteredConversations(_ conversations: [Conversation]) -> [Conversation] {
+        guard let workspace = activeWorkspace else { return conversations }
+        let memberIds = Set(workspace.conversationIds)
+        return conversations.filter { memberIds.contains($0.id) }
+    }
+
+    /// Returns the number of conversations in a workspace.
+    func workspaceConversationCount(_ workspaceId: String) -> Int {
+        guard let ws = workspaces.first(where: { $0.id == workspaceId }) else { return 0 }
+        return ws.conversationIds.filter { cid in conversations.contains(where: { $0.id == cid }) }.count
+    }
+
+    /// Returns which workspaces a conversation belongs to.
+    func workspacesForConversation(_ conversationId: String) -> [Workspace] {
+        workspaces.filter { $0.conversationIds.contains(conversationId) }
     }
 
     func changeAccentColor(_ presetId: String) {

@@ -4,6 +4,7 @@ struct SettingsView: View {
     @EnvironmentObject var appState: AppState
     private let configService = ConfigService()
     @State private var showResetConfirmation = false
+    @State private var showChangelog = false
 
     // Well-known providers to always show status for
     private let knownProviders = ["anthropic", "openai", "google", "openrouter", "xai", "deepseek"]
@@ -1331,48 +1332,131 @@ struct SettingsView: View {
 
     private var aboutSection: some View {
         SettingsSection(title: "About", icon: "info.circle") {
-            VStack(spacing: 10) {
-                HStack {
-                    Text("osai Desktop")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(AppTheme.textPrimary)
-                    Spacer()
-                    Text("v1.0.0")
-                        .font(AppTheme.fontMono)
-                        .foregroundColor(AppTheme.textMuted)
-                }
+            VStack(spacing: 16) {
+                // App identity
+                HStack(spacing: 14) {
+                    GhostIcon(size: 48, animate: false)
 
-                HStack {
-                    Text("Platform")
-                        .font(AppTheme.fontBody)
-                        .foregroundColor(AppTheme.textSecondary)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("OSAI")
+                            .font(.system(size: 22, weight: .bold, design: .rounded))
+                            .foregroundColor(AppTheme.textPrimary)
+                        Text("Version 0.1")
+                            .font(AppTheme.fontMono)
+                            .foregroundColor(AppTheme.textSecondary)
+                    }
+
                     Spacer()
-                    Text("macOS \(ProcessInfo.processInfo.operatingSystemVersionString)")
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundColor(AppTheme.textMuted)
                 }
 
                 Divider().background(AppTheme.borderGlass)
 
-                HStack {
-                    Button(action: {
-                        if let url = URL(string: "https://github.com/AdrianTomin/osai") {
-                            NSWorkspace.shared.open(url)
-                        }
-                    }) {
-                        HStack(spacing: 6) {
-                            Image(systemName: "link")
-                            Text("View on GitHub")
-                        }
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(AppTheme.accent)
+                // Build info
+                VStack(spacing: 8) {
+                    HStack {
+                        Text("Swift")
+                            .font(AppTheme.fontBody)
+                            .foregroundColor(AppTheme.textSecondary)
+                        Spacer()
+                        Text("6.0")
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundColor(AppTheme.textMuted)
                     }
-                    .buttonStyle(.plain)
+                    HStack {
+                        Text("macOS Target")
+                            .font(AppTheme.fontBody)
+                            .foregroundColor(AppTheme.textSecondary)
+                        Spacer()
+                        Text("14.0+")
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundColor(AppTheme.textMuted)
+                    }
+                    HStack {
+                        Text("Platform")
+                            .font(AppTheme.fontBody)
+                            .foregroundColor(AppTheme.textSecondary)
+                        Spacer()
+                        Text("macOS \(ProcessInfo.processInfo.operatingSystemVersionString)")
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundColor(AppTheme.textMuted)
+                    }
+                }
 
+                Divider().background(AppTheme.borderGlass)
+
+                // Links
+                HStack(spacing: 12) {
+                    aboutLinkButton(label: "GitHub Repository", icon: "link", url: "https://github.com/AdrianTomin/osai")
+                    aboutLinkButton(label: "Report a Bug", icon: "ladybug", url: "https://github.com/AdrianTomin/osai/issues/new")
+                    aboutLinkButton(label: "Documentation", icon: "book", url: "https://github.com/AdrianTomin/osai#readme")
                     Spacer()
+                }
+
+                Divider().background(AppTheme.borderGlass)
+
+                // Credits
+                HStack(spacing: 16) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "swift")
+                            .font(.system(size: 12))
+                            .foregroundColor(AppTheme.accent)
+                        Text("Built with SwiftUI")
+                            .font(AppTheme.fontCaption)
+                            .foregroundColor(AppTheme.textSecondary)
+                    }
+                    HStack(spacing: 6) {
+                        Image(systemName: "brain")
+                            .font(.system(size: 12))
+                            .foregroundColor(AppTheme.accent)
+                        Text("Powered by AI")
+                            .font(AppTheme.fontCaption)
+                            .foregroundColor(AppTheme.textSecondary)
+                    }
+                    Spacer()
+                }
+
+                // What's New button
+                Button(action: { showChangelog = true }) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "sparkles")
+                        Text("What's New")
+                    }
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 10)
+                    .frame(maxWidth: .infinity)
+                    .background(
+                        LinearGradient(
+                            colors: [AppTheme.accent, AppTheme.accent.opacity(0.7)],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+                    .clipShape(RoundedRectangle(cornerRadius: AppTheme.cornerRadiusSm))
+                }
+                .buttonStyle(.plain)
+                .sheet(isPresented: $showChangelog) {
+                    ChangelogView(isPresented: $showChangelog)
                 }
             }
         }
+    }
+
+    private func aboutLinkButton(label: String, icon: String, url: String) -> some View {
+        Button(action: {
+            if let linkURL = URL(string: url) {
+                NSWorkspace.shared.open(linkURL)
+            }
+        }) {
+            HStack(spacing: 5) {
+                Image(systemName: icon)
+                Text(label)
+            }
+            .font(.system(size: 12, weight: .medium))
+            .foregroundColor(AppTheme.accent)
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: - Helpers
@@ -1520,5 +1604,194 @@ struct SettingsActionButton: View {
         .buttonStyle(.plain)
         .accessibilityLabel(label)
         .onHover { isHovered = $0 }
+    }
+}
+
+// MARK: - Changelog View
+
+struct ChangelogEntry: Identifiable {
+    let id = UUID()
+    let version: String
+    let date: String
+    let changes: [String]
+}
+
+private let changelogEntries: [ChangelogEntry] = [
+    ChangelogEntry(
+        version: "0.1",
+        date: "March 2026",
+        changes: [
+            "Initial desktop app release with SwiftUI",
+            "Ghost icon branding and glass-card UI theme",
+            "Settings panel with API key management",
+            "Multi-provider support: Anthropic, OpenAI, Google, OpenRouter, xAI, DeepSeek",
+        ]
+    ),
+    ChangelogEntry(
+        version: "0.1-r46",
+        date: "March 2026",
+        changes: [
+            "Gateway background mode with auto-start on login",
+            "Claude Code backend for agents",
+            "Removed default agent auto-install for cleaner setup",
+        ]
+    ),
+    ChangelogEntry(
+        version: "0.1-r44",
+        date: "March 2026",
+        changes: [
+            "Updated default agents: product, organizer, writer, design",
+            "Improved news and research agent capabilities",
+            "Specialized agent routing with auto-dispatch by intent",
+        ]
+    ),
+    ChangelogEntry(
+        version: "0.1-r42",
+        date: "March 2026",
+        changes: [
+            "Major token optimization with dynamic tool loading",
+            "Prompt caching for reduced API costs",
+            "Lazy memory loading for faster startup",
+        ]
+    ),
+    ChangelogEntry(
+        version: "0.1-r40",
+        date: "March 2026",
+        changes: [
+            "Budget and spending controls in settings",
+            "Usage statistics with token tracking charts",
+            "Notification preferences for alerts and updates",
+        ]
+    ),
+    ChangelogEntry(
+        version: "0.1-r38",
+        date: "March 2026",
+        changes: [
+            "Appearance customization with accent color presets",
+            "Light and dark mode support with adaptive colors",
+            "Backup and restore for configuration data",
+        ]
+    ),
+    ChangelogEntry(
+        version: "0.1-r35",
+        date: "February 2026",
+        changes: [
+            "Dashboard view with system status overview",
+            "Agent management panel with install/remove",
+            "Task cards with status tracking and progress",
+        ]
+    ),
+    ChangelogEntry(
+        version: "0.1-r30",
+        date: "February 2026",
+        changes: [
+            "Chat interface with streaming message display",
+            "Conversation history and sidebar navigation",
+            "Input field with send action and keyboard shortcuts",
+        ]
+    ),
+    ChangelogEntry(
+        version: "0.1-r27",
+        date: "February 2026",
+        changes: [
+            "Core architecture: AppState, ConfigService, OSAIService",
+            "Gateway connectivity and health check monitoring",
+            "Model selection with provider-aware routing",
+        ]
+    ),
+]
+
+struct ChangelogView: View {
+    @Binding var isPresented: Bool
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header bar
+            HStack {
+                HStack(spacing: 8) {
+                    Image(systemName: "sparkles")
+                        .font(.system(size: 16))
+                        .foregroundColor(AppTheme.accent)
+                    Text("What's New")
+                        .font(.system(size: 18, weight: .bold, design: .rounded))
+                        .foregroundColor(AppTheme.textPrimary)
+                }
+
+                Spacer()
+
+                Button(action: { isPresented = false }) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 20))
+                        .foregroundColor(AppTheme.textMuted)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 18)
+
+            Divider().background(AppTheme.borderGlass)
+
+            // Scrollable timeline
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(spacing: 0) {
+                    ForEach(Array(changelogEntries.enumerated()), id: \.element.id) { index, entry in
+                        HStack(alignment: .top, spacing: 16) {
+                            // Timeline column
+                            VStack(spacing: 0) {
+                                // Dot
+                                Circle()
+                                    .fill(index == 0 ? AppTheme.accent : AppTheme.textMuted.opacity(0.5))
+                                    .frame(width: 12, height: 12)
+                                    .shadow(color: index == 0 ? AppTheme.accent.opacity(0.5) : .clear, radius: 4)
+
+                                // Connecting line
+                                if index < changelogEntries.count - 1 {
+                                    Rectangle()
+                                        .fill(AppTheme.borderGlass)
+                                        .frame(width: 2)
+                                        .frame(maxHeight: .infinity)
+                                }
+                            }
+                            .frame(width: 12)
+
+                            // Version card
+                            GlassCard(hoverEnabled: false) {
+                                VStack(alignment: .leading, spacing: 10) {
+                                    HStack {
+                                        Text("v\(entry.version)")
+                                            .font(.system(size: 15, weight: .bold, design: .monospaced))
+                                            .foregroundColor(index == 0 ? AppTheme.accent : AppTheme.textPrimary)
+                                        Spacer()
+                                        Text(entry.date)
+                                            .font(AppTheme.fontCaption)
+                                            .foregroundColor(AppTheme.textMuted)
+                                    }
+
+                                    VStack(alignment: .leading, spacing: 6) {
+                                        ForEach(entry.changes, id: \.self) { change in
+                                            HStack(alignment: .top, spacing: 8) {
+                                                Circle()
+                                                    .fill(AppTheme.accent.opacity(0.6))
+                                                    .frame(width: 5, height: 5)
+                                                    .padding(.top, 5)
+                                                Text(change)
+                                                    .font(AppTheme.fontBody)
+                                                    .foregroundColor(AppTheme.textSecondary)
+                                                    .fixedSize(horizontal: false, vertical: true)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        .padding(.bottom, index < changelogEntries.count - 1 ? 4 : 0)
+                    }
+                }
+                .padding(.horizontal, 24)
+                .padding(.vertical, 20)
+            }
+        }
+        .frame(width: 520, height: 580)
+        .background(AppTheme.bgPrimary)
     }
 }

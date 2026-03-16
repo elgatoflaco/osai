@@ -52,9 +52,13 @@ struct ChatView: View {
     @State private var snapshotNameText: String = ""
     @State private var snapshotRestoreConfirm: ConversationSnapshot? = nil
     @State private var showPinnedStrip: Bool = true
+    @State private var showNewWorkspacePopover: Bool = false
+    @State private var newWorkspaceName: String = ""
+    @State private var editingWorkspaceId: String? = nil
+    @State private var editingWorkspaceName: String = ""
 
     private var filteredConversations: [Conversation] {
-        var sorted = appState.sortedConversations
+        var sorted = appState.workspaceFilteredConversations(appState.sortedConversations)
         // Multi-tag filter (AND logic)
         if !appState.selectedFilterTags.isEmpty {
             sorted = sorted.filter { conv in
@@ -1435,7 +1439,11 @@ struct ChatView: View {
                 if appState.activeConversation?.id != conv.id {
                     appState.openConversation(conv)
                 }
-            }
+            },
+            workspaces: appState.workspaces,
+            conversationWorkspaceIds: appState.workspacesForConversation(conv.id).map { $0.id },
+            onAddToWorkspace: { wsId in appState.addToWorkspace(conversationId: conv.id, workspaceId: wsId) },
+            onRemoveFromWorkspace: { wsId in appState.removeFromWorkspace(conversationId: conv.id, workspaceId: wsId) }
         )
     }
 
@@ -1475,7 +1483,188 @@ struct ChatView: View {
         appState.tagColor(for: tag)
     }
 
+    // MARK: - Workspace Selector
+
     @ViewBuilder
+    private var workspaceSelectorView: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 6) {
+                Menu {
+                    Button(action: { withAnimation(.easeInOut(duration: 0.2)) { appState.activeWorkspaceId = nil } }) {
+                        HStack {
+                            Label("All Conversations", systemImage: "tray.full")
+                            if appState.activeWorkspaceId == nil {
+                                Spacer()
+                                Image(systemName: "checkmark")
+                            }
+                        }
+                    }
+
+                    if !appState.workspaces.isEmpty {
+                        Divider()
+                    }
+
+                    ForEach(appState.workspaces) { ws in
+                        Button(action: {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                appState.activeWorkspaceId = ws.id
+                            }
+                        }) {
+                            HStack {
+                                Label(ws.name, systemImage: ws.icon)
+                                Text("(\(appState.workspaceConversationCount(ws.id)))")
+                                    .foregroundColor(AppTheme.textMuted)
+                                if appState.activeWorkspaceId == ws.id {
+                                    Spacer()
+                                    Image(systemName: "checkmark")
+                                }
+                            }
+                        }
+                    }
+
+                    Divider()
+
+                    Button(action: {
+                        newWorkspaceName = ""
+                        showNewWorkspacePopover = true
+                    }) {
+                        Label("New Workspace...", systemImage: "plus")
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: appState.activeWorkspace?.icon ?? "tray.full")
+                            .font(.system(size: 10))
+                        Text(appState.activeWorkspace?.name ?? "All Conversations")
+                            .font(.system(size: 11, weight: .medium))
+                            .lineLimit(1)
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 8))
+                    }
+                    .foregroundColor(appState.activeWorkspaceId != nil ? AppTheme.accent : AppTheme.textSecondary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .background(AppTheme.bgCard.opacity(0.4))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+
+                Spacer()
+
+                if appState.activeWorkspaceId != nil {
+                    Button(action: { withAnimation(.easeInOut(duration: 0.2)) { appState.activeWorkspaceId = nil } }) {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 11))
+                            .foregroundColor(AppTheme.textMuted)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Clear workspace filter")
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.top, 8)
+            .padding(.bottom, 4)
+            .popover(isPresented: $showNewWorkspacePopover) {
+                VStack(spacing: 12) {
+                    Text("New Workspace")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(AppTheme.textPrimary)
+                    TextField("Workspace name", text: $newWorkspaceName)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 200)
+                        .onSubmit { commitNewWorkspace() }
+                    HStack(spacing: 12) {
+                        Button("Cancel") { showNewWorkspacePopover = false }
+                            .keyboardShortcut(.cancelAction)
+                        Button("Create") { commitNewWorkspace() }
+                            .keyboardShortcut(.defaultAction)
+                            .disabled(newWorkspaceName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
+                }
+                .padding(16)
+            }
+
+            // Workspace header (when a workspace is active)
+            if let ws = appState.activeWorkspace {
+                workspaceHeaderView(ws)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func workspaceHeaderView(_ ws: Workspace) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: ws.icon)
+                .font(.system(size: 11))
+                .foregroundColor(AppTheme.accent)
+
+            if editingWorkspaceId == ws.id {
+                TextField("Name", text: $editingWorkspaceName)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(AppTheme.textPrimary)
+                    .onSubmit {
+                        appState.renameWorkspace(id: ws.id, name: editingWorkspaceName)
+                        editingWorkspaceId = nil
+                    }
+                    .onExitCommand { editingWorkspaceId = nil }
+            } else {
+                Text(ws.name)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(AppTheme.textPrimary)
+                    .lineLimit(1)
+            }
+
+            Text("\(appState.workspaceConversationCount(ws.id))")
+                .font(.system(size: 9, weight: .bold, design: .rounded))
+                .foregroundColor(AppTheme.textMuted)
+                .padding(.horizontal, 5)
+                .padding(.vertical, 1)
+                .background(AppTheme.bgCard.opacity(0.5))
+                .clipShape(Capsule())
+
+            Spacer()
+
+            Button(action: {
+                editingWorkspaceName = ws.name
+                editingWorkspaceId = ws.id
+            }) {
+                Image(systemName: "pencil")
+                    .font(.system(size: 10))
+                    .foregroundColor(AppTheme.textMuted)
+            }
+            .buttonStyle(.plain)
+            .help("Rename workspace")
+
+            Button(action: {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    appState.deleteWorkspace(id: ws.id)
+                }
+            }) {
+                Image(systemName: "trash")
+                    .font(.system(size: 10))
+                    .foregroundColor(AppTheme.textMuted)
+            }
+            .buttonStyle(.plain)
+            .help("Delete workspace")
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(AppTheme.accent.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .padding(.horizontal, 10)
+        .padding(.bottom, 4)
+    }
+
+    private func commitNewWorkspace() {
+        let trimmed = newWorkspaceName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        appState.createWorkspace(name: trimmed)
+        showNewWorkspacePopover = false
+        newWorkspaceName = ""
+    }
+
     private var tagFilterBar: some View {
         VStack(spacing: 4) {
             ScrollView(.horizontal, showsIndicators: false) {
@@ -2875,6 +3064,9 @@ struct ChatView: View {
 
                 Divider().background(AppTheme.borderGlass)
 
+                // Workspace selector
+                workspaceSelectorView
+
                 // Search field
                 HStack(spacing: 6) {
                     Image(systemName: "magnifyingglass")
@@ -3684,6 +3876,10 @@ struct ConversationRow: View {
     var isMergeTarget: Bool = false
     var onSetColor: ((String?) -> Void)? = nil
     var onSaveSnapshot: (() -> Void)? = nil
+    var workspaces: [Workspace] = []
+    var conversationWorkspaceIds: [String] = []
+    var onAddToWorkspace: ((String) -> Void)? = nil
+    var onRemoveFromWorkspace: ((String) -> Void)? = nil
     @State private var isHovered = false
 
     private static let tagColors: [Color] = [.red, .orange, .yellow, .green, .blue, .purple, .pink, .teal]
@@ -3874,6 +4070,8 @@ struct ConversationRow: View {
             Divider()
             colorLabelContextMenu
             Divider()
+            workspaceContextMenu
+            Divider()
             Button(role: .destructive, action: onDelete) {
                 Label("Delete", systemImage: "trash")
             }
@@ -3947,6 +4145,34 @@ struct ConversationRow: View {
                 Label("None", systemImage: "xmark.circle")
             }
             .disabled(conv.colorLabel == nil)
+        }
+    }
+
+    @ViewBuilder
+    private var workspaceContextMenu: some View {
+        Menu("Move to Workspace") {
+            ForEach(workspaces) { ws in
+                Button {
+                    if conversationWorkspaceIds.contains(ws.id) {
+                        onRemoveFromWorkspace?(ws.id)
+                    } else {
+                        onAddToWorkspace?(ws.id)
+                    }
+                } label: {
+                    HStack {
+                        Image(systemName: ws.icon)
+                        Text(ws.name)
+                        if conversationWorkspaceIds.contains(ws.id) {
+                            Spacer()
+                            Image(systemName: "checkmark")
+                        }
+                    }
+                }
+            }
+            if workspaces.isEmpty {
+                Text("No workspaces")
+                    .foregroundColor(AppTheme.textMuted)
+            }
         }
     }
 
