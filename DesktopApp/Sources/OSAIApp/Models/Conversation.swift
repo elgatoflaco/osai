@@ -10,6 +10,23 @@ enum MessageRole: String, Codable {
 enum MessageReaction: String, Codable {
     case thumbsUp
     case thumbsDown
+    case heart
+    case laugh
+    case thinking
+    case party
+
+    var emoji: String {
+        switch self {
+        case .thumbsUp: return "\u{1F44D}"
+        case .thumbsDown: return "\u{1F44E}"
+        case .heart: return "\u{2764}\u{FE0F}"
+        case .laugh: return "\u{1F602}"
+        case .thinking: return "\u{1F914}"
+        case .party: return "\u{1F389}"
+        }
+    }
+
+    static let allReactions: [MessageReaction] = [.thumbsUp, .thumbsDown, .heart, .laugh, .thinking, .party]
 }
 
 /// Represents an activity happening during processing (MCP loading, tool call, etc.)

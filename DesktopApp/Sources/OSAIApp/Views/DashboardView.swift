@@ -105,6 +105,12 @@ struct DashboardView: View {
     @ViewBuilder
     private func dashboardSection(_ section: DashboardSection) -> some View {
         switch section {
+        case .quickStart:
+            CollapsibleSection(section: .quickStart) {
+                quickStartContent
+            }
+            .frame(maxWidth: 800)
+
         case .gateway:
             CollapsibleSection(section: .gateway) {
                 gatewayContent
@@ -160,6 +166,44 @@ struct DashboardView: View {
     }
 
     // MARK: - Section Content
+
+    private var quickStartContent: some View {
+        let columns = [
+            GridItem(.flexible(), spacing: AppTheme.paddingMd),
+            GridItem(.flexible(), spacing: AppTheme.paddingMd),
+        ]
+        return LazyVGrid(columns: columns, spacing: AppTheme.paddingMd) {
+            ForEach(appState.conversationTemplates) { template in
+                Button(action: {
+                    appState.startFromTemplate(template)
+                }) {
+                    GlassCard(padding: AppTheme.paddingMd) {
+                        HStack(spacing: 12) {
+                            Image(systemName: template.icon)
+                                .font(.system(size: 22))
+                                .foregroundColor(AppTheme.accent)
+                                .frame(width: 36, height: 36)
+                                .background(AppTheme.accent.opacity(0.12))
+                                .clipShape(RoundedRectangle(cornerRadius: AppTheme.cornerRadiusSm))
+
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(template.name)
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundColor(AppTheme.textPrimary)
+                                Text(template.description)
+                                    .font(AppTheme.fontCaption)
+                                    .foregroundColor(AppTheme.textSecondary)
+                                    .lineLimit(1)
+                            }
+
+                            Spacer()
+                        }
+                    }
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
 
     private var gatewayContent: some View {
         GlassCard {

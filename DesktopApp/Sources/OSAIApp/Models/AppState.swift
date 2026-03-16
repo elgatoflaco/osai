@@ -256,9 +256,20 @@ struct CodeBlock: Identifiable {
 }
 
 @MainActor
+// MARK: - Conversation Template
+
+struct ConversationTemplate: Identifiable {
+    let id = UUID()
+    let name: String
+    let icon: String
+    let description: String
+    let initialMessage: String
+}
+
 // MARK: - Dashboard Section
 
 enum DashboardSection: String, Codable, CaseIterable, Identifiable {
+    case quickStart
     case gateway
     case stats
     case spending
@@ -273,6 +284,7 @@ enum DashboardSection: String, Codable, CaseIterable, Identifiable {
 
     var displayName: String {
         switch self {
+        case .quickStart: return "Quick Start"
         case .gateway: return "Gateway Status"
         case .stats: return "Quick Stats"
         case .spending: return "Monthly Spending"
@@ -287,6 +299,7 @@ enum DashboardSection: String, Codable, CaseIterable, Identifiable {
 
     var icon: String {
         switch self {
+        case .quickStart: return "bolt.fill"
         case .gateway: return "power"
         case .stats: return "square.grid.2x2"
         case .spending: return "chart.bar"
@@ -300,8 +313,32 @@ enum DashboardSection: String, Codable, CaseIterable, Identifiable {
     }
 
     static let defaultOrder: [DashboardSection] = [
-        .gateway, .stats, .spending, .tokenStats, .analytics, .chatInsights, .performance, .recentActivity, .systemHealth
+        .quickStart, .gateway, .stats, .spending, .tokenStats, .analytics, .chatInsights, .performance, .recentActivity, .systemHealth
     ]
+}
+
+// MARK: - Daily Token Usage
+
+struct DailyTokenUsage: Identifiable, Codable, Equatable {
+    var id: String { dateKey }
+    let dateKey: String      // "yyyy-MM-dd"
+    let date: Date
+    var inputTokens: Int
+    var outputTokens: Int
+
+    var totalTokens: Int { inputTokens + outputTokens }
+
+    /// Estimated cost using a rough average across models (~$3/MTok input, ~$15/MTok output)
+    var estimatedCost: Double {
+        (Double(inputTokens) * 3.0 + Double(outputTokens) * 15.0) / 1_000_000.0
+    }
+
+    /// Short day label (Mon, Tue, etc.)
+    var dayLabel: String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "EEE"
+        return formatter.string(from: date)
+    }
 }
 
 class AppState: ObservableObject {
@@ -580,6 +617,7 @@ class AppState: ObservableObject {
     @Published var tokensToday: Int = 0
     @Published var costToday: Double = 0.0
     @Published var costMonth: Double = 0.0
+    @Published var dailyTokenUsage: [DailyTokenUsage] = []
     @Published var errorMessage: String?
     @Published var toastMessage: Toast?
     @Published var isProcessing: Bool = false
@@ -602,6 +640,62 @@ class AppState: ObservableObject {
     @Published var showNotificationPanel: Bool = false
     @Published var selectedModel: String = "anthropic/claude-sonnet-4-20250514"
     @Published var showConversationInfo: Bool = false
+
+    // MARK: - Conversation Templates
+
+    @Published var conversationTemplates: [ConversationTemplate] = [
+        ConversationTemplate(
+            name: "Code Review",
+            icon: "magnifyingglass.circle",
+            description: "Get feedback on your code",
+            initialMessage: "Please review the following code for bugs, readability, and best practices. Suggest improvements:\n\n"
+        ),
+        ConversationTemplate(
+            name: "Debug Issue",
+            icon: "ladybug",
+            description: "Track down and fix bugs",
+            initialMessage: "I'm running into a bug and need help debugging. Here's what's happening:\n\n"
+        ),
+        ConversationTemplate(
+            name: "Explain Code",
+            icon: "doc.text.magnifyingglass",
+            description: "Understand how code works",
+            initialMessage: "Please explain the following code in detail, including what each part does and why:\n\n"
+        ),
+        ConversationTemplate(
+            name: "Write Tests",
+            icon: "checkmark.shield",
+            description: "Generate test cases",
+            initialMessage: "Write comprehensive unit tests for the following code. Cover edge cases and happy paths:\n\n"
+        ),
+        ConversationTemplate(
+            name: "Brainstorm",
+            icon: "brain.head.profile",
+            description: "Explore ideas and solutions",
+            initialMessage: "Let's brainstorm ideas. I'm working on the following and would love creative input:\n\n"
+        ),
+        ConversationTemplate(
+            name: "Research",
+            icon: "books.vertical",
+            description: "Deep dive into a topic",
+            initialMessage: "I'd like to research and understand the following topic in depth:\n\n"
+        ),
+    ]
+
+    func startFromTemplate(_ template: ConversationTemplate) {
+        let conv = Conversation(
+            id: UUID().uuidString,
+            title: template.name,
+            messages: [],
+            createdAt: Date(),
+            agentName: nil,
+            modelId: selectedModel
+        )
+        activeConversation = conv
+        conversations.insert(conv, at: 0)
+        selectedTab = .chat
+        sendMessage(template.initialMessage)
+    }
 
     // MARK: - Conversation Summary
 
@@ -941,6 +1035,69 @@ class AppState: ObservableObject {
                 .compactMap { ($0.value as? [String: Any])?["cost_usd"] as? Double }
                 .reduce(0, +)
         }
+
+        loadDailyTokenUsage()
+    }
+
+    // MARK: - Daily Token Usage Persistence
+
+    private static let dailyTokenUsageKey = "dailyTokenUsage"
+
+    func loadDailyTokenUsage() {
+        if let data = UserDefaults.standard.data(forKey: Self.dailyTokenUsageKey),
+           let decoded = try? JSONDecoder().decode([DailyTokenUsage].self, from: data) {
+            dailyTokenUsage = decoded
+        }
+    }
+
+    private func saveDailyTokenUsage() {
+        if let data = try? JSONEncoder().encode(dailyTokenUsage) {
+            UserDefaults.standard.set(data, forKey: Self.dailyTokenUsageKey)
+        }
+    }
+
+    func recordDailyTokenUsage(input: Int, output: Int) {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        let todayKey = formatter.string(from: Date())
+
+        if let idx = dailyTokenUsage.firstIndex(where: { $0.dateKey == todayKey }) {
+            dailyTokenUsage[idx].inputTokens += input
+            dailyTokenUsage[idx].outputTokens += output
+        } else {
+            let entry = DailyTokenUsage(
+                dateKey: todayKey,
+                date: Calendar.current.startOfDay(for: Date()),
+                inputTokens: input,
+                outputTokens: output
+            )
+            dailyTokenUsage.append(entry)
+        }
+
+        // Prune entries older than 30 days
+        let cutoff = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date()
+        dailyTokenUsage.removeAll { $0.date < cutoff }
+
+        saveDailyTokenUsage()
+    }
+
+    func getWeeklyTokenUsage() -> [DailyTokenUsage] {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+
+        var result: [DailyTokenUsage] = []
+        for dayOffset in (0..<7).reversed() {
+            guard let date = calendar.date(byAdding: .day, value: -dayOffset, to: today) else { continue }
+            let key = formatter.string(from: date)
+            if let existing = dailyTokenUsage.first(where: { $0.dateKey == key }) {
+                result.append(existing)
+            } else {
+                result.append(DailyTokenUsage(dateKey: key, date: date, inputTokens: 0, outputTokens: 0))
+            }
+        }
+        return result
     }
 
     func sendMessage(_ text: String, attachments: [URL] = []) {
@@ -1157,6 +1314,7 @@ class AppState: ObservableObject {
             activeConversation?.totalInputTokens += input
             activeConversation?.totalOutputTokens += output
             tokensToday += input + output
+            recordDailyTokenUsage(input: input, output: output)
 
         case .contextPressure(let percent):
             contextPressurePercent = percent

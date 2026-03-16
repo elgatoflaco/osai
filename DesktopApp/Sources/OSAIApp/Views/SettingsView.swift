@@ -43,6 +43,9 @@ struct SettingsView: View {
                 // 4. Usage & Spending
                 spendingSection
 
+                // 4b. Token Usage Chart
+                usageStatisticsSection
+
                 // 5. Appearance
                 appearanceSection
 
@@ -379,6 +382,125 @@ struct SettingsView: View {
                     Text(formatTokens(appState.tokensToday))
                         .font(AppTheme.fontMono)
                         .foregroundColor(AppTheme.textPrimary)
+                }
+            }
+        }
+    }
+
+    // MARK: - Usage Statistics
+
+    private var usageStatisticsSection: some View {
+        let weeklyData = appState.getWeeklyTokenUsage()
+        let maxTokens = weeklyData.map { $0.totalTokens }.max() ?? 1
+        let totalInput = weeklyData.reduce(0) { $0 + $1.inputTokens }
+        let totalOutput = weeklyData.reduce(0) { $0 + $1.outputTokens }
+        let totalCost = weeklyData.reduce(0.0) { $0 + $1.estimatedCost }
+
+        return SettingsSection(title: "Usage Statistics", icon: "chart.bar.xaxis") {
+            VStack(spacing: 16) {
+                // Bar chart
+                HStack(alignment: .bottom, spacing: 8) {
+                    // Y-axis max label
+                    VStack {
+                        Text(formatTokens(maxTokens))
+                            .font(.system(size: 9, design: .monospaced))
+                            .foregroundColor(AppTheme.textMuted)
+                        Spacer()
+                        Text("0")
+                            .font(.system(size: 9, design: .monospaced))
+                            .foregroundColor(AppTheme.textMuted)
+                    }
+                    .frame(width: 36, height: 120)
+
+                    // Bars
+                    ForEach(weeklyData) { day in
+                        VStack(spacing: 4) {
+                            // Stacked bar
+                            GeometryReader { geo in
+                                let totalHeight = geo.size.height
+                                let scale = maxTokens > 0 ? totalHeight / CGFloat(maxTokens) : 0
+                                let inputHeight = max(CGFloat(day.inputTokens) * scale, day.inputTokens > 0 ? 2 : 0)
+                                let outputHeight = max(CGFloat(day.outputTokens) * scale, day.outputTokens > 0 ? 2 : 0)
+
+                                VStack(spacing: 0) {
+                                    Spacer(minLength: 0)
+                                    // Output tokens (top, lighter)
+                                    if day.outputTokens > 0 {
+                                        RoundedRectangle(cornerRadius: 3)
+                                            .fill(AppTheme.accent.opacity(0.5))
+                                            .frame(height: outputHeight)
+                                    }
+                                    // Input tokens (bottom, full color)
+                                    if day.inputTokens > 0 {
+                                        RoundedRectangle(cornerRadius: 3)
+                                            .fill(AppTheme.accent)
+                                            .frame(height: inputHeight)
+                                    }
+                                }
+                            }
+                            .frame(height: 120)
+
+                            // Day label
+                            Text(day.dayLabel)
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundColor(AppTheme.textMuted)
+                        }
+                    }
+                }
+                .padding(.top, 4)
+
+                // Legend
+                HStack(spacing: 16) {
+                    HStack(spacing: 6) {
+                        RoundedRectangle(cornerRadius: 2)
+                            .fill(AppTheme.accent)
+                            .frame(width: 12, height: 12)
+                        Text("Input")
+                            .font(.system(size: 11))
+                            .foregroundColor(AppTheme.textSecondary)
+                    }
+                    HStack(spacing: 6) {
+                        RoundedRectangle(cornerRadius: 2)
+                            .fill(AppTheme.accent.opacity(0.5))
+                            .frame(width: 12, height: 12)
+                        Text("Output")
+                            .font(.system(size: 11))
+                            .foregroundColor(AppTheme.textSecondary)
+                    }
+                    Spacer()
+                }
+
+                Divider().background(AppTheme.borderGlass)
+
+                // Summary
+                VStack(spacing: 8) {
+                    HStack {
+                        Text("Total tokens (7 days)")
+                            .font(AppTheme.fontBody)
+                            .foregroundColor(AppTheme.textSecondary)
+                        Spacer()
+                        Text(formatTokens(totalInput + totalOutput))
+                            .font(AppTheme.fontMono)
+                            .foregroundColor(AppTheme.textPrimary)
+                    }
+                    HStack {
+                        Text("Input / Output")
+                            .font(AppTheme.fontBody)
+                            .foregroundColor(AppTheme.textSecondary)
+                        Spacer()
+                        Text("\(formatTokens(totalInput)) / \(formatTokens(totalOutput))")
+                            .font(AppTheme.fontMono)
+                            .foregroundColor(AppTheme.textSecondary)
+                    }
+                    HStack {
+                        Text("Estimated cost (7 days)")
+                            .font(AppTheme.fontBody)
+                            .foregroundColor(AppTheme.textSecondary)
+                        Spacer()
+                        Text(String(format: "$%.2f", totalCost))
+                            .font(AppTheme.fontMono)
+                            .foregroundColor(AppTheme.accent)
+                    }
                 }
             }
         }

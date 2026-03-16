@@ -389,6 +389,8 @@ struct MessageBubble: View {
     @State private var copied = false
     @State private var isHovered = false
     @State private var reactionBounce: MessageReaction?
+    @State private var showReactionPicker = false
+    @State private var reactionAppeared = false
     @State private var isEditing = false
     @State private var editText = ""
     @State private var speakerPulse = false
@@ -594,6 +596,12 @@ struct MessageBubble: View {
                         .background(AppTheme.accent.opacity(0.12))
                         .clipShape(RoundedRectangle(cornerRadius: 18))
                         .overlay(RoundedRectangle(cornerRadius: 18).stroke(AppTheme.accent.opacity(0.2), lineWidth: 0.5))
+                        .overlay(alignment: .bottomLeading) {
+                            if let reaction = message.reaction {
+                                reactionBadge(reaction)
+                                    .offset(x: -4, y: 8)
+                            }
+                        }
                 }
 
                 if !isEditing {
@@ -959,6 +967,12 @@ struct MessageBubble: View {
                 .onHover { hovering in
                     withAnimation(.easeInOut(duration: 0.15)) { isHovered = hovering }
                 }
+                .overlay(alignment: .bottomTrailing) {
+                    if let reaction = message.reaction {
+                        reactionBadge(reaction)
+                            .offset(x: 4, y: 8)
+                    }
+                }
 
                 // Footer
                 HStack(spacing: 10) {
@@ -974,9 +988,9 @@ struct MessageBubble: View {
                         }
                     }
 
-                    // Reaction buttons: show on hover or if a reaction is already set
+                    // Reaction picker: show on hover or if a reaction is already set
                     if !message.isStreaming && !message.content.isEmpty && (isHovered || message.reaction != nil) {
-                        reactionButtons
+                        reactionPickerButton
                             .transition(.opacity)
                     }
 
@@ -1007,31 +1021,80 @@ struct MessageBubble: View {
         }
     }
 
-    private var reactionButtons: some View {
-        HStack(spacing: 2) {
-            reactionButton(for: .thumbsUp, icon: "hand.thumbsup", filledIcon: "hand.thumbsup.fill")
-            reactionButton(for: .thumbsDown, icon: "hand.thumbsdown", filledIcon: "hand.thumbsdown.fill")
-        }
-    }
+    // MARK: - Reaction Picker
 
-    private func reactionButton(for reaction: MessageReaction, icon: String, filledIcon: String) -> some View {
-        let isSelected = message.reaction == reaction
-        return Button(action: {
-            let newReaction: MessageReaction? = isSelected ? nil : reaction
-            reactionBounce = reaction
-            withAnimation(.spring(response: 0.3, dampingFraction: 0.5)) {}
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { reactionBounce = nil }
-            onReaction?(newReaction)
+    private var reactionPickerButton: some View {
+        Button(action: {
+            showReactionPicker.toggle()
         }) {
-            Image(systemName: isSelected ? filledIcon : icon)
-                .font(.system(size: 11))
-                .foregroundColor(isSelected ? AppTheme.accent : AppTheme.textMuted.opacity(0.6))
-                .frame(width: 22, height: 22)
-                .scaleEffect(reactionBounce == reaction ? 1.3 : 1.0)
-                .animation(.spring(response: 0.3, dampingFraction: 0.5), value: reactionBounce)
+            HStack(spacing: 3) {
+                if let reaction = message.reaction {
+                    Text(reaction.emoji)
+                        .font(.system(size: 12))
+                } else {
+                    Image(systemName: "face.smiling")
+                        .font(.system(size: 11))
+                }
+            }
+            .foregroundColor(message.reaction != nil ? AppTheme.accent : AppTheme.textMuted.opacity(0.6))
+            .frame(width: 24, height: 22)
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(reaction == .thumbsUp ? "Thumbs up" : "Thumbs down")
+        .popover(isPresented: $showReactionPicker, arrowEdge: .top) {
+            reactionPickerPopover
+        }
+        .accessibilityLabel(message.reaction != nil ? "Change reaction" : "Add reaction")
+    }
+
+    private var reactionPickerPopover: some View {
+        HStack(spacing: 6) {
+            ForEach(MessageReaction.allReactions, id: \.self) { reaction in
+                let isSelected = message.reaction == reaction
+                Button(action: {
+                    let newReaction: MessageReaction? = isSelected ? nil : reaction
+                    reactionBounce = reaction
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.5)) {}
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { reactionBounce = nil }
+                    onReaction?(newReaction)
+                    showReactionPicker = false
+                }) {
+                    Text(reaction.emoji)
+                        .font(.system(size: 20))
+                        .scaleEffect(reactionBounce == reaction ? 1.4 : (isSelected ? 1.15 : 1.0))
+                        .animation(.spring(response: 0.3, dampingFraction: 0.5), value: reactionBounce)
+                        .frame(width: 32, height: 32)
+                        .background(isSelected ? AppTheme.accent.opacity(0.15) : Color.clear)
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(reaction.emoji)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+    }
+
+    private func reactionBadge(_ reaction: MessageReaction) -> some View {
+        Text(reaction.emoji)
+            .font(.system(size: 14))
+            .padding(4)
+            .background(AppTheme.bgCard)
+            .clipShape(Circle())
+            .overlay(Circle().stroke(AppTheme.borderGlass, lineWidth: 0.5))
+            .shadow(color: .black.opacity(0.1), radius: 2, y: 1)
+            .scaleEffect(reactionAppeared ? 1.0 : 0.3)
+            .opacity(reactionAppeared ? 1.0 : 0.0)
+            .onAppear {
+                withAnimation(.spring(response: 0.4, dampingFraction: 0.6)) {
+                    reactionAppeared = true
+                }
+            }
+            .onChange(of: message.reaction) { _ in
+                reactionAppeared = false
+                withAnimation(.spring(response: 0.4, dampingFraction: 0.6)) {
+                    reactionAppeared = true
+                }
+            }
     }
 
     private func timeString(_ date: Date) -> String {
