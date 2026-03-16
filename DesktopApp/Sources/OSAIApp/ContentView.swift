@@ -1745,6 +1745,8 @@ struct ContentView: View {
     @State private var commandSearch = ""
     @State private var showCompactMenu = false
     @State private var showKeyboardShortcuts = false
+    @State private var sessionSaveTimer: Timer?
+    @State private var terminationObserver: NSObjectProtocol?
 
     var body: some View {
         GeometryReader { geo in
@@ -1978,12 +1980,36 @@ struct ContentView: View {
         .background(AppTheme.bgPrimary)
         .onAppear {
             appState.loadAll()
+            appState.restoreSessionState()
             if appState.globalHotkeyEnabled {
                 installHotkey()
+            }
+
+            // Save session state every 30 seconds
+            sessionSaveTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { _ in
+                Task { @MainActor in
+                    appState.saveSessionState()
+                }
+            }
+
+            // Save session state on app termination
+            terminationObserver = NotificationCenter.default.addObserver(
+                forName: NSApplication.willTerminateNotification, object: nil, queue: .main
+            ) { _ in
+                Task { @MainActor in
+                    appState.saveSessionState()
+                }
             }
         }
         .onDisappear {
             hotkeyManager.uninstall()
+            appState.saveSessionState()
+            sessionSaveTimer?.invalidate()
+            sessionSaveTimer = nil
+            if let obs = terminationObserver {
+                NotificationCenter.default.removeObserver(obs)
+                terminationObserver = nil
+            }
         }
         .onChange(of: appState.globalHotkeyEnabled) {
             if appState.globalHotkeyEnabled {

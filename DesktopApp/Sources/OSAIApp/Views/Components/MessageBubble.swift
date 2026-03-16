@@ -1688,7 +1688,7 @@ struct MessageBubble: View {
                             if isRawMode && !message.isStreaming {
                                 RawMarkdownView(text: message.content)
                             } else {
-                                ResponseView(text: message.content, isStreaming: message.isStreaming, zenMode: zenMode)
+                                ResponseView(text: message.content, isStreaming: message.isStreaming, zenMode: zenMode, messageId: message.id)
                             }
                         }
 
@@ -2930,19 +2930,111 @@ struct FootnoteSectionView: View {
     }
 }
 
+// MARK: - Collapsible Section Model
+
+/// Groups parsed response sections by heading for collapsible display.
+private struct CollapsibleGroup: Identifiable {
+    let id: Int // section index
+    let headingText: String
+    let headingLevel: Int
+    let content: [IndexedSection]
+}
+
+/// A response section tagged with its original index for stable identity.
+private struct IndexedSection: Identifiable {
+    let id: Int
+    let section: ResponseSection
+}
+
+/// Splits flat parsed sections into collapsible groups.
+/// Each group starts with a heading (## or ###) and includes all content until the next heading.
+/// Sections before the first heading are returned as ungrouped.
+private func buildCollapsibleGroups(from sections: [ResponseSection]) -> (ungrouped: [IndexedSection], groups: [CollapsibleGroup]) {
+    var ungrouped: [IndexedSection] = []
+    var groups: [CollapsibleGroup] = []
+    var currentHeading: (text: String, level: Int, startIdx: Int)?
+    var currentContent: [IndexedSection] = []
+
+    for (idx, section) in sections.enumerated() {
+        if case .heading(let text, let level) = section, level >= 2 && level <= 3 {
+            // Flush previous group
+            if let heading = currentHeading {
+                groups.append(CollapsibleGroup(
+                    id: heading.startIdx,
+                    headingText: heading.text,
+                    headingLevel: heading.level,
+                    content: currentContent
+                ))
+            }
+            currentHeading = (text, level, idx)
+            currentContent = []
+        } else if currentHeading != nil {
+            currentContent.append(IndexedSection(id: idx, section: section))
+        } else {
+            ungrouped.append(IndexedSection(id: idx, section: section))
+        }
+    }
+    // Flush last group
+    if let heading = currentHeading {
+        groups.append(CollapsibleGroup(
+            id: heading.startIdx,
+            headingText: heading.text,
+            headingLevel: heading.level,
+            content: currentContent
+        ))
+    }
+
+    return (ungrouped, groups)
+}
+
+/// Counts words in a string (simple whitespace split).
+private func wordCount(_ text: String) -> Int {
+    text.split(whereSeparator: { $0.isWhitespace || $0.isNewline }).count
+}
+
+/// Truncates text to approximately the given word count, breaking at a word boundary.
+private func truncateToWords(_ text: String, maxWords: Int) -> String {
+    let words = text.split(whereSeparator: { $0.isWhitespace || $0.isNewline })
+    guard words.count > maxWords else { return text }
+    return words.prefix(maxWords).joined(separator: " ")
+}
+
+/// Checks whether parsed sections contain only plain text (no headings).
+private func isPlainTextOnly(_ sections: [ResponseSection]) -> Bool {
+    for section in sections {
+        switch section {
+        case .heading: return false
+        case .sectionCard: return false
+        case .stepProgress: return false
+        case .codeBlock: return false
+        case .table: return false
+        case .mathBlock: return false
+        default: break
+        }
+    }
+    return true
+}
+
 // MARK: - Response View
 
 struct ResponseView: View {
     let text: String
     let isStreaming: Bool
     var zenMode: Bool = false
+    /// Optional message ID used to build stable keys for per-section collapsed state.
+    var messageId: String = ""
     @State private var cursorVisible = true
     @State private var highlightedFootnoteId: String?
+    /// Tracks which collapsible groups (by group id) are collapsed.
+    @State private var collapsedSections: Set<Int> = []
+    /// Whether the initial auto-collapse has been applied.
+    @State private var didAutoCollapse = false
+    /// Whether long plain text is truncated.
+    @State private var isTextTruncated = true
 
     var body: some View {
         let footnoteDefs = parseFootnoteDefinitions(from: text)
         let refOrder = footnoteReferenceOrder(from: text)
-        // Re-number definitions by reference order, falling back to parse order
         let orderedDefs = footnoteDefs.map { def in
             FootnoteDefinition(
                 id: def.id,
@@ -2952,20 +3044,94 @@ struct ResponseView: View {
         }.sorted { $0.displayIndex < $1.displayIndex }
         let strippedText = footnoteDefs.isEmpty ? text : stripFootnoteDefinitions(from: text)
         let sections = ResponseParser.parse(strippedText)
+        let result = buildCollapsibleGroups(from: sections)
+        let headingCount = result.groups.count
+        let useCollapsible = headingCount > 5 && !isStreaming
+        let useTruncation = !useCollapsible && isPlainTextOnly(sections) && wordCount(text) > 500 && !isStreaming
+
         VStack(alignment: .leading, spacing: zenMode ? 14 : 10) {
-            ForEach(Array(sections.enumerated()), id: \.offset) { idx, section in
-                if isStreaming && idx == sections.count - 1 {
-                    // Last section with blinking cursor appended
-                    HStack(alignment: .lastTextBaseline, spacing: 0) {
-                        sectionView(section, refOrder: refOrder)
-                        if cursorVisible {
-                            Text("\u{258C}")
-                                .font(.system(size: 14))
-                                .foregroundColor(AppTheme.accent)
+            // Expand All / Collapse All controls for collapsible mode
+            if useCollapsible {
+                HStack(spacing: 8) {
+                    Button(action: {
+                        withAnimation(.easeInOut(duration: 0.25)) {
+                            collapsedSections.removeAll()
                         }
+                    }) {
+                        HStack(spacing: 3) {
+                            Image(systemName: "arrow.down.right.and.arrow.up.left")
+                                .font(.system(size: 9))
+                            Text("Expand All")
+                                .font(.system(size: 10, weight: .medium))
+                        }
+                        .foregroundColor(collapsedSections.isEmpty ? AppTheme.textMuted.opacity(0.5) : AppTheme.accent)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(AppTheme.bgCard.opacity(0.7))
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(AppTheme.borderGlass, lineWidth: 0.5))
                     }
-                } else {
-                    sectionView(section, refOrder: refOrder)
+                    .buttonStyle(.plain)
+                    .disabled(collapsedSections.isEmpty)
+
+                    Button(action: {
+                        withAnimation(.easeInOut(duration: 0.25)) {
+                            collapsedSections = Set(result.groups.map(\.id))
+                        }
+                    }) {
+                        HStack(spacing: 3) {
+                            Image(systemName: "arrow.up.left.and.arrow.down.right")
+                                .font(.system(size: 9))
+                            Text("Collapse All")
+                                .font(.system(size: 10, weight: .medium))
+                        }
+                        .foregroundColor(collapsedSections.count == result.groups.count ? AppTheme.textMuted.opacity(0.5) : AppTheme.accent)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(AppTheme.bgCard.opacity(0.7))
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(AppTheme.borderGlass, lineWidth: 0.5))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(collapsedSections.count == result.groups.count)
+
+                    Spacer()
+
+                    Text("\(headingCount) sections")
+                        .font(.system(size: 9))
+                        .foregroundColor(AppTheme.textMuted)
+                }
+                .padding(.bottom, 4)
+            }
+
+            if useCollapsible {
+                // Render ungrouped content before first heading
+                ForEach(result.ungrouped) { indexed in
+                    sectionView(indexed.section, refOrder: refOrder)
+                }
+
+                // Render collapsible groups
+                ForEach(result.groups) { group in
+                    collapsibleGroupView(group: group, refOrder: refOrder, isLast: group.id == result.groups.last?.id)
+                }
+            } else if useTruncation {
+                // Long plain text with show more/less
+                truncatedContentView(sections: sections, refOrder: refOrder)
+            } else {
+                // Default rendering: flat list of sections
+                ForEach(Array(sections.enumerated()), id: \.offset) { idx, section in
+                    if isStreaming && idx == sections.count - 1 {
+                        HStack(alignment: .lastTextBaseline, spacing: 0) {
+                            sectionView(section, refOrder: refOrder)
+                            if cursorVisible {
+                                Text("\u{258C}")
+                                    .font(.system(size: 14))
+                                    .foregroundColor(AppTheme.accent)
+                            }
+                        }
+                    } else {
+                        sectionView(section, refOrder: refOrder)
+                    }
                 }
             }
 
@@ -2977,9 +3143,132 @@ struct ResponseView: View {
                 )
             }
         }
-        .onAppear { startCursorTimer() }
+        .onAppear {
+            startCursorTimer()
+            // Auto-collapse sections after the first 2 on first appearance
+            if !didAutoCollapse && headingCount > 5 {
+                let groupsToCollapse = result.groups.dropFirst(2).map(\.id)
+                collapsedSections = Set(groupsToCollapse)
+                didAutoCollapse = true
+            }
+        }
         .onChange(of: isStreaming) { streaming in
             if streaming { cursorVisible = true; startCursorTimer() }
+        }
+    }
+
+    // MARK: - Collapsible Group View
+
+    @ViewBuilder
+    private func collapsibleGroupView(group: CollapsibleGroup, refOrder: [String: Int], isLast: Bool) -> some View {
+        let isCollapsed = collapsedSections.contains(group.id)
+
+        VStack(alignment: .leading, spacing: 0) {
+            // Clickable heading toggle
+            Button(action: {
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    if isCollapsed {
+                        collapsedSections.remove(group.id)
+                    } else {
+                        collapsedSections.insert(group.id)
+                    }
+                }
+            }) {
+                HStack(spacing: 6) {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(AppTheme.accent)
+                        .rotationEffect(.degrees(isCollapsed ? 0 : 90))
+
+                    Text(group.headingText)
+                        .font(.system(
+                            size: group.headingLevel == 2 ? 17 : 15,
+                            weight: group.headingLevel == 2 ? .semibold : .medium,
+                            design: .rounded
+                        ))
+                        .foregroundColor(AppTheme.textPrimary)
+
+                    Spacer()
+
+                    if isCollapsed {
+                        Text("\(group.content.count) items")
+                            .font(.system(size: 9))
+                            .foregroundColor(AppTheme.textMuted)
+                    }
+                }
+                .padding(.vertical, 6)
+                .padding(.horizontal, 4)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .padding(.top, group.headingLevel == 2 ? 6 : 4)
+            .accessibilityLabel("\(group.headingText), \(isCollapsed ? "collapsed" : "expanded")")
+            .accessibilityHint("Double tap to \(isCollapsed ? "expand" : "collapse") this section")
+
+            // Section content with animated height
+            if !isCollapsed {
+                VStack(alignment: .leading, spacing: zenMode ? 14 : 10) {
+                    ForEach(group.content) { indexed in
+                        sectionView(indexed.section, refOrder: refOrder)
+                    }
+                }
+                .padding(.leading, 20)
+                .padding(.top, 4)
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+    }
+
+    // MARK: - Truncated Content View (plain text >500 words)
+
+    @ViewBuilder
+    private func truncatedContentView(sections: [ResponseSection], refOrder: [String: Int]) -> some View {
+        if isTextTruncated {
+            // Show truncated version: approximately first 200 words
+            let truncated = truncateToWords(text, maxWords: 200)
+            let truncSections = ResponseParser.parse(truncated + "...")
+            ForEach(Array(truncSections.enumerated()), id: \.offset) { _, section in
+                sectionView(section, refOrder: refOrder)
+            }
+
+            Button(action: {
+                withAnimation(.easeInOut(duration: 0.3)) {
+                    isTextTruncated = false
+                }
+            }) {
+                HStack(spacing: 4) {
+                    Text("Show more...")
+                        .font(.system(size: 12, weight: .medium))
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 10))
+                }
+                .foregroundColor(AppTheme.accent)
+                .padding(.top, 4)
+            }
+            .buttonStyle(.plain)
+            .transition(.opacity)
+        } else {
+            // Show full content
+            ForEach(Array(sections.enumerated()), id: \.offset) { _, section in
+                sectionView(section, refOrder: refOrder)
+            }
+
+            Button(action: {
+                withAnimation(.easeInOut(duration: 0.3)) {
+                    isTextTruncated = true
+                }
+            }) {
+                HStack(spacing: 4) {
+                    Text("Show less")
+                        .font(.system(size: 12, weight: .medium))
+                    Image(systemName: "chevron.up")
+                        .font(.system(size: 10))
+                }
+                .foregroundColor(AppTheme.accent)
+                .padding(.top, 4)
+            }
+            .buttonStyle(.plain)
+            .transition(.opacity)
         }
     }
 
