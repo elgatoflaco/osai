@@ -1261,8 +1261,9 @@ class AppState: ObservableObject {
         showToast("Copied to clipboard", type: .success)
     }
 
-    func branchConversation(from conversationId: String, atMessageIndex: Int) {
-        guard let source = conversations.first(where: { $0.id == conversationId }) else { return }
+    @discardableResult
+    func branchConversation(from conversationId: String, atMessageIndex: Int) -> Conversation? {
+        guard let source = conversations.first(where: { $0.id == conversationId }) else { return nil }
         let branchedMessages = Array(source.messages.prefix(atMessageIndex + 1))
         let newConv = Conversation(
             id: UUID().uuidString,
@@ -1279,6 +1280,13 @@ class AppState: ObservableObject {
         activeConversation = newConv
         selectedTab = .chat
         showToast("Branched conversation", type: .success)
+        return newConv
+    }
+
+    /// Look up a conversation's parent title for branch display
+    func parentConversationTitle(for conv: Conversation) -> String? {
+        guard let parentId = conv.branchedFromId else { return nil }
+        return conversations.first(where: { $0.id == parentId })?.title
     }
 
     func navigateConversation(direction: Int) {
@@ -2283,6 +2291,86 @@ class AppState: ObservableObject {
         case .plainText:
             return exportAsPlainText(conversation: conv, options: options)
         }
+    }
+
+    // MARK: - Search Filters
+
+    struct SearchFilters: Equatable {
+        var hasCode: Bool = false
+        var hasBookmark: Bool = false
+        var modelId: String? = nil
+        var role: MessageRole? = nil
+        var dateRange: (start: Date, end: Date)? = nil
+
+        var activeCount: Int {
+            var count = 0
+            if hasCode { count += 1 }
+            if hasBookmark { count += 1 }
+            if modelId != nil { count += 1 }
+            if role != nil { count += 1 }
+            if dateRange != nil { count += 1 }
+            return count
+        }
+
+        var isEmpty: Bool { activeCount == 0 }
+
+        static func == (lhs: SearchFilters, rhs: SearchFilters) -> Bool {
+            lhs.hasCode == rhs.hasCode &&
+            lhs.hasBookmark == rhs.hasBookmark &&
+            lhs.modelId == rhs.modelId &&
+            lhs.role == rhs.role &&
+            lhs.dateRange?.start == rhs.dateRange?.start &&
+            lhs.dateRange?.end == rhs.dateRange?.end
+        }
+    }
+
+    func searchMessages(query: String, filters: SearchFilters) -> [(Conversation, ChatMessage)] {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+
+        var results: [(Conversation, ChatMessage)] = []
+
+        for conv in conversations {
+            // Model filter applies at conversation level
+            if let modelFilter = filters.modelId, conv.modelId != modelFilter {
+                continue
+            }
+
+            for msg in conv.messages {
+                guard msg.role == .user || msg.role == .assistant else { continue }
+
+                // Text query filter
+                if !trimmed.isEmpty && !msg.content.lowercased().contains(trimmed) {
+                    continue
+                }
+
+                // Role filter
+                if let roleFilter = filters.role, msg.role != roleFilter {
+                    continue
+                }
+
+                // Code filter: check for markdown code blocks or inline code
+                if filters.hasCode {
+                    let hasCodeBlock = msg.content.contains("```") || msg.content.contains("`")
+                    if !hasCodeBlock { continue }
+                }
+
+                // Bookmark filter
+                if filters.hasBookmark && !msg.isBookmarked {
+                    continue
+                }
+
+                // Date range filter
+                if let range = filters.dateRange {
+                    if msg.timestamp < range.start || msg.timestamp > range.end {
+                        continue
+                    }
+                }
+
+                results.append((conv, msg))
+            }
+        }
+
+        return results
     }
 
     // MARK: - Full-text search across all conversations

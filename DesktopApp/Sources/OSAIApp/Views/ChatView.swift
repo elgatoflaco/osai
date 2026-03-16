@@ -34,6 +34,8 @@ struct ChatView: View {
     @State private var showCodeBlocksSheet: Bool = false
     @State private var showCalendarBrowser: Bool = false
     @State private var calendarSelectedDate: Date? = nil
+    @State private var searchFilters = AppState.SearchFilters()
+    @State private var showSearchFilters: Bool = false
 
     // MARK: - Date grouping
 
@@ -58,6 +60,25 @@ struct ChatView: View {
         if let tag = appState.filterTag {
             sorted = sorted.filter { $0.tags.contains(tag) }
         }
+
+        // When filters are active, use searchMessages to find matching conversations
+        if !searchFilters.isEmpty {
+            let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+            let filterResults = appState.searchMessages(query: query, filters: searchFilters)
+            let matchingConvIds = Set(filterResults.map { $0.0.id })
+            let filtered = sorted.filter { matchingConvIds.contains($0.id) }
+            // If there's also a text query, merge with title matches
+            if !query.isEmpty {
+                let titleMatches = sorted.filter { conv in
+                    matchingConvIds.contains(conv.id) ||
+                    conv.title.localizedCaseInsensitiveContains(query) ||
+                    (conv.agentName?.localizedCaseInsensitiveContains(query) ?? false)
+                }
+                return titleMatches
+            }
+            return filtered
+        }
+
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return sorted }
 
@@ -83,6 +104,18 @@ struct ChatView: View {
     /// Content search results grouped by conversation, only when actively searching messages
     private var contentSearchResults: [AppState.ConversationSearchResult] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // When filters are active, build results from searchMessages
+        if !searchFilters.isEmpty {
+            let filterResults = appState.searchMessages(query: query, filters: searchFilters)
+            let grouped = Dictionary(grouping: filterResults) { $0.0.id }
+            return grouped.compactMap { (_, pairs) in
+                guard let conv = pairs.first?.0 else { return nil }
+                let msgs = pairs.map { $0.1 }
+                return AppState.ConversationSearchResult(conversation: conv, matches: msgs)
+            }
+        }
+
         guard !query.isEmpty else { return [] }
 
         let titleMatches = appState.conversations.filter { conv in
@@ -969,7 +1002,8 @@ struct ChatView: View {
                 newTagText = ""
                 showNewTagPopover = conv.id
             },
-            titleSuggestions: renamingConversationId == conv.id ? appState.titleSuggestions(for: conv) : []
+            titleSuggestions: renamingConversationId == conv.id ? appState.titleSuggestions(for: conv) : [],
+            parentTitle: appState.parentConversationTitle(for: conv)
         )
     }
 
@@ -1130,7 +1164,7 @@ struct ChatView: View {
             onCancel: msg.isStreaming ? { appState.cancelProcessing() } : nil,
             onRetry: canRetry ? { appState.retryLastMessage() } : nil,
             onReaction: msg.role == .assistant ? { reaction in appState.setReaction(messageId: msg.id, reaction: reaction) } : nil,
-            onBranch: isUser ? {
+            onBranch: (msg.role == .user || msg.role == .assistant) && !msg.isStreaming ? {
                 let idx = conv.messages.firstIndex(where: { $0.id == msg.id }) ?? 0
                 appState.branchConversation(from: conv.id, atMessageIndex: idx)
             } : nil,
@@ -1657,6 +1691,74 @@ struct ChatView: View {
         return formatter.string(from: date)
     }
 
+    // MARK: - Search Filter Chips
+
+    private var searchFilterChipsView: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            // Standard filter chips
+            HStack(spacing: 4) {
+                SearchFilterChip(label: "has:code", isActive: searchFilters.hasCode) {
+                    searchFilters.hasCode.toggle()
+                }
+                SearchFilterChip(label: "has:bookmark", isActive: searchFilters.hasBookmark) {
+                    searchFilters.hasBookmark.toggle()
+                }
+                SearchFilterChip(label: "from:user", isActive: searchFilters.role == .user) {
+                    searchFilters.role = searchFilters.role == .user ? nil : .user
+                }
+                SearchFilterChip(label: "from:assistant", isActive: searchFilters.role == .assistant) {
+                    searchFilters.role = searchFilters.role == .assistant ? nil : .assistant
+                }
+            }
+
+            // Model filter as a menu chip
+            Menu {
+                Button("Any model") { searchFilters.modelId = nil }
+                Divider()
+                ForEach(appState.availableModels, id: \.id) { model in
+                    Button(action: { searchFilters.modelId = model.id }) {
+                        HStack {
+                            Text(model.shortName)
+                            if searchFilters.modelId == model.id {
+                                Image(systemName: "checkmark")
+                            }
+                        }
+                    }
+                }
+            } label: {
+                HStack(spacing: 3) {
+                    Image(systemName: "cpu")
+                        .font(.system(size: 8))
+                    Text(searchFilters.modelId.flatMap { id in
+                        appState.availableModels.first(where: { $0.id == id })?.shortName
+                    }.map { "model:\($0)" } ?? "model:any")
+                        .font(.system(size: 10, weight: .medium))
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 7))
+                }
+                .foregroundColor(searchFilters.modelId != nil ? .white : AppTheme.textSecondary)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(
+                    searchFilters.modelId != nil
+                        ? AnyShapeStyle(AppTheme.accent)
+                        : AnyShapeStyle(AppTheme.bgCard.opacity(0.6))
+                )
+                .clipShape(Capsule())
+                .overlay(
+                    Capsule()
+                        .strokeBorder(
+                            searchFilters.modelId != nil ? AppTheme.accent : AppTheme.borderGlass,
+                            lineWidth: 1
+                        )
+                )
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+        }
+    }
+
     // MARK: - Conversation List Sidebar
 
     @ViewBuilder
@@ -1767,6 +1869,50 @@ struct ChatView: View {
                 .padding(.horizontal, 10)
                 .padding(.top, 8)
                 .padding(.bottom, 4)
+
+                // Filter chips toggle button
+                HStack(spacing: 4) {
+                    Button(action: { withAnimation(.easeInOut(duration: 0.2)) { showSearchFilters.toggle() } }) {
+                        HStack(spacing: 3) {
+                            Image(systemName: "line.3.horizontal.decrease")
+                                .font(.system(size: 9))
+                            Text("Filters")
+                                .font(.system(size: 10))
+                            if searchFilters.activeCount > 0 {
+                                Text("\(searchFilters.activeCount)")
+                                    .font(.system(size: 8, weight: .bold, design: .monospaced))
+                                    .foregroundColor(.white)
+                                    .padding(.horizontal, 4)
+                                    .padding(.vertical, 1)
+                                    .background(AppTheme.accent)
+                                    .clipShape(Capsule())
+                            }
+                        }
+                        .foregroundColor(searchFilters.activeCount > 0 ? AppTheme.accent : AppTheme.textMuted)
+                    }
+                    .buttonStyle(.plain)
+
+                    Spacer()
+
+                    if !searchFilters.isEmpty {
+                        Button(action: { searchFilters = AppState.SearchFilters() }) {
+                            Text("Clear filters")
+                                .font(.system(size: 9))
+                                .foregroundColor(AppTheme.textMuted)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.bottom, 2)
+
+                // Search filter chips
+                if showSearchFilters {
+                    searchFilterChipsView
+                        .padding(.horizontal, 10)
+                        .padding(.bottom, 4)
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                }
 
                 // Sort order selector
                 HStack(spacing: 4) {
@@ -2336,6 +2482,7 @@ struct ConversationRow: View {
     var onRemoveTag: ((String) -> Void)? = nil
     var onNewTag: (() -> Void)? = nil
     var titleSuggestions: [String] = []
+    var parentTitle: String? = nil
     @State private var isHovered = false
 
     private static let tagColors: [Color] = [.red, .orange, .yellow, .green, .blue, .purple, .pink, .teal]
@@ -2353,8 +2500,9 @@ struct ConversationRow: View {
                 if conv.branchedFromId != nil {
                     Image(systemName: "arrow.triangle.branch")
                         .font(.system(size: 9))
-                        .foregroundColor(AppTheme.textMuted.opacity(0.6))
+                        .foregroundColor(AppTheme.accent.opacity(0.5))
                         .frame(width: 12)
+                        .help(parentTitle.map { "Branched from: \($0)" } ?? "Branched conversation")
                 }
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 4) {
@@ -2990,5 +3138,35 @@ struct CodeBlocksSheet: View {
         } catch {
             appState.showToast("Save failed: \(error.localizedDescription)", type: .error)
         }
+    }
+}
+
+// MARK: - Search Filter Chip
+
+struct SearchFilterChip: View {
+    let label: String
+    let isActive: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(label)
+                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                .foregroundColor(isActive ? .white : AppTheme.textSecondary)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(
+                    isActive ? AnyShapeStyle(AppTheme.accent) : AnyShapeStyle(AppTheme.bgCard.opacity(0.6))
+                )
+                .clipShape(Capsule())
+                .overlay(
+                    Capsule()
+                        .strokeBorder(
+                            isActive ? AppTheme.accent : AppTheme.borderGlass,
+                            lineWidth: 1
+                        )
+                )
+        }
+        .buttonStyle(.plain)
     }
 }
