@@ -370,6 +370,7 @@ struct InlineImageView: View {
 // MARK: - Message Bubble
 
 struct MessageBubble: View {
+    @EnvironmentObject var appState: AppState
     let message: ChatMessage
     var isLastAssistantMessage: Bool = false
     var zenMode: Bool = false
@@ -382,12 +383,25 @@ struct MessageBubble: View {
     var shareMode: Bool = false
     var isSelectedForShare: Bool = false
     var onToggleShareSelection: (() -> Void)?
+    var showAvatar: Bool = true
+    var showTimestamp: Bool = true
     @State private var appeared = false
     @State private var copied = false
     @State private var isHovered = false
     @State private var reactionBounce: MessageReaction?
     @State private var isEditing = false
     @State private var editText = ""
+    @State private var speakerPulse = false
+
+    /// Whether this message is currently being spoken
+    private var isSpeakingThis: Bool {
+        appState.isSpeaking && appState.speakingMessageId == message.id
+    }
+
+    /// Whether another message is being spoken (not this one)
+    private var isSpeakingOther: Bool {
+        appState.isSpeaking && appState.speakingMessageId != message.id
+    }
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -580,10 +594,14 @@ struct MessageBubble: View {
                 }
             }
 
-            Image(systemName: "person.circle.fill")
-                .font(.system(size: 26))
-                .foregroundColor(AppTheme.textSecondary)
-                .accessibilityHidden(true)
+            if showAvatar {
+                Image(systemName: "person.circle.fill")
+                    .font(.system(size: 26))
+                    .foregroundColor(AppTheme.textSecondary)
+                    .accessibilityHidden(true)
+            } else {
+                Color.clear.frame(width: 26, height: 26)
+            }
         }
         .onHover { hovering in
             withAnimation(.easeInOut(duration: 0.15)) { isHovered = hovering }
@@ -741,18 +759,24 @@ struct MessageBubble: View {
                 }
             }
 
-            Text(timeString(message.timestamp))
-                .font(.system(size: 9))
-                .foregroundColor(AppTheme.textMuted)
-                .padding(.trailing, 4)
+            if showTimestamp {
+                Text(timeString(message.timestamp))
+                    .font(.system(size: 9))
+                    .foregroundColor(AppTheme.textMuted)
+                    .padding(.trailing, 4)
+            }
         }
     }
 
     private var assistantBubble: some View {
         HStack(alignment: .top, spacing: 10) {
-            GhostIcon(size: 26, animate: message.isStreaming, isProcessing: message.isStreaming)
-                .padding(.top, 2)
-                .accessibilityHidden(true)
+            if showAvatar {
+                GhostIcon(size: 26, animate: message.isStreaming, isProcessing: message.isStreaming)
+                    .padding(.top, 2)
+                    .accessibilityHidden(true)
+            } else {
+                Color.clear.frame(width: 26, height: 26)
+            }
 
             VStack(alignment: .leading, spacing: 6) {
                 // Agent badge
@@ -797,10 +821,51 @@ struct MessageBubble: View {
                         }
                     }
 
-                    // Copy, share, bookmark & retry buttons on hover
-                    if message.role == .assistant && !message.content.isEmpty && !message.isStreaming && (isHovered || copied || message.isBookmarked) {
+                    // Copy, share, bookmark, speak & retry buttons on hover
+                    if message.role == .assistant && !message.content.isEmpty && !message.isStreaming && (isHovered || copied || message.isBookmarked || isSpeakingThis) {
                         HStack(spacing: 4) {
                             bookmarkButton
+
+                            // Text-to-Speech button
+                            if appState.textToSpeechEnabled {
+                                Button(action: {
+                                    appState.speakMessage(id: message.id, content: message.content)
+                                    if !isSpeakingThis {
+                                        speakerPulse = true
+                                    } else {
+                                        speakerPulse = false
+                                    }
+                                }) {
+                                    HStack(spacing: 3) {
+                                        Image(systemName: isSpeakingThis ? "speaker.wave.2.fill" : "speaker.wave.2")
+                                            .font(.system(size: 9))
+                                            .scaleEffect(isSpeakingThis && speakerPulse ? 1.15 : 1.0)
+                                            .animation(
+                                                isSpeakingThis
+                                                    ? .easeInOut(duration: 0.8).repeatForever(autoreverses: true)
+                                                    : .default,
+                                                value: speakerPulse
+                                            )
+                                        Text(isSpeakingThis ? "Stop" : "Speak")
+                                            .font(.system(size: 9))
+                                    }
+                                    .foregroundColor(isSpeakingThis ? AppTheme.accent : (isSpeakingOther ? AppTheme.textMuted.opacity(0.4) : AppTheme.textMuted))
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 3)
+                                    .background(isSpeakingThis ? AppTheme.accent.opacity(0.12) : AppTheme.bgCard.opacity(0.9))
+                                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(
+                                        isSpeakingThis ? AppTheme.accent.opacity(0.3) : AppTheme.borderGlass,
+                                        lineWidth: isSpeakingThis ? 1.0 : 0.5
+                                    ))
+                                }
+                                .buttonStyle(.plain)
+                                .disabled(isSpeakingOther)
+                                .accessibilityLabel(isSpeakingThis ? "Stop speaking" : "Speak message")
+                                .onChange(of: appState.isSpeaking) { speaking in
+                                    if !speaking { speakerPulse = false }
+                                }
+                            }
 
                             Button(action: shareMessage) {
                                 HStack(spacing: 3) {
@@ -863,14 +928,16 @@ struct MessageBubble: View {
 
                 // Footer
                 HStack(spacing: 10) {
-                    Text(timeString(message.timestamp))
-                        .font(.system(size: 9))
-                        .foregroundColor(AppTheme.textMuted)
+                    if showTimestamp {
+                        Text(timeString(message.timestamp))
+                            .font(.system(size: 9))
+                            .foregroundColor(AppTheme.textMuted)
 
-                    if let rtMs = message.responseTimeMs {
-                        Text(responseTimeLabel(rtMs))
-                            .font(.system(size: 9, weight: .medium, design: .rounded))
-                            .foregroundColor(responseTimeColor(rtMs).opacity(0.7))
+                        if let rtMs = message.responseTimeMs {
+                            Text(responseTimeLabel(rtMs))
+                                .font(.system(size: 9, weight: .medium, design: .rounded))
+                                .foregroundColor(responseTimeColor(rtMs).opacity(0.7))
+                        }
                     }
 
                     // Reaction buttons: show on hover or if a reaction is already set

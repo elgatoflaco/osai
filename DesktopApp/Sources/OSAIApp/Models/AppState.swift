@@ -3,6 +3,7 @@ import AppKit
 import Combine
 import UniformTypeIdentifiers
 import UserNotifications
+import AVFoundation
 
 // MARK: - App Notification
 
@@ -313,6 +314,8 @@ class AppState: ObservableObject {
     @AppStorage("floatOnTop") var floatOnTop: Bool = false
     @AppStorage("windowOpacity") var windowOpacity: Double = 1.0
     @AppStorage("quickActionsCollapsed") var quickActionsCollapsed: Bool = false
+    @AppStorage("textToSpeechEnabled") var textToSpeechEnabled: Bool = true
+    @AppStorage("sidebarWidth") var sidebarWidth: Double = 280
 
     // MARK: - Dashboard Customization
 
@@ -520,6 +523,13 @@ class AppState: ObservableObject {
     @Published var notifications: [AppNotification] = []
     @Published var showNotificationPanel: Bool = false
     @Published var selectedModel: String = "anthropic/claude-sonnet-4-20250514"
+
+    // MARK: - Text-to-Speech
+
+    private let speechSynthesizer = NSSpeechSynthesizer()
+    private var speechDelegate: SpeechDelegate?
+    @Published var isSpeaking: Bool = false
+    @Published var speakingMessageId: String?
 
     /// All known models grouped by provider, indicating availability based on configured API keys.
     var availableModels: [ModelDefinition] {
@@ -1956,21 +1966,7 @@ class AppState: ObservableObject {
         return result
     }
 
-    /// Strips markdown formatting from text, returning plain text.
-    func stripMarkdown(_ text: String) -> String {
-        var result = text
-        // Remove bold markers
-        result = result.replacingOccurrences(of: #"\*\*(.+?)\*\*"#, with: "$1", options: .regularExpression)
-        // Remove italic markers
-        result = result.replacingOccurrences(of: #"\*(.+?)\*"#, with: "$1", options: .regularExpression)
-        // Remove inline code backticks
-        result = result.replacingOccurrences(of: #"`([^`]+)`"#, with: "$1", options: .regularExpression)
-        // Remove code block fences
-        result = result.replacingOccurrences(of: #"```[\w]*\n?"#, with: "", options: .regularExpression)
-        // Remove heading markers
-        result = result.replacingOccurrences(of: #"^#{1,6}\s+"#, with: "", options: .regularExpression)
-        return result
-    }
+    // stripMarkdown is defined in the Text-to-Speech section below
 
     // MARK: - Markdown Segment Parsing (private)
 
@@ -2242,6 +2238,118 @@ class AppState: ObservableObject {
         } catch {
             showToast("Export failed: \(error.localizedDescription)", type: .error)
         }
+    }
+
+    // MARK: - Text-to-Speech
+
+    func setupSpeechDelegate() {
+        let delegate = SpeechDelegate { [weak self] in
+            DispatchQueue.main.async {
+                self?.isSpeaking = false
+                self?.speakingMessageId = nil
+            }
+        }
+        self.speechDelegate = delegate
+        speechSynthesizer.delegate = delegate
+    }
+
+    func speakMessage(id: String, content: String) {
+        // If already speaking this message, stop
+        if isSpeaking && speakingMessageId == id {
+            stopSpeaking()
+            return
+        }
+        // Stop any current speech first
+        if isSpeaking {
+            speechSynthesizer.stopSpeaking()
+        }
+
+        if speechDelegate == nil {
+            setupSpeechDelegate()
+        }
+
+        let stripped = stripMarkdown(content)
+        guard !stripped.isEmpty else { return }
+
+        speakingMessageId = id
+        isSpeaking = true
+        speechSynthesizer.startSpeaking(stripped)
+    }
+
+    func stopSpeaking() {
+        speechSynthesizer.stopSpeaking()
+        isSpeaking = false
+        speakingMessageId = nil
+    }
+
+    /// Strips markdown formatting from text for clean speech output.
+    func stripMarkdown(_ text: String) -> String {
+        var result = text
+
+        // Remove code blocks (```...```)
+        if let regex = try? NSRegularExpression(pattern: "```[\\s\\S]*?```", options: [.dotMatchesLineSeparators]) {
+            result = regex.stringByReplacingMatches(in: result, range: NSRange(result.startIndex..., in: result), withTemplate: "")
+        }
+        // Remove inline code (`...`)
+        if let regex = try? NSRegularExpression(pattern: "`[^`]+`", options: []) {
+            result = regex.stringByReplacingMatches(in: result, range: NSRange(result.startIndex..., in: result), withTemplate: "")
+        }
+        // Remove HTML tags
+        if let regex = try? NSRegularExpression(pattern: "<[^>]+>", options: []) {
+            result = regex.stringByReplacingMatches(in: result, range: NSRange(result.startIndex..., in: result), withTemplate: "")
+        }
+        // Convert markdown links [text](url) -> text
+        if let regex = try? NSRegularExpression(pattern: "\\[([^\\]]+)\\]\\([^)]+\\)", options: []) {
+            result = regex.stringByReplacingMatches(in: result, range: NSRange(result.startIndex..., in: result), withTemplate: "$1")
+        }
+        // Remove headers (# ## ### etc.)
+        if let regex = try? NSRegularExpression(pattern: "^#{1,6}\\s+", options: [.anchorsMatchLines]) {
+            result = regex.stringByReplacingMatches(in: result, range: NSRange(result.startIndex..., in: result), withTemplate: "")
+        }
+        // Remove bold (**text** or __text__)
+        if let regex = try? NSRegularExpression(pattern: "(\\*\\*|__)(.+?)(\\*\\*|__)", options: []) {
+            result = regex.stringByReplacingMatches(in: result, range: NSRange(result.startIndex..., in: result), withTemplate: "$2")
+        }
+        // Remove italic (*text* or _text_)
+        if let regex = try? NSRegularExpression(pattern: "(?<![\\*_])(\\*|_)(.+?)(\\*|_)(?![\\*_])", options: []) {
+            result = regex.stringByReplacingMatches(in: result, range: NSRange(result.startIndex..., in: result), withTemplate: "$2")
+        }
+        // Remove strikethrough (~~text~~)
+        if let regex = try? NSRegularExpression(pattern: "~~(.+?)~~", options: []) {
+            result = regex.stringByReplacingMatches(in: result, range: NSRange(result.startIndex..., in: result), withTemplate: "$1")
+        }
+        // Remove horizontal rules
+        if let regex = try? NSRegularExpression(pattern: "^[\\-\\*_]{3,}$", options: [.anchorsMatchLines]) {
+            result = regex.stringByReplacingMatches(in: result, range: NSRange(result.startIndex..., in: result), withTemplate: "")
+        }
+        // Remove list markers (- * + and numbered)
+        if let regex = try? NSRegularExpression(pattern: "^\\s*[\\-\\*\\+]\\s+", options: [.anchorsMatchLines]) {
+            result = regex.stringByReplacingMatches(in: result, range: NSRange(result.startIndex..., in: result), withTemplate: "")
+        }
+        if let regex = try? NSRegularExpression(pattern: "^\\s*\\d+\\.\\s+", options: [.anchorsMatchLines]) {
+            result = regex.stringByReplacingMatches(in: result, range: NSRange(result.startIndex..., in: result), withTemplate: "")
+        }
+        // Collapse multiple newlines
+        if let regex = try? NSRegularExpression(pattern: "\\n{3,}", options: []) {
+            result = regex.stringByReplacingMatches(in: result, range: NSRange(result.startIndex..., in: result), withTemplate: "\n\n")
+        }
+
+        return result.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
+// MARK: - Speech Delegate
+
+final class SpeechDelegate: NSObject, NSSpeechSynthesizerDelegate {
+    private let onFinish: () -> Void
+
+    init(onFinish: @escaping () -> Void) {
+        self.onFinish = onFinish
+        super.init()
+    }
+
+    func speechSynthesizer(_ sender: NSSpeechSynthesizer, didFinishSpeaking finishedSpeaking: Bool) {
+        onFinish()
     }
 }
 

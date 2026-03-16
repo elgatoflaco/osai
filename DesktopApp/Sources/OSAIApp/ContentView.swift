@@ -1307,6 +1307,53 @@ struct CompactNavigationMenu: View {
     }
 }
 
+// MARK: - Sidebar Drag Handle
+
+struct SidebarDragHandle: View {
+    @EnvironmentObject var appState: AppState
+    @State private var isHovered = false
+    @State private var isDragging = false
+    @State private var dragStartWidth: Double = 0
+
+    private let minWidth: Double = 200
+    private let maxWidth: Double = 400
+    private let defaultWidth: Double = 280
+
+    var body: some View {
+        Rectangle()
+            .fill(isHovered || isDragging ? AppTheme.accent : AppTheme.borderGlass.opacity(0.5))
+            .frame(width: isHovered || isDragging ? 3 : 1)
+            .contentShape(Rectangle().size(width: 8, height: .infinity))
+            .frame(width: 8)
+            .onHover { hovering in
+                isHovered = hovering
+                if hovering {
+                    NSCursor.resizeLeftRight.push()
+                } else {
+                    NSCursor.pop()
+                }
+            }
+            .gesture(
+                DragGesture(minimumDistance: 1)
+                    .onChanged { value in
+                        if !isDragging {
+                            isDragging = true
+                            dragStartWidth = appState.sidebarWidth
+                        }
+                        let newWidth = dragStartWidth + value.translation.width
+                        appState.sidebarWidth = min(maxWidth, max(minWidth, newWidth))
+                    }
+                    .onEnded { _ in
+                        isDragging = false
+                    }
+            )
+            .onTapGesture(count: 2) {
+                appState.sidebarWidth = defaultWidth
+            }
+            .ignoresSafeArea()
+    }
+}
+
 // MARK: - Content View
 
 struct ContentView: View {
@@ -1379,11 +1426,8 @@ struct ContentView: View {
                                 .animation(.spring(response: 0.3, dampingFraction: 0.85), value: appState.sidebarCollapsed)
                                 .animation(.spring(response: 0.3, dampingFraction: 0.85), value: isNarrow)
 
-                            // Subtle divider between sidebar and content
-                            Rectangle()
-                                .fill(AppTheme.borderGlass.opacity(0.5))
-                                .frame(width: 1)
-                                .ignoresSafeArea()
+                            // Draggable divider between sidebar and content
+                            SidebarDragHandle()
                         }
 
                         // Main content area

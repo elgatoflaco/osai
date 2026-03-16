@@ -216,7 +216,7 @@ struct Sidebar: View {
                     .padding(.bottom, 12)
             }
         }
-        .frame(width: appState.sidebarCollapsed ? 64 : 200)
+        .frame(width: appState.sidebarCollapsed ? 64 : appState.sidebarWidth)
         .background(AppTheme.bgSecondary.opacity(0.5))
         .background(.ultraThinMaterial)
         .animation(.easeOut(duration: 0.25), value: appState.isProcessing)

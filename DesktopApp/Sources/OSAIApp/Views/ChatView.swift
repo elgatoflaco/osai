@@ -514,10 +514,29 @@ struct ChatView: View {
                         ZStack(alignment: .bottomTrailing) {
                             ScrollView(.vertical, showsIndicators: !focusMode) {
                                 LazyVStack(spacing: focusMode ? 22 : 14) {
-                                    ForEach(conv.messages) { msg in
+                                    ForEach(Array(conv.messages.enumerated()), id: \.element.id) { index, msg in
                                         // In focus mode, skip tool-only messages (no text content)
                                         if !focusMode || msg.toolName == nil || !msg.content.isEmpty {
-                                            messageBubbleView(msg: msg, conv: conv, lastAssistantId: lastAssistantId)
+                                            let info = messageGroupInfo(for: index, in: conv.messages)
+
+                                            // Date separator
+                                            if info.showDateSeparator, let label = info.dateSeparatorLabel {
+                                                dateSeparatorView(label: label)
+                                            }
+
+                                            // Time gap indicator
+                                            if info.showTimeGap, let label = info.timeGapLabel {
+                                                timeGapIndicatorView(label: label)
+                                            }
+
+                                            messageBubbleView(
+                                                msg: msg,
+                                                conv: conv,
+                                                lastAssistantId: lastAssistantId,
+                                                showAvatar: info.showAvatar,
+                                                showTimestamp: info.showTimestamp
+                                            )
+                                            .padding(.top, info.reducedSpacing ? -10 : 0)
                                         }
                                     }
                                     .animation(.spring(response: 0.35, dampingFraction: 0.85), value: conv.messages.count)
@@ -1051,7 +1070,7 @@ struct ChatView: View {
     }
 
     @ViewBuilder
-    private func messageBubbleView(msg: ChatMessage, conv: Conversation, lastAssistantId: String?) -> some View {
+    private func messageBubbleView(msg: ChatMessage, conv: Conversation, lastAssistantId: String?, showAvatar: Bool = true, showTimestamp: Bool = true) -> some View {
         let isLastAssistant = msg.id == lastAssistantId
         let canRetry = isLastAssistant && !msg.isStreaming
         let isUser = msg.role == .user
@@ -1079,13 +1098,149 @@ struct ChatView: View {
                 } else {
                     selectedShareMessageIds.insert(msg.id)
                 }
-            }
+            },
+            showAvatar: showAvatar,
+            showTimestamp: showTimestamp
         )
         .id(msg.id)
         .transition(.asymmetric(
             insertion: .move(edge: .bottom).combined(with: .opacity),
             removal: .opacity
         ))
+    }
+
+    // MARK: - Message Grouping Helpers
+
+    /// Determines the grouping context for a message at the given index
+    private struct MessageGroupInfo {
+        let showDateSeparator: Bool
+        let dateSeparatorLabel: String?
+        let showTimeGap: Bool
+        let timeGapLabel: String?
+        let showAvatar: Bool
+        let showTimestamp: Bool
+        let reducedSpacing: Bool
+    }
+
+    private func messageGroupInfo(for index: Int, in messages: [ChatMessage]) -> MessageGroupInfo {
+        let msg = messages[index]
+        let cal = Calendar.current
+        let prev: ChatMessage? = index > 0 ? messages[index - 1] : nil
+        let next: ChatMessage? = index < messages.count - 1 ? messages[index + 1] : nil
+
+        // Date separator: show when day changes from previous message
+        var showDateSeparator = false
+        var dateSeparatorLabel: String? = nil
+        if let prev = prev {
+            if !cal.isDate(prev.timestamp, inSameDayAs: msg.timestamp) {
+                showDateSeparator = true
+                dateSeparatorLabel = dateSeparatorText(for: msg.timestamp)
+            }
+        } else {
+            // First message always gets a date separator
+            showDateSeparator = true
+            dateSeparatorLabel = dateSeparatorText(for: msg.timestamp)
+        }
+
+        // Time gap: show when gap > 30 min between consecutive messages (same day)
+        var showTimeGap = false
+        var timeGapLabel: String? = nil
+        if let prev = prev, !showDateSeparator {
+            let gap = msg.timestamp.timeIntervalSince(prev.timestamp)
+            if gap > 30 * 60 {
+                showTimeGap = true
+                timeGapLabel = timeGapText(seconds: gap)
+            }
+        }
+
+        // Grouping: consecutive messages from the same role within 2 minutes
+        let sameRoleAsPrev = prev != nil && prev!.role == msg.role
+        let closeInTimeToPrev = prev != nil && msg.timestamp.timeIntervalSince(prev!.timestamp) < 120
+        let isGroupedWithPrev = sameRoleAsPrev && closeInTimeToPrev && !showDateSeparator && !showTimeGap
+
+        let sameRoleAsNext = next != nil && next!.role == msg.role
+        let closeInTimeToNext = next != nil && next!.timestamp.timeIntervalSince(msg.timestamp) < 120
+        let nextHasDateSep = next != nil && !cal.isDate(msg.timestamp, inSameDayAs: next!.timestamp)
+        let nextHasTimeGap = next != nil && next!.timestamp.timeIntervalSince(msg.timestamp) > 30 * 60
+        let isGroupedWithNext = sameRoleAsNext && closeInTimeToNext && !nextHasDateSep && !nextHasTimeGap
+
+        let showAvatar = !isGroupedWithPrev
+        let showTimestamp = !isGroupedWithNext
+        let reducedSpacing = isGroupedWithPrev
+
+        return MessageGroupInfo(
+            showDateSeparator: showDateSeparator,
+            dateSeparatorLabel: dateSeparatorLabel,
+            showTimeGap: showTimeGap,
+            timeGapLabel: timeGapLabel,
+            showAvatar: showAvatar,
+            showTimestamp: showTimestamp,
+            reducedSpacing: reducedSpacing
+        )
+    }
+
+    private func dateSeparatorText(for date: Date) -> String {
+        let cal = Calendar.current
+        if cal.isDateInToday(date) {
+            return "Today"
+        } else if cal.isDateInYesterday(date) {
+            return "Yesterday"
+        } else {
+            let formatter = DateFormatter()
+            // Show weekday + full date, e.g. "Monday, March 10"
+            formatter.dateFormat = "EEEE, MMMM d"
+            return formatter.string(from: date)
+        }
+    }
+
+    private func timeGapText(seconds: TimeInterval) -> String {
+        let minutes = Int(seconds / 60)
+        if minutes < 60 {
+            return "\(minutes) min gap"
+        } else {
+            let hours = minutes / 60
+            if hours == 1 {
+                return "1 hour later"
+            } else {
+                return "\(hours) hours later"
+            }
+        }
+    }
+
+    // MARK: - Date Separator View
+
+    @ViewBuilder
+    private func dateSeparatorView(label: String) -> some View {
+        HStack(spacing: 10) {
+            Rectangle()
+                .fill(AppTheme.textMuted.opacity(0.2))
+                .frame(height: 0.5)
+            Text(label)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(AppTheme.textMuted)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 3)
+                .background(AppTheme.textMuted.opacity(0.08))
+                .clipShape(Capsule())
+            Rectangle()
+                .fill(AppTheme.textMuted.opacity(0.2))
+                .frame(height: 0.5)
+        }
+        .padding(.vertical, 6)
+    }
+
+    // MARK: - Time Gap Indicator View
+
+    @ViewBuilder
+    private func timeGapIndicatorView(label: String) -> some View {
+        HStack {
+            Spacer()
+            Text(label)
+                .font(.system(size: 10))
+                .foregroundColor(AppTheme.textMuted.opacity(0.6))
+            Spacer()
+        }
+        .padding(.vertical, 2)
     }
 
 
