@@ -2866,7 +2866,8 @@ class AppState: ObservableObject {
             args = ["--model", selectedModel, fullText]
         }
 
-        Task {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
             do {
                 let process = try service.startAppModeStreaming(args: args) { [weak self] event in
                     Task { @MainActor [weak self] in
