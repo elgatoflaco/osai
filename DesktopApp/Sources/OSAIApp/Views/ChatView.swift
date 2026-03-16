@@ -1542,7 +1542,14 @@ struct ChatView: View {
             workspaces: appState.workspaces,
             conversationWorkspaceIds: appState.workspacesForConversation(conv.id).map { $0.id },
             onAddToWorkspace: { wsId in appState.addToWorkspace(conversationId: conv.id, workspaceId: wsId) },
-            onRemoveFromWorkspace: { wsId in appState.removeFromWorkspace(conversationId: conv.id, workspaceId: wsId) }
+            onRemoveFromWorkspace: { wsId in appState.removeFromWorkspace(conversationId: conv.id, workspaceId: wsId) },
+            branchCount: appState.conversations.filter { $0.branchedFromId == conv.id }.count,
+            onViewParent: conv.branchedFromId != nil ? {
+                if let parentId = conv.branchedFromId,
+                   let parent = appState.conversations.first(where: { $0.id == parentId }) {
+                    appState.openConversation(parent)
+                }
+            } : nil
         )
     }
 
@@ -4273,22 +4280,58 @@ struct ChatView: View {
 
     @ViewBuilder
     private func branchedFromLabel(_ conv: Conversation) -> some View {
-        if let parentId = conv.branchedFromId,
-           let parentConv = appState.conversations.first(where: { $0.id == parentId }) {
-            HStack(spacing: 4) {
-                Image(systemName: "arrow.triangle.branch")
-                    .font(.system(size: 9))
-                    .foregroundColor(AppTheme.accent.opacity(0.7))
-                Text("Branched from:")
-                    .font(.system(size: 10))
-                    .foregroundColor(AppTheme.textMuted)
-                Button(action: { appState.openConversation(parentConv) }) {
-                    Text(parentConv.title)
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundColor(AppTheme.accent)
-                        .lineLimit(1)
+        let branchChildren = appState.conversations.filter { $0.branchedFromId == conv.id }
+        VStack(alignment: .leading, spacing: 4) {
+            if let parentId = conv.branchedFromId,
+               let parentConv = appState.conversations.first(where: { $0.id == parentId }) {
+                HStack(spacing: 4) {
+                    Image(systemName: "arrow.triangle.branch")
+                        .font(.system(size: 9))
+                        .foregroundColor(AppTheme.accent.opacity(0.7))
+                    Text("Branched from:")
+                        .font(.system(size: 10))
+                        .foregroundColor(AppTheme.textMuted)
+                    Button(action: { appState.openConversation(parentConv) }) {
+                        Text(parentConv.title)
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundColor(AppTheme.accent)
+                            .lineLimit(1)
+                    }
+                    .buttonStyle(.plain)
+                    if let idx = conv.branchedAtMessageIndex {
+                        Text("at message \(idx + 1)")
+                            .font(.system(size: 9))
+                            .foregroundColor(AppTheme.textMuted.opacity(0.7))
+                    }
                 }
-                .buttonStyle(.plain)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(AppTheme.accent.opacity(0.06))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+            }
+            if !branchChildren.isEmpty {
+                HStack(spacing: 4) {
+                    Image(systemName: "arrow.triangle.branch")
+                        .font(.system(size: 9))
+                        .foregroundColor(AppTheme.textMuted.opacity(0.7))
+                    Text("\(branchChildren.count) branch\(branchChildren.count == 1 ? "" : "es"):")
+                        .font(.system(size: 10))
+                        .foregroundColor(AppTheme.textMuted)
+                    ForEach(branchChildren.prefix(3)) { child in
+                        Button(action: { appState.openConversation(child) }) {
+                            Text(child.title)
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundColor(AppTheme.accent)
+                                .lineLimit(1)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    if branchChildren.count > 3 {
+                        Text("+\(branchChildren.count - 3) more")
+                            .font(.system(size: 9))
+                            .foregroundColor(AppTheme.textMuted)
+                    }
+                }
             }
         }
     }
@@ -4405,6 +4448,8 @@ struct ConversationRow: View {
     var conversationWorkspaceIds: [String] = []
     var onAddToWorkspace: ((String) -> Void)? = nil
     var onRemoveFromWorkspace: ((String) -> Void)? = nil
+    var branchCount: Int = 0
+    var onViewParent: (() -> Void)? = nil
     @State private var isHovered = false
 
     private static let tagColors: [Color] = [.red, .orange, .yellow, .green, .blue, .purple, .pink, .teal]
@@ -4527,14 +4572,32 @@ struct ConversationRow: View {
                             .foregroundColor(AppTheme.error.opacity(0.7))
                     }
                     .buttonStyle(.plain)
-                } else if conv.messages.count > 0 {
-                    Text("\(conv.messages.count)")
-                        .font(.system(size: 9, weight: .medium, design: .rounded))
-                        .foregroundColor(AppTheme.textMuted)
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 2)
-                        .background(AppTheme.bgCard.opacity(0.6))
-                        .clipShape(Capsule())
+                } else {
+                    HStack(spacing: 4) {
+                        if branchCount > 0 {
+                            HStack(spacing: 2) {
+                                Image(systemName: "arrow.triangle.branch")
+                                    .font(.system(size: 8))
+                                Text("\(branchCount)")
+                                    .font(.system(size: 9, weight: .medium, design: .rounded))
+                            }
+                            .foregroundColor(AppTheme.accent.opacity(0.6))
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 2)
+                            .background(AppTheme.accent.opacity(0.08))
+                            .clipShape(Capsule())
+                            .help("\(branchCount) branch\(branchCount == 1 ? "" : "es")")
+                        }
+                        if conv.messages.count > 0 {
+                            Text("\(conv.messages.count)")
+                                .font(.system(size: 9, weight: .medium, design: .rounded))
+                                .foregroundColor(AppTheme.textMuted)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 2)
+                                .background(AppTheme.bgCard.opacity(0.6))
+                                .clipShape(Capsule())
+                        }
+                    }
                 }
             }
             .padding(.horizontal, 10)
@@ -4601,6 +4664,11 @@ struct ConversationRow: View {
             .disabled(conv.messages.isEmpty)
             Button(action: { onMerge?() }) {
                 Label("Merge into...", systemImage: "arrow.triangle.merge")
+            }
+            if conv.branchedFromId != nil {
+                Button(action: { onViewParent?() }) {
+                    Label("View Parent Conversation", systemImage: "arrow.uturn.backward")
+                }
             }
             Divider()
             tagContextMenu

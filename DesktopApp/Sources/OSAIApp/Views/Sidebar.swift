@@ -9,6 +9,7 @@ struct Sidebar: View {
     @State private var dropTargetConversationId: String?
     @State private var dropTargetIsAbove: Bool = true
     @State private var showConversationList: Bool = true
+    @State private var labelsVisible: Bool = true
 
     /// Formats a token count compactly (e.g. 1.2K, 3.4M).
     private func formatTokenCount(_ count: Int) -> String {
@@ -40,6 +41,7 @@ struct Sidebar: View {
                     Text("osai")
                         .font(.system(size: 20, weight: .bold, design: .rounded))
                         .foregroundColor(AppTheme.textPrimary)
+                        .opacity(labelsVisible ? 1 : 0)
                 }
             }
             .padding(.top, 28)
@@ -58,7 +60,8 @@ struct Sidebar: View {
                         isHovered: hoveredItem == item,
                         isProcessing: item == .chat && appState.isProcessing,
                         contextPressureHigh: item == .chat && appState.contextPressurePercent > 75,
-                        badgeCount: badgeCount(for: item)
+                        badgeCount: badgeCount(for: item),
+                        labelsOpacity: labelsVisible ? 1.0 : 0.0
                     ) {
                         withAnimation(.easeOut(duration: 0.2)) {
                             appState.selectedTab = item
@@ -138,6 +141,7 @@ struct Sidebar: View {
                 }
                 .font(.system(size: 10, weight: .medium, design: .monospaced))
                 .foregroundColor(AppTheme.textMuted)
+                .opacity(labelsVisible ? 1 : 0)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 6)
                 .accessibilityElement(children: .combine)
@@ -203,6 +207,7 @@ struct Sidebar: View {
                         Text("Notifications")
                             .font(.system(size: 12, weight: .medium))
                             .foregroundColor(AppTheme.textSecondary)
+                            .opacity(labelsVisible ? 1 : 0)
 
                         Spacer()
 
@@ -210,6 +215,7 @@ struct Sidebar: View {
                             Text("\(appState.unreadNotificationCount)")
                                 .font(.system(size: 10, weight: .bold, design: .monospaced))
                                 .foregroundColor(AppTheme.accent)
+                                .opacity(labelsVisible ? 1 : 0)
                         }
                     }
                 }
@@ -243,12 +249,14 @@ struct Sidebar: View {
                         Text("Gateway")
                             .font(.system(size: 12, weight: .medium))
                             .foregroundColor(AppTheme.textSecondary)
+                            .opacity(labelsVisible ? 1 : 0)
 
                         Spacer()
 
                         Text(appState.gatewayRunning ? "ON" : "OFF")
                             .font(.system(size: 10, weight: .bold, design: .monospaced))
                             .foregroundColor(appState.gatewayRunning ? AppTheme.success : AppTheme.textMuted)
+                            .opacity(labelsVisible ? 1 : 0)
                     }
                 }
                 .padding(.horizontal, appState.sidebarCollapsed ? 0 : 12)
@@ -283,23 +291,38 @@ struct Sidebar: View {
 
                 if !appState.sidebarCollapsed {
                     Spacer()
-
-                    Button(action: {
-                        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                            appState.sidebarCollapsed.toggle()
-                        }
-                    }) {
-                        Image(systemName: "sidebar.left")
-                            .font(.system(size: 14))
-                            .foregroundColor(AppTheme.textSecondary)
-                            .frame(width: 28, height: 28)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Collapse sidebar")
-                    .accessibilityHint("Double tap to collapse the sidebar")
-                    .help("Collapse sidebar")
                 }
+
+                Button(action: {
+                    if appState.sidebarCollapsed {
+                        // Expanding: width first, then labels fade in
+                        withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                            appState.sidebarCollapsed = false
+                        }
+                        withAnimation(.easeOut(duration: 0.2).delay(0.15)) {
+                            labelsVisible = true
+                        }
+                    } else {
+                        // Collapsing: labels fade out first, then width shrinks
+                        withAnimation(.easeOut(duration: 0.15)) {
+                            labelsVisible = false
+                        }
+                        withAnimation(.spring(response: 0.35, dampingFraction: 0.8).delay(0.1)) {
+                            appState.sidebarCollapsed = true
+                        }
+                    }
+                }) {
+                    Image(systemName: "sidebar.left")
+                        .font(.system(size: 14))
+                        .foregroundColor(AppTheme.textSecondary)
+                        .rotationEffect(.degrees(appState.sidebarCollapsed ? 180 : 0))
+                        .frame(width: 28, height: 28)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(appState.sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar")
+                .accessibilityHint(appState.sidebarCollapsed ? "Double tap to expand the sidebar" : "Double tap to collapse the sidebar")
+                .help(appState.sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar")
             }
             .padding(.horizontal, 16)
             .padding(.bottom, 6)
@@ -322,8 +345,12 @@ struct Sidebar: View {
         .frame(width: appState.sidebarCollapsed ? 64 : appState.sidebarWidth)
         .background(AppTheme.bgSecondary.opacity(0.5))
         .background(.ultraThinMaterial)
+        .animation(.spring(response: 0.35, dampingFraction: 0.8), value: appState.sidebarCollapsed)
         .animation(.easeOut(duration: 0.25), value: appState.isProcessing)
         .animation(.easeOut(duration: 0.25), value: appState.contextPressurePercent > 75)
+        .onAppear {
+            labelsVisible = !appState.sidebarCollapsed
+        }
     }
 }
 
@@ -485,6 +512,7 @@ struct SidebarButton: View {
     var isProcessing: Bool = false
     var contextPressureHigh: Bool = false
     var badgeCount: Int = 0
+    var labelsOpacity: Double = 1.0
     let action: () -> Void
 
     @State private var ringRotation: Double = 0
@@ -576,16 +604,19 @@ struct SidebarButton: View {
                             .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
                             .foregroundColor(isSelected ? AppTheme.textPrimary : (isHovered ? AppTheme.textPrimary : AppTheme.textSecondary))
                             .padding(.leading, 6)
+                            .opacity(labelsOpacity)
                     } else {
                         Text(item.rawValue)
                             .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
                             .foregroundColor(isSelected ? AppTheme.textPrimary : (isHovered ? AppTheme.textPrimary : AppTheme.textSecondary))
                             .padding(.leading, 6)
+                            .opacity(labelsOpacity)
                     }
 
                     Spacer()
                 }
             }
+            .frame(maxWidth: .infinity, alignment: isCollapsed ? .center : .leading)
             .padding(.horizontal, 6)
             .padding(.vertical, 8)
             .background(

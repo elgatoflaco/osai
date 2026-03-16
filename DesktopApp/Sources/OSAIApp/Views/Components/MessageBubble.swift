@@ -6582,3 +6582,71 @@ struct AgentBadge: View {
         .accessibilityLabel("Agent: \(name)")
     }
 }
+
+// MARK: - Scroll Navigation Buttons
+
+/// A floating circular button with a down-arrow icon that appears when the user
+/// is not at the bottom of a scroll view. Accepts an action closure for the tap.
+struct ScrollToBottomButton: View {
+    let action: () -> Void
+    var isVisible: Bool = true
+
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "chevron.down")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundColor(AppTheme.textPrimary)
+                .frame(width: 36, height: 36)
+                .background(AppTheme.bgGlass)
+                .clipShape(Circle())
+                .overlay(Circle().stroke(AppTheme.borderGlass, lineWidth: 1))
+                .shadow(color: Color.black.opacity(0.2), radius: 4, x: 0, y: 2)
+                .scaleEffect(isHovering ? 1.1 : 1.0)
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.15)) {
+                isHovering = hovering
+            }
+        }
+        .opacity(isVisible ? 1 : 0)
+        .animation(.easeInOut(duration: 0.2), value: isVisible)
+        .allowsHitTesting(isVisible)
+        .accessibilityLabel("Scroll to bottom")
+    }
+}
+
+/// A floating circular button with an up-arrow icon for scrolling to the top.
+/// Accepts an action closure for the tap.
+struct ScrollToTopButton: View {
+    let action: () -> Void
+    var isVisible: Bool = true
+
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "chevron.up")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundColor(AppTheme.textPrimary)
+                .frame(width: 36, height: 36)
+                .background(AppTheme.bgGlass)
+                .clipShape(Circle())
+                .overlay(Circle().stroke(AppTheme.borderGlass, lineWidth: 1))
+                .shadow(color: Color.black.opacity(0.2), radius: 4, x: 0, y: 2)
+                .scaleEffect(isHovering ? 1.1 : 1.0)
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.15)) {
+                isHovering = hovering
+            }
+        }
+        .opacity(isVisible ? 1 : 0)
+        .animation(.easeInOut(duration: 0.2), value: isVisible)
+        .allowsHitTesting(isVisible)
+        .accessibilityLabel("Scroll to top")
+    }
+}
