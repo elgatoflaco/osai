@@ -69,6 +69,7 @@ class AppState: ObservableObject {
     @AppStorage("isDarkMode") var isDarkMode: Bool = true
     @AppStorage("sidebarCollapsed") var sidebarCollapsed: Bool = false
     @AppStorage("hasCompletedOnboarding") var hasCompletedOnboarding: Bool = false
+    @AppStorage("globalHotkeyEnabled") var globalHotkeyEnabled: Bool = true
 
     @Published var selectedTab: SidebarItem = .home
     @Published var agents: [AgentInfo] = []

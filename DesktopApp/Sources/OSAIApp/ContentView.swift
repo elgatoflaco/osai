@@ -1,4 +1,53 @@
 import SwiftUI
+import AppKit
+
+// MARK: - Hotkey Manager
+
+/// Manages global and local keyboard monitors for the summon hotkey (Cmd+Shift+Space).
+/// Global monitoring requires accessibility permissions; if not granted the global monitor
+/// is silently skipped so the app does not crash.
+@MainActor
+final class HotkeyManager: ObservableObject {
+    private var globalMonitor: Any?
+    private var localMonitor: Any?
+
+    /// Install both global and local event monitors.
+    func install(onSummon: @escaping () -> Void) {
+        // Local monitor — works when the app is already focused
+        localMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            if Self.isSummonHotkey(event) {
+                onSummon()
+                return nil  // consume the event
+            }
+            return event
+        }
+
+        // Global monitor — works when the app is in the background.
+        // This requires the Accessibility permission; if not granted the system
+        // simply returns nil and we move on without crashing.
+        globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { event in
+            if Self.isSummonHotkey(event) {
+                Task { @MainActor in
+                    onSummon()
+                }
+            }
+        }
+    }
+
+    /// Remove both monitors.
+    func uninstall() {
+        if let m = globalMonitor { NSEvent.removeMonitor(m); globalMonitor = nil }
+        if let m = localMonitor  { NSEvent.removeMonitor(m); localMonitor = nil }
+    }
+
+    /// Check for Cmd+Shift+Space
+    private static func isSummonHotkey(_ event: NSEvent) -> Bool {
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        return event.keyCode == 49  // 49 = Space
+            && flags.contains(.command)
+            && flags.contains(.shift)
+    }
+}
 
 // MARK: - Toast View
 
@@ -168,6 +217,7 @@ struct OnboardingFeatureRow: View {
 
 struct ContentView: View {
     @EnvironmentObject var appState: AppState
+    @StateObject private var hotkeyManager = HotkeyManager()
 
     var body: some View {
         HStack(spacing: 0) {
@@ -222,6 +272,19 @@ struct ContentView: View {
         .background(AppTheme.bgPrimary)
         .onAppear {
             appState.loadAll()
+            if appState.globalHotkeyEnabled {
+                installHotkey()
+            }
+        }
+        .onDisappear {
+            hotkeyManager.uninstall()
+        }
+        .onChange(of: appState.globalHotkeyEnabled) {
+            if appState.globalHotkeyEnabled {
+                installHotkey()
+            } else {
+                hotkeyManager.uninstall()
+            }
         }
         // Hidden buttons for keyboard shortcuts
         .background(
@@ -258,5 +321,21 @@ struct ContentView: View {
                     .hidden()
             }
         )
+    }
+
+    // MARK: - Hotkey
+
+    private func installHotkey() {
+        hotkeyManager.uninstall()
+        hotkeyManager.install { [weak appState] in
+            guard let appState = appState else { return }
+            if NSApp.isActive {
+                // Already frontmost — focus the chat input
+                appState.selectedTab = .chat
+                appState.shouldFocusInput = true
+            } else {
+                NSApp.activate(ignoringOtherApps: true)
+            }
+        }
     }
 }

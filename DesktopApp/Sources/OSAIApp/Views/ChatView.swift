@@ -10,6 +10,9 @@ struct ChatView: View {
     @State private var attachedFiles: [URL] = []
     @State private var isDragOver = false
     @State private var isAtBottom = true
+    @State private var searchInConversation = ""
+    @State private var showConversationSearch = false
+    @State private var currentMatchIndex = 0
 
     // MARK: - Date grouping
 
@@ -52,6 +55,15 @@ struct ChatView: View {
             guard let convs = grouped[group], !convs.isEmpty else { return nil }
             return (group, convs)
         }
+    }
+
+    private var conversationMatches: [String] {
+        guard !searchInConversation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let conv = appState.activeConversation else { return [] }
+        let query = searchInConversation.lowercased()
+        return conv.messages
+            .filter { $0.content.lowercased().contains(query) }
+            .map { $0.id }
     }
 
     private func contextPressureColor(_ percent: Int) -> Color {
@@ -313,6 +325,75 @@ struct ChatView: View {
 
                 Divider().background(AppTheme.borderGlass)
 
+                // Conversation search bar
+                if showConversationSearch {
+                    HStack(spacing: 8) {
+                        Image(systemName: "magnifyingglass")
+                            .font(.system(size: 11))
+                            .foregroundColor(AppTheme.textMuted)
+
+                        TextField("Find in conversation...", text: $searchInConversation)
+                            .textFieldStyle(.plain)
+                            .font(.system(size: 12))
+                            .foregroundColor(AppTheme.textPrimary)
+                            .onSubmit {
+                                if !conversationMatches.isEmpty {
+                                    currentMatchIndex = (currentMatchIndex + 1) % conversationMatches.count
+                                }
+                            }
+
+                        if !searchInConversation.isEmpty {
+                            Text(conversationMatches.isEmpty ? "0 of 0" : "\(currentMatchIndex + 1) of \(conversationMatches.count)")
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundColor(AppTheme.textMuted)
+
+                            Button(action: {
+                                if !conversationMatches.isEmpty {
+                                    currentMatchIndex = (currentMatchIndex - 1 + conversationMatches.count) % conversationMatches.count
+                                }
+                            }) {
+                                Image(systemName: "chevron.up")
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .foregroundColor(conversationMatches.isEmpty ? AppTheme.textMuted.opacity(0.4) : AppTheme.textSecondary)
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(conversationMatches.isEmpty)
+
+                            Button(action: {
+                                if !conversationMatches.isEmpty {
+                                    currentMatchIndex = (currentMatchIndex + 1) % conversationMatches.count
+                                }
+                            }) {
+                                Image(systemName: "chevron.down")
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .foregroundColor(conversationMatches.isEmpty ? AppTheme.textMuted.opacity(0.4) : AppTheme.textSecondary)
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(conversationMatches.isEmpty)
+                        }
+
+                        Button(action: {
+                            showConversationSearch = false
+                            searchInConversation = ""
+                            currentMatchIndex = 0
+                        }) {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundColor(AppTheme.textMuted)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(AppTheme.bgCard.opacity(0.6))
+                    .overlay(
+                        Rectangle()
+                            .frame(height: 1)
+                            .foregroundColor(AppTheme.borderGlass),
+                        alignment: .bottom
+                    )
+                }
+
                 // Messages
                 if let conv = appState.activeConversation, !conv.messages.isEmpty || appState.isProcessing {
                     let lastAssistantId = conv.messages.last(where: { $0.role == .assistant })?.id
@@ -359,6 +440,24 @@ struct ChatView: View {
                             .onChange(of: appState.activeConversation?.messages.last?.activities.count) { _, _ in
                                 if isAtBottom {
                                     scrollToBottom(proxy)
+                                }
+                            }
+
+                            .onChange(of: searchInConversation) { _, _ in
+                                currentMatchIndex = 0
+                                let matches = conversationMatches
+                                if let firstId = matches.first {
+                                    withAnimation(.easeOut(duration: 0.3)) {
+                                        proxy.scrollTo(firstId, anchor: .center)
+                                    }
+                                }
+                            }
+                            .onChange(of: currentMatchIndex) { _, newIndex in
+                                let matches = conversationMatches
+                                if newIndex < matches.count {
+                                    withAnimation(.easeOut(duration: 0.3)) {
+                                        proxy.scrollTo(matches[newIndex], anchor: .center)
+                                    }
                                 }
                             }
 
@@ -514,6 +613,19 @@ struct ChatView: View {
                 return true
             }
         }
+        .background(
+            Button("") {
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    showConversationSearch.toggle()
+                }
+                if !showConversationSearch {
+                    searchInConversation = ""
+                    currentMatchIndex = 0
+                }
+            }
+            .keyboardShortcut("f", modifiers: .command)
+            .hidden()
+        )
     }
 
     private func fileIcon(for url: URL) -> String {

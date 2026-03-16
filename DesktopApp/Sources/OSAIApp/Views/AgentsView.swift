@@ -103,9 +103,7 @@ struct AgentsView: View {
             .padding(.top, AppTheme.paddingLg)
         }
         .sheet(isPresented: $showCreateSheet) {
-            CreateAgentSheet {
-                appState.agents = appState.service.loadAgents()
-            }
+            CreateAgentSheet(appState: appState)
         }
     }
 
@@ -347,33 +345,51 @@ struct FlowLayout: Layout {
 
 struct CreateAgentSheet: View {
     @Environment(\.dismiss) private var dismiss
+    @ObservedObject var appState: AppState
+
+    @State private var step = 1
     @State private var name = ""
     @State private var description = ""
     @State private var model = "anthropic/claude-sonnet-4-20250514"
-    @State private var backend = "api"
     @State private var triggers = ""
     @State private var systemPrompt = ""
-    var onCreated: () -> Void = {}
 
     private let modelOptions = [
         "anthropic/claude-sonnet-4-20250514",
         "anthropic/claude-haiku-4-5-20251001",
         "google/gemini-2.5-flash",
-        "google/gemini-2.5-pro",
-        "openai/gpt-4.1",
-        "openai/o4-mini",
-        "xai/grok-3",
-        "deepseek/deepseek-chat",
+        "openrouter/x-ai/grok-3-mini",
         "claude-code",
     ]
+
+    private var slug: String {
+        name.lowercased()
+            .replacingOccurrences(of: "\\s+", with: "-", options: .regularExpression)
+            .replacingOccurrences(of: "[^a-z0-9\\-]", with: "", options: .regularExpression)
+    }
+
+    private var triggerList: [String] {
+        triggers.split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+    }
+
+    private var canAdvance: Bool {
+        !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             // Header
             HStack {
-                Text("Create Agent")
-                    .font(AppTheme.fontHeadline)
-                    .foregroundColor(AppTheme.textPrimary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Create Agent")
+                        .font(AppTheme.fontHeadline)
+                        .foregroundColor(AppTheme.textPrimary)
+                    Text("Step \(step) of 2 — \(step == 1 ? "Basics" : "Behavior")")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(AppTheme.textMuted)
+                }
                 Spacer()
                 Button(action: { dismiss() }) {
                     Image(systemName: "xmark.circle.fill")
@@ -384,17 +400,118 @@ struct CreateAgentSheet: View {
             }
             .padding(20)
 
-            Divider().background(AppTheme.borderGlass)
+            // Step indicator bar
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Rectangle()
+                        .fill(AppTheme.bgPrimary.opacity(0.3))
+                        .frame(height: 3)
+                    Rectangle()
+                        .fill(AppTheme.accent)
+                        .frame(width: geo.size.width * (CGFloat(step) / 2.0), height: 3)
+                        .animation(.easeInOut(duration: 0.3), value: step)
+                }
+            }
+            .frame(height: 3)
 
             ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: 16) {
+                    if step == 1 {
+                        stepOneBasics
+                    } else {
+                        stepTwoBehavior
+                    }
+                }
+                .padding(20)
+            }
+
+            Divider().background(AppTheme.borderGlass)
+
+            // Footer
+            HStack {
+                if step == 1 {
+                    Button("Cancel") { dismiss() }
+                        .foregroundColor(AppTheme.textSecondary)
+                        .buttonStyle(.plain)
+                } else {
+                    Button(action: { withAnimation { step = 1 } }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "chevron.left")
+                            Text("Back")
+                        }
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(AppTheme.textSecondary)
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                Spacer()
+
+                if step == 1 {
+                    Button(action: { withAnimation { step = 2 } }) {
+                        HStack(spacing: 6) {
+                            Text("Next")
+                            Image(systemName: "chevron.right")
+                        }
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 10)
+                        .background(canAdvance ? AppTheme.accent : AppTheme.textMuted)
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!canAdvance)
+                } else {
+                    Button(action: saveAndDismiss) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "plus.circle.fill")
+                            Text("Create Agent")
+                        }
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 10)
+                        .background(canAdvance ? AppTheme.accent : AppTheme.textMuted)
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!canAdvance)
+                }
+            }
+            .padding(20)
+        }
+        .frame(width: 540, height: 620)
+        .background(AppTheme.bgSecondary)
+    }
+
+    // MARK: - Step 1: Basics
+
+    private var stepOneBasics: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            GlassCard {
+                VStack(alignment: .leading, spacing: 14) {
+                    Label("Identity", systemImage: "person.text.rectangle")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(AppTheme.accent)
+
                     FormField(label: "Name") {
-                        TextField("agent-name", text: $name)
+                        TextField("My Agent", text: $name)
                             .textFieldStyle(.plain)
                             .font(AppTheme.fontBody)
                             .padding(10)
                             .background(AppTheme.bgPrimary.opacity(0.5))
                             .clipShape(RoundedRectangle(cornerRadius: 8))
+                    }
+
+                    if !slug.isEmpty {
+                        HStack(spacing: 4) {
+                            Image(systemName: "doc.text")
+                                .font(.system(size: 10))
+                            Text("~/.desktop-agent/agents/\(slug).md")
+                                .font(.system(size: 11, design: .monospaced))
+                        }
+                        .foregroundColor(AppTheme.textMuted)
                     }
 
                     FormField(label: "Description") {
@@ -405,87 +522,109 @@ struct CreateAgentSheet: View {
                             .background(AppTheme.bgPrimary.opacity(0.5))
                             .clipShape(RoundedRectangle(cornerRadius: 8))
                     }
-
-                    FormField(label: "Model") {
-                        Picker("", selection: $model) {
-                            ForEach(modelOptions, id: \.self) { m in
-                                Text(m).tag(m)
-                            }
-                        }
-                        .pickerStyle(.menu)
-                        .tint(AppTheme.accent)
-                    }
-
-                    FormField(label: "Backend") {
-                        Picker("", selection: $backend) {
-                            Text("API").tag("api")
-                            Text("Claude Code (local)").tag("claude-code")
-                        }
-                        .pickerStyle(.segmented)
-                    }
-
-                    FormField(label: "Triggers (comma separated)") {
-                        TextField("code, debug, implement, fix", text: $triggers)
-                            .textFieldStyle(.plain)
-                            .font(AppTheme.fontBody)
-                            .padding(10)
-                            .background(AppTheme.bgPrimary.opacity(0.5))
-                            .clipShape(RoundedRectangle(cornerRadius: 8))
-                    }
-
-                    FormField(label: "System Prompt") {
-                        TextEditor(text: $systemPrompt)
-                            .font(AppTheme.fontMono)
-                            .foregroundColor(AppTheme.textPrimary)
-                            .scrollContentBackground(.hidden)
-                            .padding(10)
-                            .frame(minHeight: 80)
-                            .background(AppTheme.bgPrimary.opacity(0.5))
-                            .clipShape(RoundedRectangle(cornerRadius: 8))
-                    }
                 }
-                .padding(20)
             }
 
-            Divider().background(AppTheme.borderGlass)
+            GlassCard {
+                VStack(alignment: .leading, spacing: 14) {
+                    Label("Model", systemImage: "cpu")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(AppTheme.accent)
 
-            // Footer
-            HStack {
-                Button("Cancel") { dismiss() }
-                    .foregroundColor(AppTheme.textSecondary)
-                    .buttonStyle(.plain)
-
-                Spacer()
-
-                Button(action: {
-                    saveAgent()
-                    onCreated()
-                    dismiss()
-                }) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "plus.circle.fill")
-                        Text("Create Agent")
+                    Picker("", selection: $model) {
+                        ForEach(modelOptions, id: \.self) { m in
+                            Text(m).tag(m)
+                        }
                     }
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 10)
-                    .background(name.isEmpty ? AppTheme.textMuted : AppTheme.accent)
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .pickerStyle(.menu)
+                    .tint(AppTheme.accent)
+
+                    if model == "claude-code" {
+                        HStack(spacing: 6) {
+                            Image(systemName: "terminal")
+                                .font(.system(size: 11))
+                            Text("Delegates to local Claude Code CLI for code tasks")
+                                .font(.system(size: 11))
+                        }
+                        .foregroundColor(AppTheme.textMuted)
+                    }
                 }
-                .buttonStyle(.plain)
-                .disabled(name.isEmpty)
             }
-            .padding(20)
         }
-        .frame(width: 520, height: 600)
-        .background(AppTheme.bgSecondary)
     }
 
-    private func saveAgent() {
-        let triggerList = triggers.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+    // MARK: - Step 2: Behavior
+
+    private var stepTwoBehavior: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            GlassCard {
+                VStack(alignment: .leading, spacing: 14) {
+                    Label("System Prompt", systemImage: "text.bubble")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(AppTheme.accent)
+
+                    TextEditor(text: $systemPrompt)
+                        .font(AppTheme.fontMono)
+                        .foregroundColor(AppTheme.textPrimary)
+                        .scrollContentBackground(.hidden)
+                        .padding(10)
+                        .frame(minHeight: 120, maxHeight: 180)
+                        .background(AppTheme.bgPrimary.opacity(0.5))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+
+                    Text("Instructions that define how the agent behaves and responds.")
+                        .font(.system(size: 11))
+                        .foregroundColor(AppTheme.textMuted)
+                }
+            }
+
+            GlassCard {
+                VStack(alignment: .leading, spacing: 14) {
+                    Label("Trigger Keywords", systemImage: "tag")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(AppTheme.accent)
+
+                    TextField("code, debug, implement, fix", text: $triggers)
+                        .textFieldStyle(.plain)
+                        .font(AppTheme.fontBody)
+                        .padding(10)
+                        .background(AppTheme.bgPrimary.opacity(0.5))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+
+                    if !triggerList.isEmpty {
+                        FlowLayout(spacing: 6) {
+                            ForEach(triggerList, id: \.self) { trigger in
+                                Text(trigger)
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundColor(AppTheme.accent)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 4)
+                                    .background(AppTheme.accent.opacity(0.12))
+                                    .clipShape(Capsule())
+                                    .overlay(
+                                        Capsule()
+                                            .stroke(AppTheme.accent.opacity(0.25), lineWidth: 0.5)
+                                    )
+                            }
+                        }
+                    }
+
+                    Text("Messages containing these keywords will auto-route to this agent.")
+                        .font(.system(size: 11))
+                        .foregroundColor(AppTheme.textMuted)
+                }
+            }
+        }
+    }
+
+    // MARK: - Save
+
+    private func saveAndDismiss() {
+        let finalSlug = slug.isEmpty ? "agent" : slug
+        let backend = model == "claude-code" ? "claude-code" : "api"
+
         var content = "---\n"
-        content += "name: \(name)\n"
+        content += "name: \(finalSlug)\n"
         content += "description: \(description)\n"
         content += "model: \(model)\n"
         if backend != "api" {
@@ -502,9 +641,16 @@ struct CreateAgentSheet: View {
             content += systemPrompt + "\n"
         }
 
-        let path = NSHomeDirectory() + "/.desktop-agent/agents/\(name).md"
-        try? FileManager.default.createDirectory(atPath: NSHomeDirectory() + "/.desktop-agent/agents", withIntermediateDirectories: true)
+        let path = NSHomeDirectory() + "/.desktop-agent/agents/\(finalSlug).md"
+        try? FileManager.default.createDirectory(
+            atPath: NSHomeDirectory() + "/.desktop-agent/agents",
+            withIntermediateDirectories: true
+        )
         try? content.write(toFile: path, atomically: true, encoding: .utf8)
+
+        appState.agents = appState.service.loadAgents()
+        appState.showToast("Agent \"\(finalSlug)\" created", type: .success)
+        dismiss()
     }
 }
 
