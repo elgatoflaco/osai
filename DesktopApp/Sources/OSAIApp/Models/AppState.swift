@@ -360,6 +360,7 @@ enum DashboardSection: String, Codable, CaseIterable, Identifiable {
     case recentConversations
     case systemHealth
     case systemStatus
+    case activity
 
     var id: String { rawValue }
 
@@ -377,6 +378,7 @@ enum DashboardSection: String, Codable, CaseIterable, Identifiable {
         case .recentConversations: return "Recent Conversations"
         case .systemHealth: return "System Health"
         case .systemStatus: return "System Status"
+        case .activity: return "Your Activity"
         }
     }
 
@@ -394,11 +396,12 @@ enum DashboardSection: String, Codable, CaseIterable, Identifiable {
         case .recentConversations: return "bubble.left.and.text.bubble.right"
         case .systemHealth: return "server.rack"
         case .systemStatus: return "cpu"
+        case .activity: return "flame"
         }
     }
 
     static let defaultOrder: [DashboardSection] = [
-        .quickStart, .gateway, .stats, .spending, .recentConversations, .tokenStats, .analytics, .chatInsights, .performance, .recentActivity, .systemHealth, .systemStatus
+        .quickStart, .activity, .gateway, .stats, .spending, .recentConversations, .tokenStats, .analytics, .chatInsights, .performance, .recentActivity, .systemHealth, .systemStatus
     ]
 }
 
@@ -448,6 +451,50 @@ enum AgentStatus {
         case .noKey: return "No API key"
         }
     }
+}
+
+// MARK: - Search Result
+
+enum SearchResultCategory: String, CaseIterable {
+    case recentSearch = "Recent Searches"
+    case conversation = "Conversations"
+    case message = "Messages"
+    case agent = "Agents"
+    case template = "Templates"
+    case setting = "Settings"
+
+    var icon: String {
+        switch self {
+        case .recentSearch: return "clock.arrow.circlepath"
+        case .conversation: return "bubble.left.and.bubble.right"
+        case .message: return "text.bubble"
+        case .agent: return "person.3"
+        case .template: return "doc.text"
+        case .setting: return "gearshape"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .recentSearch: return AppTheme.textSecondary
+        case .conversation: return AppTheme.accent
+        case .message: return .green
+        case .agent: return .purple
+        case .template: return .orange
+        case .setting: return .blue
+        }
+    }
+}
+
+struct SearchResult: Identifiable {
+    let id = UUID()
+    let category: SearchResultCategory
+    let title: String
+    let subtitle: String
+    let icon: String
+    let action: () -> Void
+    /// Matched range in title for highlighting, if applicable
+    var matchRange: Range<String.Index>?
 }
 
 class AppState: ObservableObject {
@@ -594,6 +641,113 @@ class AppState: ObservableObject {
     @AppStorage("autoScrollEnabled") var autoScrollEnabled: Bool = true
     @AppStorage("codeWordWrap") var codeWordWrap: Bool = false
     @AppStorage("showLineNumbers") var showLineNumbers: Bool = true
+
+    // MARK: - Streaks & Gamification
+
+    @AppStorage("currentStreak") var currentStreak: Int = 0
+    @AppStorage("longestStreak") var longestStreak: Int = 0
+    @AppStorage("lastActiveDate") var lastActiveDate: String = ""
+    @AppStorage("totalConversationsCreated") var totalConversationsCreated: Int = 0
+    @AppStorage("totalMessagesCount") var totalMessagesCount: Int = 0
+    @AppStorage("dailyActivityHeatmap") var dailyActivityHeatmap: String = "" // JSON: {"2026-03-16":5,...}
+
+    /// Called on app launch to update the usage streak based on consecutive days.
+    func updateStreak() {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        let todayStr = formatter.string(from: Date())
+
+        if lastActiveDate == todayStr {
+            // Already recorded today, nothing to do
+            return
+        }
+
+        if let lastDate = formatter.date(from: lastActiveDate) {
+            let calendar = Calendar.current
+            let daysBetween = calendar.dateComponents([.day], from: lastDate, to: Date()).day ?? 0
+            if daysBetween == 1 {
+                // Consecutive day
+                currentStreak += 1
+            } else if daysBetween > 1 {
+                // Streak broken
+                currentStreak = 1
+            }
+        } else {
+            // First ever launch or invalid date
+            currentStreak = 1
+        }
+
+        if currentStreak > longestStreak {
+            longestStreak = currentStreak
+        }
+
+        lastActiveDate = todayStr
+    }
+
+    /// Returns milestone text when the user hits notable conversation counts.
+    func checkMilestone() -> String? {
+        switch totalConversationsCreated {
+        case 7: return "7 conversations - Getting started!"
+        case 25: return "25 conversations - Regular user!"
+        case 50: return "50 conversations - Power user!"
+        case 100: return "100 conversations - Centurion!"
+        case 250: return "250 conversations - Expert!"
+        case 500: return "500 conversations - Legend!"
+        case 1000: return "1,000 conversations - GOAT!"
+        default: return nil
+        }
+    }
+
+    /// Emoji indicator for the current streak level.
+    var streakEmoji: String {
+        if currentStreak >= 30 { return "star.fill" }
+        if currentStreak >= 7 { return "flame.fill" }
+        if currentStreak >= 1 { return "flame" }
+        return "flame"
+    }
+
+    /// Records a message for today's heatmap data.
+    func recordDailyActivity() {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        let todayStr = formatter.string(from: Date())
+
+        var heatmap = parseDailyHeatmap()
+        heatmap[todayStr, default: 0] += 1
+        // Keep only last 30 days
+        let cutoff = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date()
+        let cutoffStr = formatter.string(from: cutoff)
+        heatmap = heatmap.filter { $0.key >= cutoffStr }
+
+        if let data = try? JSONSerialization.data(withJSONObject: heatmap),
+           let str = String(data: data, encoding: .utf8) {
+            dailyActivityHeatmap = str
+        }
+    }
+
+    /// Parses the stored heatmap JSON into a dictionary.
+    func parseDailyHeatmap() -> [String: Int] {
+        guard !dailyActivityHeatmap.isEmpty,
+              let data = dailyActivityHeatmap.data(using: .utf8),
+              let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Int] else {
+            return [:]
+        }
+        return dict
+    }
+
+    /// Returns message counts for the last 7 days (oldest first).
+    func last7DaysActivity() -> [(date: String, count: Int)] {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        let heatmap = parseDailyHeatmap()
+        let calendar = Calendar.current
+
+        return (0..<7).reversed().map { daysAgo in
+            let date = calendar.date(byAdding: .day, value: -daysAgo, to: Date()) ?? Date()
+            let key = formatter.string(from: date)
+            return (date: key, count: heatmap[key] ?? 0)
+        }
+    }
 
     // MARK: - Dashboard Customization
 
@@ -744,6 +898,194 @@ class AppState: ObservableObject {
         inputHistoryIndex = -1
         inputHistoryDraft = ""
     }
+
+    // MARK: - Universal Search (Command Palette)
+
+    @Published var recentSearches: [String] = {
+        UserDefaults.standard.stringArray(forKey: "recentSearches") ?? []
+    }() {
+        didSet {
+            UserDefaults.standard.set(recentSearches, forKey: "recentSearches")
+        }
+    }
+
+    /// Adds a query to recent searches (max 5, deduped, most recent first).
+    func addRecentSearch(_ query: String) {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        recentSearches.removeAll { $0.lowercased() == trimmed.lowercased() }
+        recentSearches.insert(trimmed, at: 0)
+        if recentSearches.count > 5 {
+            recentSearches = Array(recentSearches.prefix(5))
+        }
+    }
+
+    /// Clears all recent searches.
+    func clearRecentSearches() {
+        recentSearches = []
+    }
+
+    /// Universal search across conversations, messages, agents, templates, and settings.
+    func universalSearch(query: String) -> [SearchResult] {
+        let q = query.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { return [] }
+
+        var results: [SearchResult] = []
+
+        // -- Conversations (by title and summary) --
+        for conv in conversations {
+            let titleLower = conv.title.lowercased()
+            let summaryLower = (conv.summary ?? "").lowercased()
+            if titleLower.contains(q) || summaryLower.contains(q) {
+                let lastMsg = conv.messages.last?.content ?? ""
+                let subtitle = lastMsg.isEmpty ? "\(conv.messages.count) messages" : String(lastMsg.prefix(60))
+                results.append(SearchResult(
+                    category: .conversation,
+                    title: conv.title,
+                    subtitle: subtitle,
+                    icon: conv.agentName != nil ? "person.bubble" : "bubble.left.and.bubble.right",
+                    action: { [weak self] in
+                        self?.openConversation(conv)
+                        self?.selectedTab = .chat
+                    }
+                ))
+            }
+        }
+
+        // -- Messages (by content) --
+        for conv in conversations {
+            for msg in conv.messages where msg.role == .user || msg.role == .assistant {
+                let contentLower = msg.content.lowercased()
+                if contentLower.contains(q) {
+                    let excerpt: String
+                    if let range = contentLower.range(of: q) {
+                        let matchStart = contentLower.distance(from: contentLower.startIndex, to: range.lowerBound)
+                        let excerptStart = max(0, matchStart - 20)
+                        let startIdx = msg.content.index(msg.content.startIndex, offsetBy: excerptStart)
+                        let endIdx = msg.content.index(startIdx, offsetBy: min(80, msg.content.distance(from: startIdx, to: msg.content.endIndex)))
+                        let prefixStr = excerptStart > 0 ? "..." : ""
+                        let suffixStr = endIdx < msg.content.endIndex ? "..." : ""
+                        excerpt = prefixStr + String(msg.content[startIdx..<endIdx]) + suffixStr
+                    } else {
+                        excerpt = String(msg.content.prefix(80))
+                    }
+                    let msgId = msg.id
+                    results.append(SearchResult(
+                        category: .message,
+                        title: conv.title,
+                        subtitle: excerpt,
+                        icon: msg.role == .user ? "person" : "sparkles",
+                        action: { [weak self] in
+                            self?.openConversation(conv)
+                            self?.selectedTab = .chat
+                            self?.scrollToMessageId = msgId
+                        }
+                    ))
+                }
+                if results.filter({ $0.category == .message }).count >= 5 { break }
+            }
+            if results.filter({ $0.category == .message }).count >= 5 { break }
+        }
+
+        // -- Agents (by name and description) --
+        for agent in agents {
+            if agent.name.lowercased().contains(q) || agent.description.lowercased().contains(q) {
+                results.append(SearchResult(
+                    category: .agent,
+                    title: agent.name,
+                    subtitle: agent.description,
+                    icon: agent.backendIcon,
+                    action: { [weak self] in
+                        guard let self = self else { return }
+                        let conv = Conversation(
+                            id: UUID().uuidString,
+                            title: agent.name,
+                            messages: [],
+                            createdAt: Date(),
+                            agentName: agent.name
+                        )
+                        self.conversations.insert(conv, at: 0)
+                        self.activeConversation = conv
+                        self.selectedTab = .chat
+                    }
+                ))
+            }
+        }
+
+        // -- Templates (prompt templates + conversation templates by name) --
+        for template in promptTemplates {
+            if template.name.lowercased().contains(q) || template.category.lowercased().contains(q) {
+                results.append(SearchResult(
+                    category: .template,
+                    title: template.name,
+                    subtitle: "Prompt - \(template.category)",
+                    icon: template.icon,
+                    action: { [weak self] in
+                        self?.selectedTab = .chat
+                        self?.shouldFocusInput = true
+                    }
+                ))
+            }
+        }
+        for template in allTemplates {
+            if template.name.lowercased().contains(q) || template.description.lowercased().contains(q) {
+                let alreadyHas = results.contains { $0.category == .template && $0.title == template.name }
+                if !alreadyHas {
+                    results.append(SearchResult(
+                        category: .template,
+                        title: template.name,
+                        subtitle: template.description,
+                        icon: template.icon,
+                        action: { [weak self] in
+                            self?.selectedTab = .chat
+                        }
+                    ))
+                }
+            }
+        }
+
+        // -- Settings (searchable labels) --
+        let settingsItems: [(label: String, icon: String, tab: SidebarItem)] = [
+            ("Dark Mode", "moon.fill", .settings),
+            ("Accent Color", "paintpalette.fill", .settings),
+            ("API Keys", "key.fill", .settings),
+            ("Gateway", "bolt.fill", .settings),
+            ("Notifications", "bell.fill", .settings),
+            ("Compact Mode", "rectangle.compress.vertical", .settings),
+            ("Font Size", "textformat.size", .settings),
+            ("Float on Top", "pin.fill", .settings),
+            ("Window Opacity", "circle.lefthalf.filled", .settings),
+            ("Focus Mode", "eye.slash", .settings),
+            ("Hotkey", "command", .settings),
+            ("Budget", "dollarsign.circle", .settings),
+            ("Display Density", "square.grid.3x3", .settings),
+            ("Sidebar Width", "sidebar.left", .settings),
+            ("Code Theme", "chevron.left.forwardslash.chevron.right", .settings),
+            ("Auto Scroll", "arrow.down.to.line", .settings),
+            ("Text to Speech", "speaker.wave.2", .settings),
+            ("Timestamps", "clock", .settings),
+            ("Quick Actions", "bolt.circle", .settings),
+            ("Export Data", "square.and.arrow.up", .settings),
+        ]
+        for item in settingsItems {
+            if item.label.lowercased().contains(q) {
+                results.append(SearchResult(
+                    category: .setting,
+                    title: item.label,
+                    subtitle: "Open Settings",
+                    icon: item.icon,
+                    action: { [weak self] in
+                        self?.selectedTab = item.tab
+                    }
+                ))
+            }
+        }
+
+        return results
+    }
+
+    /// Message ID to scroll to after opening a conversation from search.
+    @Published var scrollToMessageId: String?
 
     @Published var selectedAccentColor: String = UserDefaults.standard.string(forKey: "selectedAccentColor") ?? "teal"
 
@@ -1810,6 +2152,7 @@ class AppState: ObservableObject {
         gatewayPID = status.pid
         loadSpending()
         loadUserTemplates()
+        updateStreak()
         isLoading = false
 
         // Auto-refresh every 30s
@@ -1939,7 +2282,12 @@ class AppState: ObservableObject {
             activeConversation = conv
             conversations.insert(conv, at: 0)
             selectedTab = .chat
+            totalConversationsCreated += 1
         }
+
+        // Track message activity
+        totalMessagesCount += 1
+        recordDailyActivity()
 
         // Stamp current model on conversation if not already set
         if activeConversation?.modelId == nil {
@@ -2981,6 +3329,88 @@ class AppState: ObservableObject {
         try? FileManager.default.removeItem(atPath: path)
         agents = service.loadAgents()
         showToast("Agent \"\(name)\" deleted", type: .success)
+    }
+
+    /// Deletes an agent by name, removing its .md file and refreshing the agent list.
+    func deleteAgent(name: String) {
+        let path = NSHomeDirectory() + "/.desktop-agent/agents/\(name).md"
+        try? FileManager.default.removeItem(atPath: path)
+        agents = service.loadAgents()
+        showToast("Agent \"\(name)\" deleted", type: .success)
+    }
+
+    /// Updates an existing agent, optionally renaming the file if the name changed.
+    func updateAgent(originalName: String, name: String, description: String, model: String, systemPrompt: String, triggers: [String]) {
+        let backend = model == "claude-code" ? "claude-code" : "api"
+
+        var content = "---\n"
+        content += "name: \(name)\n"
+        content += "description: \(description)\n"
+        content += "model: \(model)\n"
+        if backend != "api" {
+            content += "backend: \(backend)\n"
+        }
+        if !triggers.isEmpty {
+            content += "triggers:\n"
+            for t in triggers {
+                content += "  - \(t)\n"
+            }
+        }
+        content += "---\n"
+        if !systemPrompt.isEmpty {
+            content += systemPrompt + "\n"
+        }
+
+        let agentsDir = NSHomeDirectory() + "/.desktop-agent/agents"
+
+        // If the name changed, delete the old file
+        if name != originalName {
+            let oldPath = "\(agentsDir)/\(originalName).md"
+            try? FileManager.default.removeItem(atPath: oldPath)
+        }
+
+        let path = "\(agentsDir)/\(name).md"
+        do {
+            try content.write(toFile: path, atomically: true, encoding: .utf8)
+            agents = service.loadAgents()
+            showToast("Agent \"\(name)\" updated", type: .success)
+        } catch {
+            showToast("Failed to update agent: \(error.localizedDescription)", type: .error)
+        }
+    }
+
+    /// Duplicates an agent by copying its .md file with a "-copy" suffix appended to the name.
+    func duplicateAgent(name: String) {
+        let sourcePath = NSHomeDirectory() + "/.desktop-agent/agents/\(name).md"
+        guard let content = try? String(contentsOfFile: sourcePath, encoding: .utf8) else {
+            showToast("Agent file not found", type: .error)
+            return
+        }
+
+        // Find a unique copy name
+        let agentsDir = NSHomeDirectory() + "/.desktop-agent/agents"
+        var copyName = "\(name)-copy"
+        var counter = 2
+        while FileManager.default.fileExists(atPath: "\(agentsDir)/\(copyName).md") {
+            copyName = "\(name)-copy-\(counter)"
+            counter += 1
+        }
+
+        // Replace the name in frontmatter
+        let newContent = content.replacingOccurrences(
+            of: "(?m)^name:.*$",
+            with: "name: \(copyName)",
+            options: .regularExpression
+        )
+
+        let destPath = "\(agentsDir)/\(copyName).md"
+        do {
+            try newContent.write(toFile: destPath, atomically: true, encoding: .utf8)
+            agents = service.loadAgents()
+            showToast("Agent \"\(copyName)\" created", type: .success)
+        } catch {
+            showToast("Failed to duplicate agent: \(error.localizedDescription)", type: .error)
+        }
     }
 
     // MARK: - Agent Import/Export

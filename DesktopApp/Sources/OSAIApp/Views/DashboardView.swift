@@ -181,6 +181,13 @@ struct DashboardView: View {
                     .environmentObject(appState)
             }
             .frame(maxWidth: 800)
+
+        case .activity:
+            CollapsibleSection(section: .activity) {
+                ActivityStreakContent()
+                    .environmentObject(appState)
+            }
+            .frame(maxWidth: 800)
         }
     }
 
@@ -3064,5 +3071,190 @@ struct PerformanceSection: View {
         let formatter = DateFormatter()
         formatter.dateFormat = "EEE"
         return formatter.string(from: date)
+    }
+}
+
+// MARK: - Activity Streak Content
+
+struct ActivityStreakContent: View {
+    @EnvironmentObject var appState: AppState
+
+    private var warmOrange: Color {
+        Color(red: 0xF5/255, green: 0x9E/255, blue: 0x0B/255)
+    }
+
+    private var warmRed: Color {
+        Color(red: 0xEF/255, green: 0x44/255, blue: 0x44/255)
+    }
+
+    var body: some View {
+        VStack(spacing: 16) {
+            // Top row: Streak + Longest streak
+            HStack(spacing: 16) {
+                // Current streak
+                GlassCard(hoverEnabled: false) {
+                    HStack(spacing: 12) {
+                        ZStack {
+                            Circle()
+                                .fill(streakColor.opacity(0.15))
+                                .frame(width: 44, height: 44)
+                            Image(systemName: appState.streakEmoji)
+                                .font(.system(size: 20))
+                                .foregroundColor(streakColor)
+                        }
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("\(appState.currentStreak)")
+                                .font(.system(size: 28, weight: .bold, design: .rounded))
+                                .foregroundColor(AppTheme.textPrimary)
+                            Text("day streak")
+                                .font(AppTheme.fontCaption)
+                                .foregroundColor(AppTheme.textSecondary)
+                        }
+
+                        Spacer()
+                    }
+                }
+
+                // Longest streak
+                GlassCard(hoverEnabled: false) {
+                    HStack(spacing: 12) {
+                        ZStack {
+                            Circle()
+                                .fill(AppTheme.accent.opacity(0.15))
+                                .frame(width: 44, height: 44)
+                            Image(systemName: "trophy.fill")
+                                .font(.system(size: 20))
+                                .foregroundColor(AppTheme.accent)
+                        }
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("\(appState.longestStreak)")
+                                .font(.system(size: 28, weight: .bold, design: .rounded))
+                                .foregroundColor(AppTheme.textPrimary)
+                            Text("best streak")
+                                .font(AppTheme.fontCaption)
+                                .foregroundColor(AppTheme.textSecondary)
+                        }
+
+                        Spacer()
+                    }
+                }
+            }
+
+            // Stats row: Conversations + Messages
+            HStack(spacing: 16) {
+                activityStatCard(
+                    icon: "bubble.left.and.bubble.right.fill",
+                    value: "\(appState.totalConversationsCreated)",
+                    label: "conversations",
+                    color: AppTheme.accent
+                )
+
+                activityStatCard(
+                    icon: "text.bubble.fill",
+                    value: "\(appState.totalMessagesCount)",
+                    label: "messages",
+                    color: Color(red: 0x8B/255, green: 0x5C/255, blue: 0xF6/255)
+                )
+            }
+
+            // Milestone badge (if applicable)
+            if let milestone = appState.checkMilestone() {
+                HStack(spacing: 10) {
+                    Image(systemName: "star.circle.fill")
+                        .font(.system(size: 18))
+                        .foregroundColor(warmOrange)
+
+                    Text(milestone)
+                        .font(.system(size: 14, weight: .semibold, design: .rounded))
+                        .foregroundColor(warmOrange)
+
+                    Spacer()
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(warmOrange.opacity(0.1))
+                .clipShape(RoundedRectangle(cornerRadius: AppTheme.cornerRadiusSm))
+                .overlay(
+                    RoundedRectangle(cornerRadius: AppTheme.cornerRadiusSm)
+                        .stroke(warmOrange.opacity(0.25), lineWidth: 1)
+                )
+            }
+
+            // Mini heatmap: last 7 days
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Last 7 days")
+                    .font(AppTheme.fontCaption)
+                    .foregroundColor(AppTheme.textSecondary)
+
+                HStack(spacing: 6) {
+                    ForEach(Array(appState.last7DaysActivity().enumerated()), id: \.offset) { _, day in
+                        VStack(spacing: 4) {
+                            RoundedRectangle(cornerRadius: 4)
+                                .fill(heatmapColor(count: day.count))
+                                .frame(width: 32, height: 32)
+                                .overlay(
+                                    Text(day.count > 0 ? "\(day.count)" : "")
+                                        .font(.system(size: 10, weight: .medium, design: .rounded))
+                                        .foregroundColor(.white.opacity(0.9))
+                                )
+
+                            Text(shortDayLabel(day.date))
+                                .font(.system(size: 9, weight: .medium))
+                                .foregroundColor(AppTheme.textMuted)
+                        }
+                    }
+                    Spacer()
+                }
+            }
+            .padding(.top, 4)
+        }
+    }
+
+    // MARK: - Helpers
+
+    private var streakColor: Color {
+        if appState.currentStreak >= 30 { return warmOrange }
+        if appState.currentStreak >= 7 { return warmRed }
+        return warmOrange
+    }
+
+    private func activityStatCard(icon: String, value: String, label: String, color: Color) -> some View {
+        GlassCard(hoverEnabled: false) {
+            HStack(spacing: 10) {
+                Image(systemName: icon)
+                    .font(.system(size: 16))
+                    .foregroundColor(color)
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(value)
+                        .font(.system(size: 20, weight: .bold, design: .rounded))
+                        .foregroundColor(AppTheme.textPrimary)
+                    Text(label)
+                        .font(AppTheme.fontCaption)
+                        .foregroundColor(AppTheme.textSecondary)
+                }
+
+                Spacer()
+            }
+        }
+    }
+
+    private func heatmapColor(count: Int) -> Color {
+        if count == 0 { return AppTheme.bgCard.opacity(0.4) }
+        if count <= 2 { return warmOrange.opacity(0.3) }
+        if count <= 5 { return warmOrange.opacity(0.5) }
+        if count <= 10 { return warmOrange.opacity(0.7) }
+        return warmOrange
+    }
+
+    private func shortDayLabel(_ dateStr: String) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        guard let date = formatter.date(from: dateStr) else { return "" }
+        let dayFormatter = DateFormatter()
+        dayFormatter.dateFormat = "EEE"
+        return String(dayFormatter.string(from: date).prefix(2))
     }
 }

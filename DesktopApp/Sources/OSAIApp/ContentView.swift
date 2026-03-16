@@ -833,6 +833,14 @@ struct CommandPaletteView: View {
     @State private var search = ""
     @State private var selectedIndex = 0
     @FocusState private var isSearchFocused: Bool
+    @State private var mode: PaletteMode = .commands
+
+    enum PaletteMode {
+        case commands
+        case search
+    }
+
+    // MARK: - Commands (original palette commands)
 
     private var allCommands: [PaletteCommand] {
         var cmds: [PaletteCommand] = []
@@ -913,7 +921,7 @@ struct CommandPaletteView: View {
         return cmds
     }
 
-    private var filtered: [FuzzyMatch] {
+    private var filteredCommands: [FuzzyMatch] {
         let commands = allCommands
         if search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return commands.map { FuzzyMatch(command: $0, matchedIndices: [], score: 0) }
@@ -928,9 +936,59 @@ struct CommandPaletteView: View {
         return matches.sorted { $0.score > $1.score }
     }
 
-    /// The visible results, capped at 8.
-    private var visibleResults: [FuzzyMatch] {
-        Array(filtered.prefix(8))
+    // MARK: - Search Results
+
+    private var searchResults: [SearchResult] {
+        appState.universalSearch(query: search)
+    }
+
+    /// Groups search results by category, preserving category order.
+    private var groupedSearchResults: [(category: SearchResultCategory, results: [SearchResult])] {
+        let results = searchResults
+        var grouped: [SearchResultCategory: [SearchResult]] = [:]
+        for result in results {
+            grouped[result.category, default: []].append(result)
+        }
+        // Order: conversations, messages, agents, templates, settings
+        let order: [SearchResultCategory] = [.conversation, .message, .agent, .template, .setting]
+        return order.compactMap { cat in
+            guard let items = grouped[cat], !items.isEmpty else { return nil }
+            return (category: cat, results: items)
+        }
+    }
+
+    /// Flat list of all visible items for arrow key navigation.
+    private var flatSearchItems: [SearchResult] {
+        groupedSearchResults.flatMap { $0.results }
+    }
+
+    /// Recent searches shown when search is empty.
+    private var recentSearchItems: [SearchResult] {
+        appState.recentSearches.map { query in
+            SearchResult(
+                category: .recentSearch,
+                title: query,
+                subtitle: "Recent search",
+                icon: "clock.arrow.circlepath",
+                action: { [query] in
+                    search = query
+                }
+            )
+        }
+    }
+
+    /// Whether we're showing search results (non-empty search) vs commands.
+    private var isSearching: Bool {
+        !search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// Total visible item count for navigation.
+    private var totalItemCount: Int {
+        if isSearching {
+            return flatSearchItems.count
+        } else {
+            return Array(filteredCommands.prefix(8)).count
+        }
     }
 
     var body: some View {
@@ -943,10 +1001,10 @@ struct CommandPaletteView: View {
             VStack(spacing: 0) {
                 // Search field
                 HStack(spacing: 10) {
-                    Image(systemName: "command")
+                    Image(systemName: isSearching ? "magnifyingglass" : "command")
                         .foregroundColor(AppTheme.accent)
                         .font(.system(size: 14, weight: .semibold))
-                    TextField("Search commands...", text: $search)
+                    TextField("Search everything...", text: $search)
                         .textFieldStyle(.plain)
                         .font(.system(size: 15))
                         .foregroundColor(AppTheme.textPrimary)
@@ -976,96 +1034,16 @@ struct CommandPaletteView: View {
                 Divider()
                     .background(AppTheme.borderGlass)
 
-                // Command list
-                if visibleResults.isEmpty {
-                    VStack(spacing: 8) {
-                        Image(systemName: "magnifyingglass")
-                            .font(.system(size: 24))
-                            .foregroundColor(AppTheme.textMuted)
-                        Text("No matching commands")
-                            .font(.system(size: 13))
-                            .foregroundColor(AppTheme.textSecondary)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 28)
+                // Content area
+                if isSearching {
+                    searchResultsView
                 } else {
-                    ScrollViewReader { proxy in
-                        ScrollView {
-                            LazyVStack(spacing: 0) {
-                                ForEach(Array(visibleResults.enumerated()), id: \.element.id) { index, match in
-                                    let cmd = match.command
-                                    let isSelected = index == selectedIndex
-
-                                    HStack(spacing: 10) {
-                                        // Icon
-                                        Image(systemName: cmd.icon)
-                                            .font(.system(size: 13))
-                                            .foregroundColor(isSelected ? AppTheme.accent : AppTheme.textSecondary)
-                                            .frame(width: 24, height: 24)
-                                            .background(
-                                                RoundedRectangle(cornerRadius: 6)
-                                                    .fill(isSelected ? AppTheme.accent.opacity(0.15) : AppTheme.bgSecondary.opacity(0.4))
-                                            )
-
-                                        // Label with highlighted matched chars
-                                        if match.matchedIndices.isEmpty {
-                                            Text(cmd.label)
-                                                .font(.system(size: 13))
-                                                .foregroundColor(AppTheme.textPrimary)
-                                                .lineLimit(1)
-                                        } else {
-                                            FuzzyHighlightedText(
-                                                text: cmd.label,
-                                                matchedIndices: Set(match.matchedIndices),
-                                                baseColor: AppTheme.textPrimary
-                                            )
-                                            .font(.system(size: 13))
-                                            .lineLimit(1)
-                                        }
-
-                                        Spacer()
-
-                                        // Category badge
-                                        Text(cmd.category.rawValue)
-                                            .font(.system(size: 9, weight: .semibold, design: .rounded))
-                                            .foregroundColor(cmd.category.color.opacity(0.9))
-                                            .padding(.horizontal, 6)
-                                            .padding(.vertical, 2)
-                                            .background(cmd.category.color.opacity(0.12))
-                                            .clipShape(RoundedRectangle(cornerRadius: 4))
-
-                                        // Keyboard shortcut
-                                        if let shortcut = cmd.shortcut {
-                                            Text(shortcut)
-                                                .font(.system(size: 10, weight: .medium, design: .rounded))
-                                                .foregroundColor(AppTheme.textMuted)
-                                                .padding(.horizontal, 6)
-                                                .padding(.vertical, 2)
-                                                .background(AppTheme.bgSecondary.opacity(0.5))
-                                                .clipShape(RoundedRectangle(cornerRadius: 4))
-                                        }
-                                    }
-                                    .padding(.horizontal, 12)
-                                    .padding(.vertical, 7)
-                                    .background(
-                                        RoundedRectangle(cornerRadius: 8)
-                                            .fill(isSelected ? AppTheme.accent.opacity(0.1) : Color.clear)
-                                            .padding(.horizontal, 4)
-                                    )
-                                    .contentShape(Rectangle())
-                                    .onTapGesture { cmd.action() }
-                                    .id(index)
-                                }
-                            }
-                            .padding(.vertical, 4)
-                        }
-                        .frame(maxHeight: 340)
-                        .onChange(of: selectedIndex) {
-                            withAnimation(.easeOut(duration: 0.1)) {
-                                proxy.scrollTo(selectedIndex, anchor: .center)
-                            }
-                        }
+                    // Show recent searches if available, then commands
+                    if !appState.recentSearches.isEmpty {
+                        recentSearchesSection
+                        Divider().background(AppTheme.borderGlass)
                     }
+                    commandListView
                 }
 
                 // Footer hint
@@ -1085,15 +1063,20 @@ struct CommandPaletteView: View {
                             .font(.system(size: 10))
                     }
                     Spacer()
-                    Text("\(filtered.count) commands")
-                        .font(.system(size: 10))
+                    if isSearching {
+                        Text("\(flatSearchItems.count) results")
+                            .font(.system(size: 10))
+                    } else {
+                        Text("\(filteredCommands.count) commands")
+                            .font(.system(size: 10))
+                    }
                 }
                 .foregroundColor(AppTheme.textMuted)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 8)
                 .background(AppTheme.bgSecondary.opacity(0.3))
             }
-            .frame(maxWidth: 520)
+            .frame(maxWidth: 560)
             .background(
                 RoundedRectangle(cornerRadius: 16)
                     .fill(.ultraThinMaterial)
@@ -1120,7 +1103,7 @@ struct CommandPaletteView: View {
             return .handled
         }
         .onKeyPress(.downArrow) {
-            if selectedIndex < visibleResults.count - 1 { selectedIndex += 1 }
+            if selectedIndex < totalItemCount - 1 { selectedIndex += 1 }
             return .handled
         }
         .onKeyPress(.escape) {
@@ -1133,9 +1116,288 @@ struct CommandPaletteView: View {
         }
     }
 
+    // MARK: - Recent Searches Section
+
+    private var recentSearchesSection: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("Recent Searches")
+                    .font(.system(size: 10, weight: .semibold, design: .rounded))
+                    .foregroundColor(AppTheme.textMuted)
+                    .textCase(.uppercase)
+                Spacer()
+                Button(action: { appState.clearRecentSearches() }) {
+                    Text("Clear")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(AppTheme.textMuted)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
+            .padding(.bottom, 4)
+
+            ForEach(Array(appState.recentSearches.prefix(5).enumerated()), id: \.element) { _, query in
+                HStack(spacing: 10) {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .font(.system(size: 12))
+                        .foregroundColor(AppTheme.textMuted)
+                        .frame(width: 24, height: 24)
+
+                    Text(query)
+                        .font(.system(size: 13))
+                        .foregroundColor(AppTheme.textSecondary)
+                        .lineLimit(1)
+
+                    Spacer()
+
+                    Image(systemName: "arrow.up.left")
+                        .font(.system(size: 10))
+                        .foregroundColor(AppTheme.textMuted)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 5)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    search = query
+                }
+            }
+            .padding(.bottom, 4)
+        }
+    }
+
+    // MARK: - Search Results View
+
+    private var searchResultsView: some View {
+        Group {
+            if groupedSearchResults.isEmpty {
+                VStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 24))
+                        .foregroundColor(AppTheme.textMuted)
+                    Text("No results for \"\(search)\"")
+                        .font(.system(size: 13))
+                        .foregroundColor(AppTheme.textSecondary)
+                    Text("Try a different search term")
+                        .font(.system(size: 11))
+                        .foregroundColor(AppTheme.textMuted)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 28)
+            } else {
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 0) {
+                            var flatIndex = 0
+                            ForEach(Array(groupedSearchResults.enumerated()), id: \.element.category) { _, group in
+                                // Section header
+                                HStack(spacing: 6) {
+                                    Image(systemName: group.category.icon)
+                                        .font(.system(size: 9, weight: .semibold))
+                                    Text(group.category.rawValue)
+                                        .font(.system(size: 10, weight: .semibold, design: .rounded))
+                                        .textCase(.uppercase)
+                                }
+                                .foregroundColor(group.category.color.opacity(0.8))
+                                .padding(.horizontal, 16)
+                                .padding(.top, 10)
+                                .padding(.bottom, 4)
+
+                                ForEach(Array(group.results.enumerated()), id: \.element.id) { resultIdx, result in
+                                    let currentFlatIndex = computeFlatIndex(category: group.category, resultIndex: resultIdx)
+                                    let isSelected = currentFlatIndex == selectedIndex
+
+                                    searchResultRow(result: result, isSelected: isSelected, flatIndex: currentFlatIndex)
+                                        .id(currentFlatIndex)
+                                }
+                            }
+                        }
+                        .padding(.vertical, 4)
+                    }
+                    .frame(maxHeight: 380)
+                    .onChange(of: selectedIndex) {
+                        withAnimation(.easeOut(duration: 0.1)) {
+                            proxy.scrollTo(selectedIndex, anchor: .center)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Compute the flat index for a result given its category and position within that category.
+    private func computeFlatIndex(category: SearchResultCategory, resultIndex: Int) -> Int {
+        var idx = 0
+        for group in groupedSearchResults {
+            if group.category == category {
+                return idx + resultIndex
+            }
+            idx += group.results.count
+        }
+        return idx + resultIndex
+    }
+
+    private func searchResultRow(result: SearchResult, isSelected: Bool, flatIndex: Int) -> some View {
+        HStack(spacing: 10) {
+            // Icon
+            Image(systemName: result.icon)
+                .font(.system(size: 13))
+                .foregroundColor(isSelected ? AppTheme.accent : AppTheme.textSecondary)
+                .frame(width: 24, height: 24)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(isSelected ? AppTheme.accent.opacity(0.15) : AppTheme.bgSecondary.opacity(0.4))
+                )
+
+            // Title and subtitle
+            VStack(alignment: .leading, spacing: 2) {
+                Text(result.title)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(AppTheme.textPrimary)
+                    .lineLimit(1)
+
+                Text(result.subtitle)
+                    .font(.system(size: 11))
+                    .foregroundColor(AppTheme.textMuted)
+                    .lineLimit(1)
+            }
+
+            Spacer()
+
+            // Category badge
+            Text(result.category.rawValue)
+                .font(.system(size: 9, weight: .semibold, design: .rounded))
+                .foregroundColor(result.category.color.opacity(0.9))
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(result.category.color.opacity(0.12))
+                .clipShape(RoundedRectangle(cornerRadius: 4))
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(isSelected ? AppTheme.accent.opacity(0.1) : Color.clear)
+                .padding(.horizontal, 4)
+        )
+        .contentShape(Rectangle())
+        .onTapGesture {
+            appState.addRecentSearch(search)
+            result.action()
+            isPresented = false
+        }
+    }
+
+    // MARK: - Command List View (original)
+
+    private var commandListView: some View {
+        Group {
+            let visibleResults = Array(filteredCommands.prefix(8))
+            if visibleResults.isEmpty {
+                VStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 24))
+                        .foregroundColor(AppTheme.textMuted)
+                    Text("No matching commands")
+                        .font(.system(size: 13))
+                        .foregroundColor(AppTheme.textSecondary)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 28)
+            } else {
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(spacing: 0) {
+                            ForEach(Array(visibleResults.enumerated()), id: \.element.id) { index, match in
+                                let cmd = match.command
+                                let isSelected = index == selectedIndex
+
+                                HStack(spacing: 10) {
+                                    // Icon
+                                    Image(systemName: cmd.icon)
+                                        .font(.system(size: 13))
+                                        .foregroundColor(isSelected ? AppTheme.accent : AppTheme.textSecondary)
+                                        .frame(width: 24, height: 24)
+                                        .background(
+                                            RoundedRectangle(cornerRadius: 6)
+                                                .fill(isSelected ? AppTheme.accent.opacity(0.15) : AppTheme.bgSecondary.opacity(0.4))
+                                        )
+
+                                    // Label with highlighted matched chars
+                                    if match.matchedIndices.isEmpty {
+                                        Text(cmd.label)
+                                            .font(.system(size: 13))
+                                            .foregroundColor(AppTheme.textPrimary)
+                                            .lineLimit(1)
+                                    } else {
+                                        FuzzyHighlightedText(
+                                            text: cmd.label,
+                                            matchedIndices: Set(match.matchedIndices),
+                                            baseColor: AppTheme.textPrimary
+                                        )
+                                        .font(.system(size: 13))
+                                        .lineLimit(1)
+                                    }
+
+                                    Spacer()
+
+                                    // Category badge
+                                    Text(cmd.category.rawValue)
+                                        .font(.system(size: 9, weight: .semibold, design: .rounded))
+                                        .foregroundColor(cmd.category.color.opacity(0.9))
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 2)
+                                        .background(cmd.category.color.opacity(0.12))
+                                        .clipShape(RoundedRectangle(cornerRadius: 4))
+
+                                    // Keyboard shortcut
+                                    if let shortcut = cmd.shortcut {
+                                        Text(shortcut)
+                                            .font(.system(size: 10, weight: .medium, design: .rounded))
+                                            .foregroundColor(AppTheme.textMuted)
+                                            .padding(.horizontal, 6)
+                                            .padding(.vertical, 2)
+                                            .background(AppTheme.bgSecondary.opacity(0.5))
+                                            .clipShape(RoundedRectangle(cornerRadius: 4))
+                                    }
+                                }
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 7)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 8)
+                                        .fill(isSelected ? AppTheme.accent.opacity(0.1) : Color.clear)
+                                        .padding(.horizontal, 4)
+                                )
+                                .contentShape(Rectangle())
+                                .onTapGesture { cmd.action() }
+                                .id(index)
+                            }
+                        }
+                        .padding(.vertical, 4)
+                    }
+                    .frame(maxHeight: 340)
+                    .onChange(of: selectedIndex) {
+                        withAnimation(.easeOut(duration: 0.1)) {
+                            proxy.scrollTo(selectedIndex, anchor: .center)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     private func executeSelected() {
-        guard !visibleResults.isEmpty, selectedIndex < visibleResults.count else { return }
-        visibleResults[selectedIndex].command.action()
+        if isSearching {
+            let items = flatSearchItems
+            guard !items.isEmpty, selectedIndex < items.count else { return }
+            appState.addRecentSearch(search)
+            items[selectedIndex].action()
+            isPresented = false
+        } else {
+            let visibleResults = Array(filteredCommands.prefix(8))
+            guard !visibleResults.isEmpty, selectedIndex < visibleResults.count else { return }
+            visibleResults[selectedIndex].command.action()
+        }
     }
 }
 

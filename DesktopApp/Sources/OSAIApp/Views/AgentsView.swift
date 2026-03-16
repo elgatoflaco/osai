@@ -4,7 +4,7 @@ import AppKit
 struct AgentsView: View {
     @EnvironmentObject var appState: AppState
     @State private var showCreateSheet = false
-    @State private var agentToEdit: AgentInfo?
+    @State private var editingAgentName: String?
     @State private var showImportPreview = false
     @State private var importPreviewContent = ""
     @State private var importPreviewURL: URL?
@@ -154,7 +154,9 @@ struct AgentsView: View {
                             AgentCard(agent: agent, onChat: {
                                 startChatWith(agent)
                             }, onEdit: {
-                                agentToEdit = agent
+                                withAnimation(.easeInOut(duration: 0.25)) {
+                                    editingAgentName = agent.name
+                                }
                             }, onDelete: {
                                 appState.deleteAgent(agent)
                             }, onExport: {
@@ -163,6 +165,27 @@ struct AgentsView: View {
                                 copyAgentToClipboard(agent)
                             }, onTestAgent: {
                                 testAgent(agent)
+                            }, onDuplicate: {
+                                appState.duplicateAgent(name: agent.name)
+                            },
+                            isEditing: editingAgentName == agent.name,
+                            onCancelEdit: {
+                                withAnimation(.easeInOut(duration: 0.25)) {
+                                    editingAgentName = nil
+                                }
+                            },
+                            onSaveEdit: { newName, newDesc, newModel, newPrompt, newTriggers in
+                                appState.updateAgent(
+                                    originalName: agent.name,
+                                    name: newName,
+                                    description: newDesc,
+                                    model: newModel,
+                                    systemPrompt: newPrompt,
+                                    triggers: newTriggers
+                                )
+                                withAnimation(.easeInOut(duration: 0.25)) {
+                                    editingAgentName = nil
+                                }
                             },
                             status: appState.agentStatus(for: agent.name),
                             usageCount: appState.agentUsageCounts[agent.name] ?? 0,
@@ -178,9 +201,6 @@ struct AgentsView: View {
         }
         .sheet(isPresented: $showCreateSheet) {
             CreateAgentSheet(appState: appState)
-        }
-        .sheet(item: $agentToEdit) { agent in
-            EditAgentSheet(appState: appState, agent: agent)
         }
         .sheet(isPresented: $showImportPreview) {
             ImportAgentPreviewSheet(
@@ -328,180 +348,46 @@ struct AgentCard: View {
     let onExport: () -> Void
     let onCopyToClipboard: () -> Void
     let onTestAgent: () -> Void
+    let onDuplicate: () -> Void
+    let isEditing: Bool
+    let onCancelEdit: () -> Void
+    let onSaveEdit: (_ name: String, _ description: String, _ model: String, _ systemPrompt: String, _ triggers: [String]) -> Void
     let status: AgentStatus
     let usageCount: Int
     let lastUsedLabel: String?
     @State private var isHovered = false
     @State private var showConfirmDelete = false
 
+    // Inline edit state
+    @State private var editName: String = ""
+    @State private var editDescription: String = ""
+    @State private var editModel: String = ""
+    @State private var editSystemPrompt: String = ""
+    @State private var editTriggers: String = ""
+    @State private var showNameEmptyWarning = false
+
+    private var editTriggerList: [String] {
+        editTriggers.split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+    }
+
+    private var editSlug: String {
+        editName.lowercased()
+            .replacingOccurrences(of: "\\s+", with: "-", options: .regularExpression)
+            .replacingOccurrences(of: "[^a-z0-9\\-]", with: "", options: .regularExpression)
+    }
+
+    private var agentFilePath: String {
+        "~/.desktop-agent/agents/\(agent.name).md"
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            // Top row: icon + name + status dot + actions
-            HStack(spacing: 12) {
-                ZStack(alignment: .bottomTrailing) {
-                    GhostIcon(size: 36, animate: false, tint: agentColor(agent.name))
-
-                    // Status dot indicator
-                    Circle()
-                        .fill(status.dotColor)
-                        .frame(width: 10, height: 10)
-                        .overlay(
-                            Circle()
-                                .stroke(AppTheme.bgCard, lineWidth: 2)
-                        )
-                        .offset(x: 2, y: 2)
-                }
-
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 6) {
-                        Text(agent.name.capitalized)
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundColor(AppTheme.textPrimary)
-                            .lineLimit(1)
-
-                        // Usage count badge
-                        if usageCount > 0 {
-                            Text("\(usageCount)")
-                                .font(.system(size: 9, weight: .bold, design: .monospaced))
-                                .foregroundColor(agentColor(agent.name))
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(agentColor(agent.name).opacity(0.12))
-                                .clipShape(Capsule())
-                        }
-                    }
-
-                    HStack(spacing: 4) {
-                        Text(agent.backendLabel)
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundColor(AppTheme.textMuted)
-
-                        if let lastUsedLabel = lastUsedLabel {
-                            Text("·")
-                                .font(.system(size: 10))
-                                .foregroundColor(AppTheme.textMuted)
-                            Text(lastUsedLabel)
-                                .font(.system(size: 10, weight: .medium))
-                                .foregroundColor(status == .recentlyUsed ? AppTheme.success : AppTheme.textMuted)
-                        }
-                    }
-                }
-
-                Spacer()
-
-                // Context menu for more actions
-                Menu {
-                    Button(action: onEdit) {
-                        Label("Edit Agent", systemImage: "pencil")
-                    }
-                    Button(action: {
-                        let path = NSHomeDirectory() + "/.desktop-agent/agents/\(agent.name).md"
-                        NSWorkspace.shared.open(URL(fileURLWithPath: path))
-                    }) {
-                        Label("Open File", systemImage: "doc.text")
-                    }
-                    Divider()
-                    Button(action: onExport) {
-                        Label("Export Agent", systemImage: "square.and.arrow.up")
-                    }
-                    Button(action: onCopyToClipboard) {
-                        Label("Copy to Clipboard", systemImage: "doc.on.doc")
-                    }
-                    Divider()
-                    Button(role: .destructive, action: { showConfirmDelete = true }) {
-                        Label("Delete Agent", systemImage: "trash")
-                    }
-                } label: {
-                    Image(systemName: "ellipsis.circle")
-                        .font(.system(size: 14))
-                        .foregroundColor(AppTheme.textMuted)
-                }
-                .menuStyle(.borderlessButton)
-                .frame(width: 20)
-            }
-
-            // Description
-            if !agent.description.isEmpty {
-                Text(agent.description)
-                    .font(AppTheme.fontBody)
-                    .foregroundColor(AppTheme.textSecondary)
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            // Model pill
-            HStack(spacing: 6) {
-                Image(systemName: "cpu")
-                    .font(.system(size: 10))
-                    .foregroundColor(AppTheme.accent)
-                Text(agent.model)
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundColor(AppTheme.textSecondary)
-                    .lineLimit(1)
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .background(AppTheme.accent.opacity(0.08))
-            .clipShape(RoundedRectangle(cornerRadius: 6))
-
-            // Trigger keywords
-            if !agent.triggers.isEmpty {
-                FlowLayout(spacing: 5) {
-                    ForEach(agent.triggers, id: \.self) { trigger in
-                        Text(trigger)
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundColor(agentColor(agent.name))
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 3)
-                            .background(agentColor(agent.name).opacity(0.1))
-                            .clipShape(Capsule())
-                            .overlay(
-                                Capsule()
-                                    .stroke(agentColor(agent.name).opacity(0.2), lineWidth: 0.5)
-                            )
-                    }
-                }
-            }
-
-            Spacer(minLength: 0)
-
-            // Action buttons row
-            HStack(spacing: 8) {
-                // Test Agent button
-                Button(action: onTestAgent) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "bolt.fill")
-                            .font(.system(size: 10))
-                        Text("Test")
-                            .font(.system(size: 11, weight: .medium))
-                    }
-                    .foregroundColor(agentColor(agent.name))
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 9)
-                    .background(agentColor(agent.name).opacity(0.1))
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8)
-                            .stroke(agentColor(agent.name).opacity(0.25), lineWidth: 0.5)
-                    )
-                }
-                .buttonStyle(.plain)
-
-                // Chat button
-                Button(action: onChat) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "bubble.left.fill")
-                            .font(.system(size: 11))
-                        Text("Chat with \(agent.name.capitalized)")
-                            .font(.system(size: 12, weight: .semibold))
-                    }
-                    .foregroundColor(.white)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 9)
-                    .background(agentColor(agent.name))
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                }
-                .buttonStyle(.plain)
+            if isEditing {
+                inlineEditorView
+            } else {
+                normalCardView
             }
         }
         .padding(16)
@@ -510,10 +396,10 @@ struct AgentCard: View {
         .clipShape(RoundedRectangle(cornerRadius: AppTheme.cornerRadius))
         .overlay(
             RoundedRectangle(cornerRadius: AppTheme.cornerRadius)
-                .stroke(isHovered ? agentColor(agent.name).opacity(0.3) : AppTheme.borderGlass, lineWidth: 1)
+                .stroke(isEditing ? AppTheme.accent.opacity(0.5) : (isHovered ? agentColor(agent.name).opacity(0.3) : AppTheme.borderGlass), lineWidth: isEditing ? 1.5 : 1)
         )
         .shadow(color: .black.opacity(isHovered ? 0.3 : 0.2), radius: isHovered ? 20 : 12, x: 0, y: isHovered ? 10 : 6)
-        .offset(y: isHovered ? -2 : 0)
+        .offset(y: isHovered && !isEditing ? -2 : 0)
         .animation(.easeOut(duration: 0.2), value: isHovered)
         .onHover { isHovered = $0 }
         .accessibilityElement(children: .contain)
@@ -524,6 +410,403 @@ struct AgentCard: View {
             Button("Delete", role: .destructive, action: onDelete)
         } message: {
             Text("Are you sure you want to delete \"\(agent.name)\"? This will remove the agent file.")
+        }
+        .onChange(of: isEditing) { editing in
+            if editing {
+                editName = agent.name
+                editDescription = agent.description
+                editModel = agent.model
+                editSystemPrompt = agent.systemPrompt
+                editTriggers = agent.triggers.joined(separator: ", ")
+                showNameEmptyWarning = false
+            }
+        }
+    }
+
+    // MARK: - Normal (non-editing) card view
+
+    @ViewBuilder
+    private var normalCardView: some View {
+        // Top row: icon + name + status dot + actions
+        HStack(spacing: 12) {
+            ZStack(alignment: .bottomTrailing) {
+                GhostIcon(size: 36, animate: false, tint: agentColor(agent.name))
+
+                // Status dot indicator
+                Circle()
+                    .fill(status.dotColor)
+                    .frame(width: 10, height: 10)
+                    .overlay(
+                        Circle()
+                            .stroke(AppTheme.bgCard, lineWidth: 2)
+                    )
+                    .offset(x: 2, y: 2)
+            }
+
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(agent.name.capitalized)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundColor(AppTheme.textPrimary)
+                        .lineLimit(1)
+
+                    // Usage count badge
+                    if usageCount > 0 {
+                        Text("\(usageCount)")
+                            .font(.system(size: 9, weight: .bold, design: .monospaced))
+                            .foregroundColor(agentColor(agent.name))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(agentColor(agent.name).opacity(0.12))
+                            .clipShape(Capsule())
+                    }
+                }
+
+                HStack(spacing: 4) {
+                    Text(agent.backendLabel)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(AppTheme.textMuted)
+
+                    if let lastUsedLabel = lastUsedLabel {
+                        Text("\u{00B7}")
+                            .font(.system(size: 10))
+                            .foregroundColor(AppTheme.textMuted)
+                        Text(lastUsedLabel)
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundColor(status == .recentlyUsed ? AppTheme.success : AppTheme.textMuted)
+                    }
+                }
+            }
+
+            Spacer()
+
+            // Context menu for more actions
+            Menu {
+                Button(action: onEdit) {
+                    Label("Edit Agent", systemImage: "pencil")
+                }
+                Button(action: onDuplicate) {
+                    Label("Duplicate Agent", systemImage: "doc.on.doc.fill")
+                }
+                Button(action: {
+                    let path = NSHomeDirectory() + "/.desktop-agent/agents/\(agent.name).md"
+                    NSWorkspace.shared.open(URL(fileURLWithPath: path))
+                }) {
+                    Label("Open File", systemImage: "doc.text")
+                }
+                Divider()
+                Button(action: onExport) {
+                    Label("Export Agent", systemImage: "square.and.arrow.up")
+                }
+                Button(action: onCopyToClipboard) {
+                    Label("Copy to Clipboard", systemImage: "doc.on.doc")
+                }
+                Divider()
+                Button(role: .destructive, action: { showConfirmDelete = true }) {
+                    Label("Delete Agent", systemImage: "trash")
+                }
+            } label: {
+                Image(systemName: "ellipsis.circle")
+                    .font(.system(size: 14))
+                    .foregroundColor(AppTheme.textMuted)
+            }
+            .menuStyle(.borderlessButton)
+            .frame(width: 20)
+        }
+
+        // Description
+        if !agent.description.isEmpty {
+            Text(agent.description)
+                .font(AppTheme.fontBody)
+                .foregroundColor(AppTheme.textSecondary)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+
+        // Model pill
+        HStack(spacing: 6) {
+            Image(systemName: "cpu")
+                .font(.system(size: 10))
+                .foregroundColor(AppTheme.accent)
+            Text(agent.model)
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundColor(AppTheme.textSecondary)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(AppTheme.accent.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+
+        // Trigger keywords
+        if !agent.triggers.isEmpty {
+            FlowLayout(spacing: 5) {
+                ForEach(agent.triggers, id: \.self) { trigger in
+                    Text(trigger)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(agentColor(agent.name))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(agentColor(agent.name).opacity(0.1))
+                        .clipShape(Capsule())
+                        .overlay(
+                            Capsule()
+                                .stroke(agentColor(agent.name).opacity(0.2), lineWidth: 0.5)
+                        )
+                }
+            }
+        }
+
+        Spacer(minLength: 0)
+
+        // Action buttons row
+        HStack(spacing: 8) {
+            // Test Agent button
+            Button(action: onTestAgent) {
+                HStack(spacing: 4) {
+                    Image(systemName: "bolt.fill")
+                        .font(.system(size: 10))
+                    Text("Test")
+                        .font(.system(size: 11, weight: .medium))
+                }
+                .foregroundColor(agentColor(agent.name))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 9)
+                .background(agentColor(agent.name).opacity(0.1))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(agentColor(agent.name).opacity(0.25), lineWidth: 0.5)
+                )
+            }
+            .buttonStyle(.plain)
+
+            // Chat button
+            Button(action: onChat) {
+                HStack(spacing: 6) {
+                    Image(systemName: "bubble.left.fill")
+                        .font(.system(size: 11))
+                    Text("Chat with \(agent.name.capitalized)")
+                        .font(.system(size: 12, weight: .semibold))
+                }
+                .foregroundColor(.white)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 9)
+                .background(agentColor(agent.name))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    // MARK: - Inline editor view
+
+    @ViewBuilder
+    private var inlineEditorView: some View {
+        // Header
+        HStack(spacing: 10) {
+            GhostIcon(size: 28, animate: false, tint: AppTheme.accent)
+            Text("Editing Agent")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundColor(AppTheme.accent)
+            Spacer()
+            Button(action: onCancelEdit) {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 16))
+                    .foregroundColor(AppTheme.textMuted)
+            }
+            .buttonStyle(.plain)
+        }
+
+        // File path label
+        HStack(spacing: 4) {
+            Image(systemName: "doc.text")
+                .font(.system(size: 9))
+            Text(agentFilePath)
+                .font(.system(size: 10, design: .monospaced))
+        }
+        .foregroundColor(AppTheme.textMuted)
+
+        Divider().background(AppTheme.borderGlass)
+
+        // Name field
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Name")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(AppTheme.textSecondary)
+            TextField("Agent name", text: $editName)
+                .textFieldStyle(.plain)
+                .font(AppTheme.fontBody)
+                .padding(8)
+                .background(AppTheme.bgPrimary.opacity(0.5))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .onChange(of: editName) { _ in
+                    showNameEmptyWarning = false
+                }
+
+            if showNameEmptyWarning {
+                Text("Name cannot be empty")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(AppTheme.error)
+            }
+
+            if !editSlug.isEmpty {
+                HStack(spacing: 4) {
+                    Image(systemName: "arrow.right")
+                        .font(.system(size: 8))
+                    Text("~/.desktop-agent/agents/\(editSlug).md")
+                        .font(.system(size: 10, design: .monospaced))
+                }
+                .foregroundColor(AppTheme.textMuted)
+            }
+        }
+
+        // Description field
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Description")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(AppTheme.textSecondary)
+            TextField("What does this agent do?", text: $editDescription)
+                .textFieldStyle(.plain)
+                .font(AppTheme.fontBody)
+                .padding(8)
+                .background(AppTheme.bgPrimary.opacity(0.5))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+        }
+
+        // Model picker
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Model")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(AppTheme.textSecondary)
+            Picker("", selection: $editModel) {
+                ForEach(agentModelOptions, id: \.self) { m in
+                    Text(m).tag(m)
+                }
+            }
+            .pickerStyle(.menu)
+            .tint(AppTheme.accent)
+        }
+
+        // System Prompt
+        VStack(alignment: .leading, spacing: 4) {
+            Text("System Prompt")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(AppTheme.textSecondary)
+            TextEditor(text: $editSystemPrompt)
+                .font(AppTheme.fontMono)
+                .foregroundColor(AppTheme.textPrimary)
+                .scrollContentBackground(.hidden)
+                .padding(8)
+                .frame(minHeight: 80, maxHeight: 140)
+                .background(AppTheme.bgPrimary.opacity(0.5))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+        }
+
+        // Triggers
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Triggers (comma-separated)")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(AppTheme.textSecondary)
+            TextField("code, debug, implement", text: $editTriggers)
+                .textFieldStyle(.plain)
+                .font(AppTheme.fontBody)
+                .padding(8)
+                .background(AppTheme.bgPrimary.opacity(0.5))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+
+            if !editTriggerList.isEmpty {
+                FlowLayout(spacing: 4) {
+                    ForEach(editTriggerList, id: \.self) { trigger in
+                        Text(trigger)
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundColor(AppTheme.accent)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(AppTheme.accent.opacity(0.12))
+                            .clipShape(Capsule())
+                    }
+                }
+            }
+        }
+
+        Divider().background(AppTheme.borderGlass)
+
+        // Action buttons
+        HStack(spacing: 8) {
+            // Delete button
+            Button(action: { showConfirmDelete = true }) {
+                HStack(spacing: 4) {
+                    Image(systemName: "trash")
+                        .font(.system(size: 10))
+                    Text("Delete")
+                        .font(.system(size: 11, weight: .medium))
+                }
+                .foregroundColor(AppTheme.error)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(AppTheme.error.opacity(0.1))
+                .clipShape(RoundedRectangle(cornerRadius: 7))
+            }
+            .buttonStyle(.plain)
+
+            // Duplicate button
+            Button(action: {
+                onDuplicate()
+                onCancelEdit()
+            }) {
+                HStack(spacing: 4) {
+                    Image(systemName: "doc.on.doc.fill")
+                        .font(.system(size: 10))
+                    Text("Duplicate")
+                        .font(.system(size: 11, weight: .medium))
+                }
+                .foregroundColor(AppTheme.textSecondary)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(AppTheme.bgPrimary.opacity(0.3))
+                .clipShape(RoundedRectangle(cornerRadius: 7))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 7)
+                        .stroke(AppTheme.borderGlass, lineWidth: 0.5)
+                )
+            }
+            .buttonStyle(.plain)
+
+            Spacer()
+
+            // Cancel button
+            Button(action: onCancelEdit) {
+                Text("Cancel")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(AppTheme.textSecondary)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+            }
+            .buttonStyle(.plain)
+
+            // Save button
+            Button(action: {
+                let trimmedName = editSlug
+                if trimmedName.isEmpty {
+                    showNameEmptyWarning = true
+                    return
+                }
+                onSaveEdit(trimmedName, editDescription, editModel, editSystemPrompt, editTriggerList)
+            }) {
+                HStack(spacing: 5) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 11))
+                    Text("Save")
+                        .font(.system(size: 12, weight: .semibold))
+                }
+                .foregroundColor(.white)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .background(AppTheme.accent)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+            }
+            .buttonStyle(.plain)
         }
     }
 }
