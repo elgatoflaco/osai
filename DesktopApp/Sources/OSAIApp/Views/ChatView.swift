@@ -48,6 +48,9 @@ struct ChatView: View {
     @State private var showTagManager: Bool = false
     @State private var tagManagerRenaming: String? = nil
     @State private var tagManagerRenameText: String = ""
+    @State private var showSnapshotNamePopover: Bool = false
+    @State private var snapshotNameText: String = ""
+    @State private var snapshotRestoreConfirm: ConversationSnapshot? = nil
 
     private var filteredConversations: [Conversation] {
         var sorted = appState.sortedConversations
@@ -584,6 +587,48 @@ struct ChatView: View {
                         }
                         .buttonStyle(.plain)
                         .help("Export conversation")
+
+                        Button(action: {
+                            snapshotNameText = ""
+                            showSnapshotNamePopover = true
+                        }) {
+                            Image(systemName: "camera.circle")
+                                .font(.system(size: 14))
+                                .foregroundColor(AppTheme.textSecondary)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Save snapshot")
+                        .popover(isPresented: $showSnapshotNamePopover, arrowEdge: .bottom) {
+                            VStack(spacing: 12) {
+                                Text("Save Snapshot")
+                                    .font(.system(size: 14, weight: .semibold))
+                                    .foregroundColor(AppTheme.textPrimary)
+                                TextField("Snapshot name", text: $snapshotNameText)
+                                    .textFieldStyle(.roundedBorder)
+                                    .frame(width: 220)
+                                    .onSubmit {
+                                        let name = snapshotNameText.trimmingCharacters(in: .whitespacesAndNewlines)
+                                        if !name.isEmpty {
+                                            appState.createSnapshot(conversationId: conv.id, name: name)
+                                            showSnapshotNamePopover = false
+                                        }
+                                    }
+                                HStack(spacing: 12) {
+                                    Button("Cancel") { showSnapshotNamePopover = false }
+                                        .keyboardShortcut(.cancelAction)
+                                    Button("Save") {
+                                        let name = snapshotNameText.trimmingCharacters(in: .whitespacesAndNewlines)
+                                        if !name.isEmpty {
+                                            appState.createSnapshot(conversationId: conv.id, name: name)
+                                            showSnapshotNamePopover = false
+                                        }
+                                    }
+                                    .keyboardShortcut(.defaultAction)
+                                    .disabled(snapshotNameText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                                }
+                            }
+                            .padding(20)
+                        }
                     }
 
                     if !focusMode, let _ = appState.activeConversation {
@@ -1372,7 +1417,15 @@ struct ChatView: View {
             tagColorProvider: { tag in appState.tagColor(for: tag) },
             onMerge: { appState.mergeTargetId = conv.id },
             isMergeTarget: appState.mergeTargetId != nil && appState.mergeTargetId != conv.id,
-            onSetColor: { color in appState.setConversationColor(id: conv.id, color: color) }
+            onSetColor: { color in appState.setConversationColor(id: conv.id, color: color) },
+            onSaveSnapshot: {
+                snapshotNameText = ""
+                showSnapshotNamePopover = true
+                // Ensure this conversation is active so the popover snapshot targets it
+                if appState.activeConversation?.id != conv.id {
+                    appState.openConversation(conv)
+                }
+            }
         )
     }
 
@@ -2105,6 +2158,73 @@ struct ChatView: View {
                                     .clipShape(Capsule())
                             }
                         }
+                    }
+                }
+            }
+
+            // Snapshots section
+            let convSnapshots = appState.snapshotsForConversation(conv.id)
+            if !convSnapshots.isEmpty {
+                Divider().background(AppTheme.borderGlass)
+
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "camera.circle")
+                            .font(.system(size: 11))
+                            .foregroundColor(AppTheme.accent)
+                        Text("Snapshots")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundColor(AppTheme.textPrimary)
+                    }
+
+                    ForEach(convSnapshots) { snapshot in
+                        HStack(spacing: 8) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(snapshot.name)
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundColor(AppTheme.textPrimary)
+                                    .lineLimit(1)
+                                HStack(spacing: 6) {
+                                    Text({
+                                        let f = DateFormatter()
+                                        f.dateStyle = .short
+                                        f.timeStyle = .short
+                                        return f.string(from: snapshot.timestamp)
+                                    }())
+                                        .font(.system(size: 10))
+                                        .foregroundColor(AppTheme.textMuted)
+                                    Text("\(snapshot.messageCount) msgs")
+                                        .font(.system(size: 10))
+                                        .foregroundColor(AppTheme.textMuted)
+                                }
+                            }
+                            Spacer()
+                            Button(action: {
+                                snapshotRestoreConfirm = snapshot
+                            }) {
+                                Text("Restore")
+                                    .font(.system(size: 10, weight: .medium))
+                                    .foregroundColor(AppTheme.accent)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 3)
+                                    .background(AppTheme.accent.opacity(0.15))
+                                    .clipShape(Capsule())
+                            }
+                            .buttonStyle(.plain)
+                            Button(action: {
+                                withAnimation { appState.deleteSnapshot(id: snapshot.id) }
+                            }) {
+                                Image(systemName: "trash")
+                                    .font(.system(size: 10))
+                                    .foregroundColor(AppTheme.error.opacity(0.8))
+                            }
+                            .buttonStyle(.plain)
+                            .help("Delete snapshot")
+                        }
+                        .padding(.vertical, 4)
+                        .padding(.horizontal, 6)
+                        .background(AppTheme.bgCard.opacity(0.5))
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
                     }
                 }
             }
@@ -3268,9 +3388,23 @@ struct ChatView: View {
             } message: {
                 Text("Are you sure you want to delete \"\(deleteConfirmConversation?.title ?? "")\"? This cannot be undone.")
             }
+            .alert("Restore Snapshot", isPresented: Binding(
+                get: { snapshotRestoreConfirm != nil },
+                set: { if !$0 { snapshotRestoreConfirm = nil } }
+            )) {
+                Button("Cancel", role: .cancel) { snapshotRestoreConfirm = nil }
+                Button("Restore") {
+                    if let snapshot = snapshotRestoreConfirm {
+                        appState.restoreSnapshot(snapshot)
+                    }
+                    snapshotRestoreConfirm = nil
+                }
+            } message: {
+                Text("Restore snapshot \"\(snapshotRestoreConfirm?.name ?? "")\"? This will replace the current conversation state with \(snapshotRestoreConfirm?.messageCount ?? 0) messages from the snapshot.")
+            }
 
             Divider().background(AppTheme.borderGlass)
-        
+
         Divider().background(AppTheme.borderGlass)
         }
         .sheet(isPresented: Binding(
@@ -3417,6 +3551,7 @@ struct ConversationRow: View {
     var onMerge: (() -> Void)? = nil
     var isMergeTarget: Bool = false
     var onSetColor: ((String?) -> Void)? = nil
+    var onSaveSnapshot: (() -> Void)? = nil
     @State private var isHovered = false
 
     private static let tagColors: [Color] = [.red, .orange, .yellow, .green, .blue, .purple, .pink, .teal]
@@ -3593,6 +3728,10 @@ struct ConversationRow: View {
             }
             Button(action: { onExport?() }) {
                 Label("Export", systemImage: "square.and.arrow.up")
+            }
+            .disabled(conv.messages.isEmpty)
+            Button(action: { onSaveSnapshot?() }) {
+                Label("Save Snapshot", systemImage: "camera.circle")
             }
             .disabled(conv.messages.isEmpty)
             Button(action: { onMerge?() }) {

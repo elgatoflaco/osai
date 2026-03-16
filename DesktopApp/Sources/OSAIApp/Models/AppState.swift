@@ -361,6 +361,7 @@ enum DashboardSection: String, Codable, CaseIterable, Identifiable {
     case systemHealth
     case systemStatus
     case activity
+    case modelUsage
 
     var id: String { rawValue }
 
@@ -379,6 +380,7 @@ enum DashboardSection: String, Codable, CaseIterable, Identifiable {
         case .systemHealth: return "System Health"
         case .systemStatus: return "System Status"
         case .activity: return "Your Activity"
+        case .modelUsage: return "Model Usage"
         }
     }
 
@@ -397,12 +399,23 @@ enum DashboardSection: String, Codable, CaseIterable, Identifiable {
         case .systemHealth: return "server.rack"
         case .systemStatus: return "cpu"
         case .activity: return "flame"
+        case .modelUsage: return "chart.pie"
         }
     }
 
     static let defaultOrder: [DashboardSection] = [
-        .quickStart, .activity, .gateway, .stats, .spending, .recentConversations, .tokenStats, .analytics, .chatInsights, .performance, .recentActivity, .systemHealth, .systemStatus
+        .quickStart, .activity, .gateway, .stats, .spending, .recentConversations, .tokenStats, .modelUsage, .analytics, .chatInsights, .performance, .recentActivity, .systemHealth, .systemStatus
     ]
+}
+
+// MARK: - Model Usage Stats
+
+struct ModelUsageStats: Identifiable {
+    var id: String { modelId }
+    let modelId: String
+    let conversationCount: Int
+    let totalTokens: Int
+    let percentage: Double
 }
 
 // MARK: - Daily Token Usage
@@ -495,6 +508,26 @@ struct SearchResult: Identifiable {
     let action: () -> Void
     /// Matched range in title for highlighting, if applicable
     var matchRange: Range<String.Index>?
+}
+
+// MARK: - Conversation Snapshot
+
+struct ConversationSnapshot: Codable, Identifiable {
+    let id: UUID
+    let conversationId: String
+    let name: String
+    let timestamp: Date
+    let messageCount: Int
+    let data: Data // serialized conversation JSON
+
+    init(id: UUID = UUID(), conversationId: String, name: String, timestamp: Date = Date(), messageCount: Int, data: Data) {
+        self.id = id
+        self.conversationId = conversationId
+        self.name = name
+        self.timestamp = timestamp
+        self.messageCount = messageCount
+        self.data = data
+    }
 }
 
 class AppState: ObservableObject {
@@ -766,6 +799,31 @@ class AppState: ObservableObject {
             let key = formatter.string(from: date)
             return (date: key, count: heatmap[key] ?? 0)
         }
+    }
+
+    // MARK: - Model Usage
+
+    func computeModelUsage() -> [ModelUsageStats] {
+        var grouped: [String: (count: Int, tokens: Int)] = [:]
+        for conv in conversations {
+            let model = conv.modelId ?? "unknown"
+            let existing = grouped[model] ?? (count: 0, tokens: 0)
+            grouped[model] = (count: existing.count + 1, tokens: existing.tokens + conv.totalTokens)
+        }
+        let totalTokens = max(grouped.values.reduce(0) { $0 + $1.tokens }, 1)
+        return grouped.map { key, value in
+            ModelUsageStats(
+                modelId: key,
+                conversationCount: value.count,
+                totalTokens: value.tokens,
+                percentage: Double(value.tokens) / Double(totalTokens)
+            )
+        }
+        .sorted { $0.totalTokens > $1.totalTokens }
+    }
+
+    var modelUsageData: [ModelUsageStats] {
+        computeModelUsage()
     }
 
     // MARK: - Dashboard Customization
@@ -1256,6 +1314,19 @@ class AppState: ObservableObject {
     @Published var activeConversation: Conversation?
     @Published var unreadConversationIds: Set<String> = []
     @Published var mergeTargetId: String?
+
+    // MARK: - Conversation Snapshots
+    @Published var snapshots: [ConversationSnapshot] = {
+        guard let data = UserDefaults.standard.data(forKey: "conversationSnapshots"),
+              let decoded = try? JSONDecoder().decode([ConversationSnapshot].self, from: data) else { return [] }
+        return decoded
+    }() {
+        didSet {
+            if let encoded = try? JSONEncoder().encode(snapshots) {
+                UserDefaults.standard.set(encoded, forKey: "conversationSnapshots")
+            }
+        }
+    }
 
     // MARK: - Calendar Filter
     @Published var calendarFilterDate: Date?
@@ -2770,6 +2841,106 @@ class AppState: ObservableObject {
             service.deleteConversation(id)
         }
         showToast("\(ids.count) conversation\(ids.count == 1 ? "" : "s") deleted", type: .success)
+    }
+
+    // MARK: - Conversation Snapshots
+
+    /// Serializes the current state of a conversation and saves it as a named snapshot.
+    func createSnapshot(conversationId: String, name: String) {
+        guard let conv = conversations.first(where: { $0.id == conversationId }) ?? (activeConversation?.id == conversationId ? activeConversation : nil) else {
+            showToast("Conversation not found", type: .error)
+            return
+        }
+
+        // Build the same JSON dictionary that OSAIService.saveConversation uses
+        let messages: [[String: Any]] = conv.messages.map { msg in
+            var m: [String: Any] = [
+                "id": msg.id,
+                "role": msg.role.rawValue,
+                "content": msg.content,
+                "timestamp": ISO8601DateFormatter().string(from: msg.timestamp)
+            ]
+            if let tool = msg.toolName { m["toolName"] = tool }
+            if let result = msg.toolResult { m["toolResult"] = result }
+            if let reaction = msg.reaction { m["reaction"] = reaction.rawValue }
+            if msg.isBookmarked { m["isBookmarked"] = true }
+            if let rt = msg.responseTimeMs { m["responseTimeMs"] = rt }
+            if let replyTo = msg.replyToMessageId { m["replyToMessageId"] = replyTo }
+            if !msg.editHistory.isEmpty {
+                m["editHistory"] = msg.editHistory.map { record in
+                    [
+                        "id": record.id.uuidString,
+                        "content": record.content,
+                        "editedAt": ISO8601DateFormatter().string(from: record.editedAt)
+                    ]
+                }
+            }
+            return m
+        }
+
+        var json: [String: Any] = [
+            "id": conv.id,
+            "title": conv.title,
+            "createdAt": ISO8601DateFormatter().string(from: conv.createdAt),
+            "messages": messages
+        ]
+        if let agent = conv.agentName { json["agentName"] = agent }
+        if let modelId = conv.modelId { json["modelId"] = modelId }
+        if conv.isPinned { json["isPinned"] = true }
+        if conv.isArchived { json["isArchived"] = true }
+        if conv.totalInputTokens > 0 { json["totalInputTokens"] = conv.totalInputTokens }
+        if conv.totalOutputTokens > 0 { json["totalOutputTokens"] = conv.totalOutputTokens }
+        if let branchedFromId = conv.branchedFromId { json["branchedFromId"] = branchedFromId }
+        if let branchedAtMessageIndex = conv.branchedAtMessageIndex { json["branchedAtMessageIndex"] = branchedAtMessageIndex }
+        if !conv.tags.isEmpty { json["tags"] = conv.tags }
+        if conv.titleManuallySet { json["titleManuallySet"] = true }
+        if let summary = conv.summary { json["summary"] = summary }
+        if let colorLabel = conv.colorLabel { json["colorLabel"] = colorLabel }
+
+        guard let data = try? JSONSerialization.data(withJSONObject: json, options: []) else {
+            showToast("Failed to serialize conversation", type: .error)
+            return
+        }
+
+        let snapshot = ConversationSnapshot(
+            conversationId: conversationId,
+            name: name,
+            messageCount: conv.messages.count,
+            data: data
+        )
+        snapshots.append(snapshot)
+        showToast("Snapshot \"\(name)\" saved", type: .success)
+    }
+
+    /// Restores a snapshot, replacing the conversation's current state.
+    func restoreSnapshot(_ snapshot: ConversationSnapshot) {
+        guard let json = try? JSONSerialization.jsonObject(with: snapshot.data) as? [String: Any],
+              let restored = service.parseConversationFromSnapshot(json) else {
+            showToast("Failed to restore snapshot", type: .error)
+            return
+        }
+
+        // Replace in conversations array
+        if let idx = conversations.firstIndex(where: { $0.id == restored.id }) {
+            conversations[idx] = restored
+        }
+        // Update active conversation if it matches
+        if activeConversation?.id == restored.id {
+            activeConversation = restored
+        }
+        // Persist the restored state
+        service.saveConversation(restored)
+        showToast("Restored snapshot \"\(snapshot.name)\"", type: .success)
+    }
+
+    /// Deletes a snapshot by its ID.
+    func deleteSnapshot(id: UUID) {
+        snapshots.removeAll { $0.id == id }
+    }
+
+    /// Returns all snapshots for a given conversation, sorted newest first.
+    func snapshotsForConversation(_ id: String) -> [ConversationSnapshot] {
+        snapshots.filter { $0.conversationId == id }.sorted { $0.timestamp > $1.timestamp }
     }
 
     // MARK: - Multi-Select Actions

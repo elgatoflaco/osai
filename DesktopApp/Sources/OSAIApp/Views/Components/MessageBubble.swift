@@ -847,6 +847,7 @@ struct MessageBubble: View {
     var shareMode: Bool = false
     var isSelectedForShare: Bool = false
     var onToggleShareSelection: (() -> Void)?
+    var onAnnotate: ((String?) -> Void)?
     var showAvatar: Bool = true
     var showTimestamp: Bool = true
     @State private var appeared = false
@@ -862,6 +863,8 @@ struct MessageBubble: View {
     @State private var speakerPulse = false
     /// Per-message raw markdown override: nil follows global, true/false overrides
     @State private var localRawMode: Bool?
+    @State private var isAnnotating = false
+    @State private var annotationText = ""
     @State private var showEditHistory = false
     @State private var showDiff = false
     @State private var diffTargetRecordId: UUID?
@@ -1434,6 +1437,29 @@ struct MessageBubble: View {
                 }
 
                 replyActionButton
+
+                if onAnnotate != nil && message.annotation == nil {
+                    Button(action: {
+                        annotationText = ""
+                        withAnimation(.easeInOut(duration: 0.2)) { isAnnotating = true }
+                    }) {
+                        HStack(spacing: 3) {
+                            Image(systemName: "note.text")
+                                .font(.system(size: 9))
+                            Text("Add Note")
+                                .font(.system(size: 9))
+                        }
+                        .foregroundColor(AppTheme.textMuted)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(AppTheme.bgCard.opacity(0.9))
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(AppTheme.borderGlass, lineWidth: 0.5))
+                    }
+                    .buttonStyle(.plain)
+                    .transition(.opacity)
+                    .accessibilityLabel("Add a note to this message")
+                }
             }
 
             if showTimestamp && appState.timestampDisplay != "hidden" {
@@ -1458,6 +1484,8 @@ struct MessageBubble: View {
                 .opacity(isTimestampVisible ? 1 : 0)
                 .animation(.easeInOut(duration: 0.2), value: isTimestampVisible)
             }
+
+            annotationView
         }
     }
 
@@ -1803,6 +1831,27 @@ struct MessageBubble: View {
                             }
 
                             replyActionButton
+
+                            if onAnnotate != nil && message.annotation == nil {
+                                Button(action: {
+                                    annotationText = ""
+                                    withAnimation(.easeInOut(duration: 0.2)) { isAnnotating = true }
+                                }) {
+                                    HStack(spacing: 3) {
+                                        Image(systemName: "note.text").font(.system(size: 9))
+                                        Text("Add Note").font(.system(size: 9))
+                                    }
+                                    .foregroundColor(AppTheme.textMuted)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 3)
+                                    .background(AppTheme.bgCard.opacity(0.9))
+                                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(AppTheme.borderGlass, lineWidth: 0.5))
+                                }
+                                .buttonStyle(.plain)
+                                .transition(.opacity)
+                                .accessibilityLabel("Add a note to this message")
+                            }
                         }
                         .transition(.opacity)
                     }
@@ -1816,6 +1865,9 @@ struct MessageBubble: View {
                             .offset(x: 4, y: 8)
                     }
                 }
+
+                // Annotation card
+                annotationView
 
                 // Footer
                 HStack(spacing: 10) {
@@ -1907,6 +1959,107 @@ struct MessageBubble: View {
         }
         .onAppear {
             if message.isStreaming { streamingPulse = true }
+        }
+    }
+
+    // MARK: - Annotation View
+
+    private var annotationView: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            // Display saved annotation
+            if let annotation = message.annotation, !annotation.isEmpty, !isAnnotating {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "note.text")
+                        .font(.system(size: 10))
+                        .foregroundColor(Color.yellow.opacity(0.8))
+                    Text(annotation)
+                        .font(.system(size: 11))
+                        .foregroundColor(AppTheme.textSecondary)
+                        .lineLimit(4)
+                        .textSelection(.enabled)
+                    Spacer()
+                    Button(action: {
+                        annotationText = annotation
+                        withAnimation(.easeInOut(duration: 0.2)) { isAnnotating = true }
+                    }) {
+                        Image(systemName: "pencil")
+                            .font(.system(size: 9))
+                            .foregroundColor(AppTheme.textMuted)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Edit note")
+                    Button(action: {
+                        onAnnotate?(nil)
+                    }) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 9))
+                            .foregroundColor(AppTheme.textMuted)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Delete note")
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(Color.yellow.opacity(0.08))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.yellow.opacity(0.2), lineWidth: 0.5))
+            }
+
+            // Inline text field for adding/editing annotation
+            if isAnnotating {
+                VStack(alignment: .trailing, spacing: 6) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "note.text")
+                            .font(.system(size: 10))
+                            .foregroundColor(Color.yellow.opacity(0.8))
+                        TextField("Add a note...", text: $annotationText)
+                            .font(.system(size: 12))
+                            .textFieldStyle(.plain)
+                            .foregroundColor(AppTheme.textPrimary)
+                            .onSubmit {
+                                let trimmed = annotationText.trimmingCharacters(in: .whitespacesAndNewlines)
+                                onAnnotate?(trimmed.isEmpty ? nil : trimmed)
+                                withAnimation(.easeInOut(duration: 0.2)) { isAnnotating = false }
+                            }
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .background(Color.yellow.opacity(0.06))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.yellow.opacity(0.3), lineWidth: 1))
+
+                    HStack(spacing: 6) {
+                        Button(action: {
+                            withAnimation(.easeInOut(duration: 0.2)) { isAnnotating = false }
+                        }) {
+                            Text("Cancel")
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundColor(AppTheme.textMuted)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 3)
+                                .background(AppTheme.bgCard.opacity(0.9))
+                                .clipShape(RoundedRectangle(cornerRadius: 6))
+                                .overlay(RoundedRectangle(cornerRadius: 6).stroke(AppTheme.borderGlass, lineWidth: 0.5))
+                        }
+                        .buttonStyle(.plain)
+
+                        Button(action: {
+                            let trimmed = annotationText.trimmingCharacters(in: .whitespacesAndNewlines)
+                            onAnnotate?(trimmed.isEmpty ? nil : trimmed)
+                            withAnimation(.easeInOut(duration: 0.2)) { isAnnotating = false }
+                        }) {
+                            Text("Save")
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 3)
+                                .background(AppTheme.accent)
+                                .clipShape(RoundedRectangle(cornerRadius: 6))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
         }
     }
 

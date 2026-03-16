@@ -329,6 +329,7 @@ class OSAIService {
             if msg.isBookmarked { m["isBookmarked"] = true }
             if let rt = msg.responseTimeMs { m["responseTimeMs"] = rt }
             if let replyTo = msg.replyToMessageId { m["replyToMessageId"] = replyTo }
+            if let annotation = msg.annotation { m["annotation"] = annotation }
             if !msg.editHistory.isEmpty {
                 m["editHistory"] = msg.editHistory.map { record in
                     [
@@ -403,6 +404,7 @@ class OSAIService {
                 }
             }
             let replyToMessageId = m["replyToMessageId"] as? String
+            let annotation = m["annotation"] as? String
             return ChatMessage(
                 id: msgId, role: role, content: content, timestamp: ts,
                 toolName: m["toolName"] as? String,
@@ -411,7 +413,8 @@ class OSAIService {
                 isBookmarked: isBookmarked,
                 responseTimeMs: responseTimeMs,
                 editHistory: editHistory,
-                replyToMessageId: replyToMessageId
+                replyToMessageId: replyToMessageId,
+                annotation: annotation
             )
         }
 
@@ -430,6 +433,11 @@ class OSAIService {
             summary: json["summary"] as? String,
             colorLabel: json["colorLabel"] as? String
         )
+    }
+
+    /// Public wrapper around parseConversation for snapshot restoration.
+    func parseConversationFromSnapshot(_ json: [String: Any]) -> Conversation? {
+        parseConversation(json)
     }
 
     // MARK: - Task logs

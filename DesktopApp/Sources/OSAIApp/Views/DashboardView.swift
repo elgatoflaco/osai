@@ -188,6 +188,13 @@ struct DashboardView: View {
                     .environmentObject(appState)
             }
             .frame(maxWidth: 800)
+
+        case .modelUsage:
+            CollapsibleSection(section: .modelUsage) {
+                ModelUsageSection()
+                    .environmentObject(appState)
+            }
+            .frame(maxWidth: 800)
         }
     }
 
@@ -3256,5 +3263,198 @@ struct ActivityStreakContent: View {
         let dayFormatter = DateFormatter()
         dayFormatter.dateFormat = "EEE"
         return String(dayFormatter.string(from: date).prefix(2))
+    }
+}
+
+// MARK: - Model Usage Section
+
+struct ModelUsageSection: View {
+    @EnvironmentObject var appState: AppState
+
+    private static let modelColors: [Color] = [
+        Color(red: 88/255, green: 166/255, blue: 255/255),   // blue
+        Color(red: 200/255, green: 80/255, blue: 200/255),   // purple
+        Color(red: 80/255, green: 200/255, blue: 120/255),   // green
+        Color(red: 255/255, green: 160/255, blue: 60/255),   // orange
+        Color(red: 255/255, green: 90/255, blue: 90/255),    // red
+        Color(red: 100/255, green: 220/255, blue: 220/255),  // teal
+        Color(red: 220/255, green: 200/255, blue: 80/255),   // yellow
+        Color(red: 160/255, green: 120/255, blue: 255/255),  // violet
+    ]
+
+    private func colorFor(index: Int) -> Color {
+        Self.modelColors[index % Self.modelColors.count]
+    }
+
+    private func formatTokens(_ count: Int) -> String {
+        if count >= 1_000_000 {
+            return String(format: "%.1fM", Double(count) / 1_000_000.0)
+        } else if count >= 1_000 {
+            return String(format: "%.1fK", Double(count) / 1_000.0)
+        }
+        return "\(count)"
+    }
+
+    private func shortModelName(_ modelId: String) -> String {
+        // Show a friendly short name for common model IDs
+        let id = modelId.lowercased()
+        if id.contains("opus") { return "Opus" }
+        if id.contains("sonnet") { return "Sonnet" }
+        if id.contains("haiku") { return "Haiku" }
+        if id.contains("gpt-4o") { return "GPT-4o" }
+        if id.contains("gpt-4") { return "GPT-4" }
+        if id.contains("gpt-3") { return "GPT-3.5" }
+        if id == "unknown" { return "Unknown" }
+        // Fallback: last path component or full string
+        return modelId.components(separatedBy: "/").last ?? modelId
+    }
+
+    var body: some View {
+        let usageData = appState.modelUsageData
+
+        if usageData.isEmpty {
+            GlassCard {
+                HStack {
+                    Image(systemName: "chart.pie")
+                        .foregroundColor(AppTheme.textMuted)
+                    Text("No conversation data yet")
+                        .font(AppTheme.fontBody)
+                        .foregroundColor(AppTheme.textMuted)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 20)
+            }
+        } else {
+            VStack(spacing: 14) {
+                // Donut chart
+                GlassCard {
+                    VStack(spacing: 12) {
+                        Text("Model Distribution")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundColor(AppTheme.textPrimary)
+
+                        HStack(spacing: 24) {
+                            // Donut
+                            ZStack {
+                                ModelDonutChart(data: usageData, colors: usageData.indices.map { colorFor(index: $0) })
+                                    .frame(width: 120, height: 120)
+
+                                VStack(spacing: 2) {
+                                    Text("\(usageData.count)")
+                                        .font(.system(size: 20, weight: .bold, design: .monospaced))
+                                        .foregroundColor(AppTheme.textPrimary)
+                                    Text(usageData.count == 1 ? "model" : "models")
+                                        .font(.system(size: 10))
+                                        .foregroundColor(AppTheme.textMuted)
+                                }
+                            }
+
+                            // Legend
+                            VStack(alignment: .leading, spacing: 6) {
+                                ForEach(Array(usageData.prefix(6).enumerated()), id: \.element.id) { index, stat in
+                                    HStack(spacing: 6) {
+                                        Circle()
+                                            .fill(colorFor(index: index))
+                                            .frame(width: 8, height: 8)
+                                        Text(shortModelName(stat.modelId))
+                                            .font(.system(size: 11, weight: .medium))
+                                            .foregroundColor(AppTheme.textPrimary)
+                                            .lineLimit(1)
+                                        Spacer()
+                                        Text(String(format: "%.0f%%", stat.percentage * 100))
+                                            .font(.system(size: 11, weight: .medium, design: .monospaced))
+                                            .foregroundColor(AppTheme.textSecondary)
+                                    }
+                                }
+                            }
+                            .frame(minWidth: 120)
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
+
+                // Horizontal bar chart
+                GlassCard {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Usage by Model")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundColor(AppTheme.textPrimary)
+
+                        let maxTokens = usageData.first?.totalTokens ?? 1
+
+                        ForEach(Array(usageData.enumerated()), id: \.element.id) { index, stat in
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack {
+                                    Text(shortModelName(stat.modelId))
+                                        .font(.system(size: 12, weight: .medium))
+                                        .foregroundColor(AppTheme.textPrimary)
+                                    Spacer()
+                                    Text("\(stat.conversationCount) conv")
+                                        .font(.system(size: 10, design: .monospaced))
+                                        .foregroundColor(AppTheme.textMuted)
+                                    Text(formatTokens(stat.totalTokens) + " tokens")
+                                        .font(.system(size: 10, design: .monospaced))
+                                        .foregroundColor(AppTheme.textSecondary)
+                                }
+
+                                GeometryReader { geo in
+                                    ZStack(alignment: .leading) {
+                                        RoundedRectangle(cornerRadius: 4)
+                                            .fill(AppTheme.bgPrimary.opacity(0.5))
+
+                                        RoundedRectangle(cornerRadius: 4)
+                                            .fill(colorFor(index: index))
+                                            .frame(width: geo.size.width * CGFloat(stat.totalTokens) / CGFloat(max(maxTokens, 1)))
+                                    }
+                                }
+                                .frame(height: 8)
+
+                                HStack {
+                                    Spacer()
+                                    Text(String(format: "%.1f%% of total", stat.percentage * 100))
+                                        .font(.system(size: 9))
+                                        .foregroundColor(AppTheme.textMuted)
+                                }
+                            }
+                            .padding(.bottom, index < usageData.count - 1 ? 4 : 0)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Model Donut Chart
+
+struct ModelDonutChart: View {
+    let data: [ModelUsageStats]
+    let colors: [Color]
+
+    var body: some View {
+        Canvas { context, size in
+            let center = CGPoint(x: size.width / 2, y: size.height / 2)
+            let outerRadius = min(size.width, size.height) / 2
+            let innerRadius = outerRadius * 0.6
+            var startAngle = Angle.degrees(-90)
+
+            for (index, stat) in data.enumerated() {
+                let sweepAngle = Angle.degrees(stat.percentage * 360)
+                let endAngle = startAngle + sweepAngle
+
+                let path = Path { p in
+                    p.addArc(center: center, radius: outerRadius,
+                             startAngle: startAngle, endAngle: endAngle, clockwise: false)
+                    p.addArc(center: center, radius: innerRadius,
+                             startAngle: endAngle, endAngle: startAngle, clockwise: true)
+                    p.closeSubpath()
+                }
+
+                let color = index < colors.count ? colors[index] : Color.gray
+                context.fill(path, with: .color(color))
+
+                startAngle = endAngle
+            }
+        }
     }
 }
