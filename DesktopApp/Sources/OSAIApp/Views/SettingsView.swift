@@ -636,6 +636,49 @@ struct SettingsView: View {
 
                 Divider().background(AppTheme.borderGlass)
 
+                // Display Density
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Display Density")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(AppTheme.textPrimary)
+
+                    Picker("Display Density", selection: $appState.displayDensity) {
+                        Label("Compact", systemImage: "rectangle.compress.vertical")
+                            .tag("compact")
+                        Label("Comfortable", systemImage: "rectangle")
+                            .tag("comfortable")
+                        Label("Spacious", systemImage: "rectangle.expand.vertical")
+                            .tag("spacious")
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+
+                    // Visual preview: 3 mock message lines at selected density
+                    VStack(spacing: appState.messageSpacing) {
+                        ForEach(["Hey, how can I help?", "Sure, let me look into that.", "Here is what I found."], id: \.self) { line in
+                            HStack(spacing: 6) {
+                                Circle()
+                                    .fill(AppTheme.accent.opacity(0.5))
+                                    .frame(width: appState.avatarSize * 0.5, height: appState.avatarSize * 0.5)
+                                Text(line)
+                                    .font(.system(size: appState.displayDensity == "compact" ? 10 : appState.displayDensity == "spacious" ? 13 : 11))
+                                    .foregroundColor(AppTheme.textSecondary)
+                                Spacer()
+                            }
+                            .padding(.horizontal, appState.messagePadding * 0.7)
+                            .padding(.vertical, appState.messagePadding * 0.4)
+                            .background(AppTheme.bgPrimary.opacity(0.3))
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                        }
+                    }
+                    .padding(8)
+                    .background(AppTheme.bgPrimary.opacity(0.15))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .animation(.easeInOut(duration: 0.2), value: appState.displayDensity)
+                }
+
+                Divider().background(AppTheme.borderGlass)
+
                 // Code Theme
                 VStack(alignment: .leading, spacing: 10) {
                     Text("Code Theme")

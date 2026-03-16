@@ -397,6 +397,34 @@ class AppState: ObservableObject {
     @AppStorage("notifyOnAgentRoute") var notifyOnAgentRoute: Bool = false
     @AppStorage("notifySoundEnabled") var notifySoundEnabled: Bool = true
     @AppStorage("compactMode") var compactMode: Bool = false
+    @AppStorage("displayDensity") var displayDensity: String = "comfortable"
+
+    /// Message bubble padding based on display density
+    var messagePadding: CGFloat {
+        switch displayDensity {
+        case "compact": return 8
+        case "spacious": return 18
+        default: return 12
+        }
+    }
+
+    /// Vertical spacing between messages based on display density
+    var messageSpacing: CGFloat {
+        switch displayDensity {
+        case "compact": return 4
+        case "spacious": return 14
+        default: return 8
+        }
+    }
+
+    /// Avatar/icon size based on display density
+    var avatarSize: CGFloat {
+        switch displayDensity {
+        case "compact": return 20
+        case "spacious": return 32
+        default: return 26
+        }
+    }
     @AppStorage("floatOnTop") var floatOnTop: Bool = false
     @AppStorage("windowOpacity") var windowOpacity: Double = 1.0
     @AppStorage("quickActionsCollapsed") var quickActionsCollapsed: Bool = false
@@ -705,6 +733,7 @@ class AppState: ObservableObject {
     @Published var conversations: [Conversation] = []
     @Published var activeConversation: Conversation?
     @Published var unreadConversationIds: Set<String> = []
+    @Published var mergeTargetId: String?
 
     /// Number of active (enabled) tasks.
     var activeTaskCount: Int {
@@ -1916,6 +1945,53 @@ class AppState: ObservableObject {
             service.deleteConversation(id)
         }
         showToast("\(ids.count) conversation\(ids.count == 1 ? "" : "s") deleted", type: .success)
+    }
+
+    /// Merge source conversation into target: appends all messages, combines activities,
+    /// updates token counts, merges tags, then deletes the source conversation.
+    func mergeConversations(sourceId: String, targetId: String) {
+        guard let sourceIdx = conversations.firstIndex(where: { $0.id == sourceId }),
+              let targetIdx = conversations.firstIndex(where: { $0.id == targetId }) else {
+            showToast("Could not find conversations to merge", type: .error)
+            mergeTargetId = nil
+            return
+        }
+
+        let source = conversations[sourceIdx]
+
+        // Append all messages from source to target, sorted by timestamp
+        conversations[targetIdx].messages.append(contentsOf: source.messages)
+        conversations[targetIdx].messages.sort { $0.timestamp < $1.timestamp }
+
+        // Update token counts
+        conversations[targetIdx].totalInputTokens += source.totalInputTokens
+        conversations[targetIdx].totalOutputTokens += source.totalOutputTokens
+
+        // Merge tags (union, no duplicates)
+        let existingTags = Set(conversations[targetIdx].tags)
+        for tag in source.tags where !existingTags.contains(tag) {
+            conversations[targetIdx].tags.append(tag)
+        }
+
+        // Save the updated target
+        service.saveConversation(conversations[targetIdx])
+
+        // Navigate to the merged conversation
+        let merged = conversations[targetIdx]
+        activeConversation = merged
+        selectedTab = .chat
+
+        // Delete the source conversation
+        conversations.removeAll { $0.id == sourceId }
+        if activeConversation?.id == sourceId {
+            activeConversation = merged
+        }
+        service.deleteConversation(sourceId)
+
+        // Clear merge mode
+        mergeTargetId = nil
+
+        showToast("Conversations merged successfully", type: .success)
     }
 
     func togglePin(_ conv: Conversation) {

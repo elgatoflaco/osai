@@ -1224,7 +1224,18 @@ struct ChatView: View {
             isActive: appState.activeConversation?.id == conv.id,
             isRenaming: renamingConversationId == conv.id,
             renamingText: renamingConversationId == conv.id ? $renamingText : .constant(""),
-            onSelect: { isSelecting ? toggleSelection(conv.id) : appState.openConversation(conv) },
+            onSelect: {
+                if let sourceId = appState.mergeTargetId {
+                    // In merge mode: clicking a conversation merges the source into this one
+                    if conv.id != sourceId {
+                        appState.mergeConversations(sourceId: sourceId, targetId: conv.id)
+                    }
+                } else if isSelecting {
+                    toggleSelection(conv.id)
+                } else {
+                    appState.openConversation(conv)
+                }
+            },
             onDelete: { deleteConfirmConversation = conv },
             onExport: { appState.presentExportSheet(for: conv) },
             onTogglePin: { appState.togglePin(conv) },
@@ -1253,7 +1264,9 @@ struct ChatView: View {
             },
             titleSuggestions: renamingConversationId == conv.id ? appState.titleSuggestions(for: conv) : [],
             parentTitle: appState.parentConversationTitle(for: conv),
-            tagColorProvider: { tag in appState.tagColor(for: tag) }
+            tagColorProvider: { tag in appState.tagColor(for: tag) },
+            onMerge: { appState.mergeTargetId = conv.id },
+            isMergeTarget: appState.mergeTargetId != nil && appState.mergeTargetId != conv.id
         )
     }
 
@@ -2371,6 +2384,34 @@ struct ChatView: View {
                     tagFilterBar
                 }
 
+                // Merge mode banner
+                if appState.mergeTargetId != nil {
+                    HStack(spacing: 8) {
+                        Image(systemName: "arrow.triangle.merge")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundColor(.white)
+                        Text("Select a conversation to merge into")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(.white)
+                            .lineLimit(1)
+                        Spacer()
+                        Button(action: { appState.mergeTargetId = nil }) {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 14))
+                                .foregroundColor(.white.opacity(0.8))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(AppTheme.accent)
+                    )
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                }
+
                 if showCalendarBrowser {
                     CalendarBrowserView(selectedDate: $calendarSelectedDate)
                         .environmentObject(appState)
@@ -2834,6 +2875,8 @@ struct ConversationRow: View {
     var titleSuggestions: [String] = []
     var parentTitle: String? = nil
     var tagColorProvider: ((String) -> Color)? = nil
+    var onMerge: (() -> Void)? = nil
+    var isMergeTarget: Bool = false
     @State private var isHovered = false
 
     private static let tagColors: [Color] = [.red, .orange, .yellow, .green, .blue, .purple, .pink, .teal]
@@ -2965,6 +3008,27 @@ struct ConversationRow: View {
                 RoundedRectangle(cornerRadius: 8)
                     .stroke(isActive ? AppTheme.accent.opacity(0.2) : .clear, lineWidth: 1)
             )
+            .overlay(
+                Group {
+                    if isMergeTarget {
+                        HStack {
+                            Spacer()
+                            Image(systemName: "arrow.triangle.merge")
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundColor(.white)
+                                .padding(4)
+                                .background(AppTheme.accent)
+                                .clipShape(Circle())
+                                .padding(4)
+                        }
+                    }
+                },
+                alignment: .trailing
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(isMergeTarget ? AppTheme.accent.opacity(0.6) : .clear, lineWidth: 2)
+            )
         }
         .buttonStyle(.plain)
         .accessibilityElement(children: .combine)
@@ -2986,6 +3050,9 @@ struct ConversationRow: View {
                 Label("Export", systemImage: "square.and.arrow.up")
             }
             .disabled(conv.messages.isEmpty)
+            Button(action: { onMerge?() }) {
+                Label("Merge into...", systemImage: "arrow.triangle.merge")
+            }
             Divider()
             tagContextMenu
             Divider()

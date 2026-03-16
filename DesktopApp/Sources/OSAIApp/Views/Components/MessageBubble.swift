@@ -725,6 +725,11 @@ struct MessageBubble: View {
     var onEdit: ((String) -> Void)?
     var onRestoreEdit: ((String) -> Void)?
     var onBookmark: (() -> Void)?
+    var onReply: (() -> Void)?
+    /// The quoted message content and role, looked up by the parent from replyToMessageId
+    var quotedMessageContent: String?
+    var quotedMessageRole: MessageRole?
+    var onScrollToMessage: ((String) -> Void)?
     var shareMode: Bool = false
     var isSelectedForShare: Bool = false
     var onToggleShareSelection: (() -> Void)?
@@ -762,8 +767,17 @@ struct MessageBubble: View {
         appState.isSpeaking && appState.speakingMessageId != message.id
     }
 
+    /// Font size adjustment based on display density
+    private var densityFontSize: CGFloat {
+        switch appState.displayDensity {
+        case "compact": return -1
+        case "spacious": return 1
+        default: return 0
+        }
+    }
+
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
+        HStack(alignment: .top, spacing: appState.messageSpacing + 2) {
             // Share mode checkbox
             if shareMode {
                 Button(action: { onToggleShareSelection?() }) {
@@ -1013,21 +1027,27 @@ struct MessageBubble: View {
                 if isEditing {
                     editingView
                 } else {
-                    Text(message.content)
-                        .font(.system(size: zenMode ? 15 : 14))
-                        .foregroundColor(AppTheme.textPrimary)
-                        .textSelection(.enabled)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, zenMode ? 14 : 12)
-                        .background(AppTheme.accent.opacity(0.12))
-                        .clipShape(RoundedRectangle(cornerRadius: 18))
-                        .overlay(RoundedRectangle(cornerRadius: 18).stroke(AppTheme.accent.opacity(0.2), lineWidth: 0.5))
-                        .overlay(alignment: .bottomLeading) {
-                            if let reaction = message.reaction {
-                                reactionBadge(reaction)
-                                    .offset(x: -4, y: 8)
-                            }
+                    VStack(alignment: .trailing, spacing: 4) {
+                        if message.replyToMessageId != nil {
+                            quoteBar
                         }
+
+                        Text(message.content)
+                            .font(.system(size: zenMode ? 15 : 14 + densityFontSize))
+                            .foregroundColor(AppTheme.textPrimary)
+                            .textSelection(.enabled)
+                    }
+                    .padding(.horizontal, appState.messagePadding + 4)
+                    .padding(.vertical, zenMode ? 14 : appState.messagePadding)
+                    .background(AppTheme.accent.opacity(0.12))
+                    .clipShape(RoundedRectangle(cornerRadius: 18))
+                    .overlay(RoundedRectangle(cornerRadius: 18).stroke(AppTheme.accent.opacity(0.2), lineWidth: 0.5))
+                    .overlay(alignment: .bottomLeading) {
+                        if let reaction = message.reaction {
+                            reactionBadge(reaction)
+                                .offset(x: -4, y: 8)
+                        }
+                    }
                 }
 
                 if !isEditing {
@@ -1037,11 +1057,11 @@ struct MessageBubble: View {
 
             if showAvatar {
                 Image(systemName: "person.circle.fill")
-                    .font(.system(size: 26))
+                    .font(.system(size: appState.avatarSize))
                     .foregroundColor(AppTheme.textSecondary)
                     .accessibilityHidden(true)
             } else {
-                Color.clear.frame(width: 26, height: 26)
+                Color.clear.frame(width: appState.avatarSize, height: appState.avatarSize)
             }
         }
         .onHover { hovering in
@@ -1108,6 +1128,79 @@ struct MessageBubble: View {
                     .clipShape(RoundedRectangle(cornerRadius: 8))
                 }
                 .buttonStyle(.plain)
+            }
+        }
+    }
+
+    // MARK: - Quote / Reply-To Bar
+
+    @ViewBuilder
+    private var quoteBar: some View {
+        if let replyId = message.replyToMessageId,
+           let content = quotedMessageContent {
+            Button(action: {
+                onScrollToMessage?(replyId)
+            }) {
+                HStack(alignment: .top, spacing: 8) {
+                    RoundedRectangle(cornerRadius: 1.5)
+                        .fill(AppTheme.accent)
+                        .frame(width: 3)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 4) {
+                            Image(systemName: quotedMessageRole == .user ? "person.circle.fill" : "bubble.left.fill")
+                                .font(.system(size: 9))
+                                .foregroundColor(AppTheme.accent)
+                            Text(quotedMessageRole == .user ? "You" : "Assistant")
+                                .font(.system(size: 9, weight: .semibold))
+                                .foregroundColor(AppTheme.accent)
+                        }
+
+                        Text(content)
+                            .font(.system(size: 11))
+                            .foregroundColor(AppTheme.textSecondary)
+                            .lineLimit(2)
+                            .truncationMode(.tail)
+                    }
+
+                    Spacer()
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(AppTheme.accent.opacity(0.06))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(AppTheme.accent.opacity(0.15), lineWidth: 0.5)
+                )
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Replying to \(quotedMessageRole == .user ? "your" : "assistant") message")
+        }
+    }
+
+    // MARK: - Reply Action Button
+
+    private var replyActionButton: some View {
+        Group {
+            if let onReply = onReply {
+                Button(action: onReply) {
+                    HStack(spacing: 3) {
+                        Image(systemName: "arrowshape.turn.up.left")
+                            .font(.system(size: 9))
+                        Text("Reply")
+                            .font(.system(size: 9))
+                    }
+                    .foregroundColor(AppTheme.textMuted)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(AppTheme.bgCard.opacity(0.9))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(AppTheme.borderGlass, lineWidth: 0.5))
+                }
+                .buttonStyle(.plain)
+                .transition(.opacity)
+                .accessibilityLabel("Reply to this message")
             }
         }
     }
@@ -1198,6 +1291,8 @@ struct MessageBubble: View {
                     .transition(.opacity)
                     .accessibilityLabel("Branch conversation from this message")
                 }
+
+                replyActionButton
             }
 
             if showTimestamp {
@@ -1310,24 +1405,29 @@ struct MessageBubble: View {
     }
 
     private var assistantBubble: some View {
-        HStack(alignment: .top, spacing: 10) {
+        HStack(alignment: .top, spacing: appState.messageSpacing + 2) {
             if showAvatar {
-                GhostIcon(size: 26, animate: message.isStreaming, isProcessing: message.isStreaming)
+                GhostIcon(size: appState.avatarSize, animate: message.isStreaming, isProcessing: message.isStreaming)
                     .padding(.top, 2)
                     .accessibilityHidden(true)
             } else {
-                Color.clear.frame(width: 26, height: 26)
+                Color.clear.frame(width: appState.avatarSize, height: appState.avatarSize)
             }
 
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: appState.displayDensity == "compact" ? 3 : appState.displayDensity == "spacious" ? 10 : 6) {
                 // Agent badge
                 if let agent = message.agentName {
                     AgentBadge(name: agent)
                 }
 
-                // Activity strip (hidden in zen mode)
-                if !message.activities.isEmpty && !zenMode {
+                // Activity strip (hidden in zen mode and compact density)
+                if !message.activities.isEmpty && !zenMode && appState.displayDensity != "compact" {
                     ActivityStrip(activities: message.activities, isStreaming: message.isStreaming)
+                }
+
+                // Quote bar for reply-to messages
+                if message.replyToMessageId != nil {
+                    quoteBar
                 }
 
                 // Content with hover copy button
@@ -1479,6 +1579,8 @@ struct MessageBubble: View {
                                 .buttonStyle(.plain)
                                 .accessibilityLabel("Retry response")
                             }
+
+                            replyActionButton
                         }
                         .transition(.opacity)
                     }

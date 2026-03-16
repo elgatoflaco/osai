@@ -328,6 +328,7 @@ class OSAIService {
             if let reaction = msg.reaction { m["reaction"] = reaction.rawValue }
             if msg.isBookmarked { m["isBookmarked"] = true }
             if let rt = msg.responseTimeMs { m["responseTimeMs"] = rt }
+            if let replyTo = msg.replyToMessageId { m["replyToMessageId"] = replyTo }
             if !msg.editHistory.isEmpty {
                 m["editHistory"] = msg.editHistory.map { record in
                     [
@@ -400,6 +401,7 @@ class OSAIService {
                     return EditRecord(id: uid, content: content, editedAt: date)
                 }
             }
+            let replyToMessageId = m["replyToMessageId"] as? String
             return ChatMessage(
                 id: msgId, role: role, content: content, timestamp: ts,
                 toolName: m["toolName"] as? String,
@@ -407,7 +409,8 @@ class OSAIService {
                 reaction: reaction,
                 isBookmarked: isBookmarked,
                 responseTimeMs: responseTimeMs,
-                editHistory: editHistory
+                editHistory: editHistory,
+                replyToMessageId: replyToMessageId
             )
         }
 

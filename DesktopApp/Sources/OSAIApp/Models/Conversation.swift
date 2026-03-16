@@ -87,12 +87,13 @@ struct ChatMessage: Identifiable, Equatable {
     /// Time in milliseconds from user send to first streaming text (assistant messages only)
     var responseTimeMs: Int?
     var editHistory: [EditRecord] = []
+    var replyToMessageId: String?
 
     static func == (lhs: ChatMessage, rhs: ChatMessage) -> Bool {
         lhs.id == rhs.id && lhs.content == rhs.content && lhs.isStreaming == rhs.isStreaming &&
         lhs.activities == rhs.activities && lhs.agentName == rhs.agentName && lhs.reaction == rhs.reaction &&
         lhs.isBookmarked == rhs.isBookmarked && lhs.responseTimeMs == rhs.responseTimeMs &&
-        lhs.editHistory == rhs.editHistory
+        lhs.editHistory == rhs.editHistory && lhs.replyToMessageId == rhs.replyToMessageId
     }
 }
 
