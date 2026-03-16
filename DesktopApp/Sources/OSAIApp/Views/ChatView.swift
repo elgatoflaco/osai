@@ -11,6 +11,9 @@ struct ChatView: View {
     @State private var attachedFiles: [URL] = []
     @State private var isDragOver = false
     @State private var isAtBottom = true
+    @State private var isNearBottom: Bool = true
+    @State private var unreadCount: Int = 0
+    @State private var lastSeenMessageCount: Int = 0
     @State private var searchInConversation = ""
     @State private var showConversationSearch = false
     @State private var currentMatchIndex = 0
@@ -37,12 +40,18 @@ struct ChatView: View {
     @State private var searchFilters = AppState.SearchFilters()
     @State private var showSearchFilters: Bool = false
     @State private var showStatsSheet: Bool = false
-
-
+    @State private var showTagManager: Bool = false
+    @State private var tagManagerRenaming: String? = nil
+    @State private var tagManagerRenameText: String = ""
 
     private var filteredConversations: [Conversation] {
         var sorted = appState.sortedConversations
-        if let tag = appState.filterTag {
+        // Multi-tag filter (AND logic)
+        if !appState.selectedFilterTags.isEmpty {
+            sorted = sorted.filter { conv in
+                appState.selectedFilterTags.isSubset(of: Set(conv.tags))
+            }
+        } else if let tag = appState.filterTag {
             sorted = sorted.filter { $0.tags.contains(tag) }
         }
 
@@ -752,7 +761,16 @@ struct ChatView: View {
                                 }
                             )
                             .onPreferenceChange(ScrollOffsetPreferenceKey.self) { maxY in
+                                let wasNearBottom = isNearBottom
                                 isAtBottom = maxY < 1000 || appState.isProcessing
+                                isNearBottom = maxY < 1200
+                                // When user scrolls back to bottom, clear unread count
+                                if !wasNearBottom && isNearBottom {
+                                    unreadCount = 0
+                                    if let count = appState.activeConversation?.messages.count {
+                                        lastSeenMessageCount = count
+                                    }
+                                }
                             }
                             .onPreferenceChange(ScrollContentHeightKey.self) { h in
                                 scrollContentHeight = h
@@ -767,19 +785,27 @@ struct ChatView: View {
                                     scrollProgress = 1
                                 }
                             }
-                            .onChange(of: appState.activeConversation?.messages.count) { _, _ in
-                                if !autoScrollPaused {
+                            .onChange(of: appState.activeConversation?.messages.count) { _, newCount in
+                                let count = newCount ?? 0
+                                if isNearBottom && !autoScrollPaused && appState.autoScrollEnabled {
                                     scrollToBottom(proxy)
                                     isAtBottom = true
+                                    lastSeenMessageCount = count
+                                } else if !isNearBottom {
+                                    // User scrolled up; track new messages as unread
+                                    let delta = count - lastSeenMessageCount
+                                    if delta > 0 {
+                                        unreadCount = delta
+                                    }
                                 }
                             }
                             .onChange(of: appState.activeConversation?.messages.last?.content) { _, _ in
-                                if isAtBottom && !autoScrollPaused {
+                                if isNearBottom && !autoScrollPaused && appState.autoScrollEnabled {
                                     scrollToBottom(proxy)
                                 }
                             }
                             .onChange(of: appState.activeConversation?.messages.last?.activities.count) { _, _ in
-                                if isAtBottom && !autoScrollPaused {
+                                if isNearBottom && !autoScrollPaused && appState.autoScrollEnabled {
                                     scrollToBottom(proxy)
                                 }
                             }
@@ -794,6 +820,14 @@ struct ChatView: View {
                                 if !processing {
                                     autoScrollPaused = false
                                 }
+                            }
+                            .onChange(of: appState.activeConversation?.id) { _, _ in
+                                // Reset scroll state when switching conversations
+                                isNearBottom = true
+                                isAtBottom = true
+                                unreadCount = 0
+                                autoScrollPaused = false
+                                lastSeenMessageCount = appState.activeConversation?.messages.count ?? 0
                             }
 
                             .onChange(of: searchInConversation) { _, _ in
@@ -825,14 +859,44 @@ struct ChatView: View {
                                 }
                             }
 
-                            // Scroll-to-bottom / Resume auto-scroll button
-                            if !isAtBottom || autoScrollPaused {
+                            // New messages divider (shown when scrolled up and unread > 0)
+                            if !isNearBottom && unreadCount > 0 {
+                                VStack(spacing: 0) {
+                                    Spacer()
+                                    HStack(spacing: 8) {
+                                        Rectangle()
+                                            .fill(AppTheme.accent.opacity(0.4))
+                                            .frame(height: 1)
+                                        Text("\(unreadCount) new message\(unreadCount == 1 ? "" : "s")")
+                                            .font(.system(size: 11, weight: .medium))
+                                            .foregroundColor(AppTheme.accent)
+                                            .lineLimit(1)
+                                            .fixedSize()
+                                        Rectangle()
+                                            .fill(AppTheme.accent.opacity(0.4))
+                                            .frame(height: 1)
+                                    }
+                                    .padding(.horizontal, 24)
+                                    .padding(.bottom, 60)
+                                }
+                                .allowsHitTesting(false)
+                                .transition(.opacity)
+                                .animation(.easeInOut(duration: 0.25), value: unreadCount)
+                            }
+
+                            // Scroll-to-bottom / Resume auto-scroll floating button
+                            if !isNearBottom || autoScrollPaused {
                                 Button(action: {
                                     withAnimation(.easeOut(duration: 0.3)) {
                                         proxy.scrollTo("scroll_bottom_anchor", anchor: .bottom)
                                     }
                                     isAtBottom = true
+                                    isNearBottom = true
                                     autoScrollPaused = false
+                                    unreadCount = 0
+                                    if let count = appState.activeConversation?.messages.count {
+                                        lastSeenMessageCount = count
+                                    }
                                 }) {
                                     if focusMode && autoScrollPaused {
                                         // Resume auto-scroll pill
@@ -849,19 +913,46 @@ struct ChatView: View {
                                         .clipShape(Capsule())
                                         .shadow(color: .black.opacity(0.25), radius: 6, y: 3)
                                     } else {
-                                        Image(systemName: "chevron.down.circle.fill")
-                                            .font(.system(size: 32))
-                                            .foregroundColor(AppTheme.accent.opacity(0.8))
-                                            .background(Circle().fill(AppTheme.bgCard).padding(4))
-                                            .shadow(color: .black.opacity(0.3), radius: 4, y: 2)
+                                        // Floating glass circle with down arrow and unread badge
+                                        ZStack(alignment: .topTrailing) {
+                                            Circle()
+                                                .fill(.ultraThinMaterial)
+                                                .frame(width: 40, height: 40)
+                                                .overlay(
+                                                    Circle()
+                                                        .strokeBorder(Color.white.opacity(0.15), lineWidth: 0.5)
+                                                )
+                                                .shadow(color: .black.opacity(0.25), radius: 8, y: 4)
+                                                .overlay(
+                                                    Image(systemName: "arrow.down")
+                                                        .font(.system(size: 16, weight: .semibold))
+                                                        .foregroundColor(AppTheme.accent)
+                                                )
+
+                                            // Unread count badge
+                                            if unreadCount > 0 {
+                                                Text(unreadCount > 99 ? "99+" : "\(unreadCount)")
+                                                    .font(.system(size: 10, weight: .bold))
+                                                    .foregroundColor(.white)
+                                                    .padding(.horizontal, 5)
+                                                    .padding(.vertical, 2)
+                                                    .background(
+                                                        Capsule()
+                                                            .fill(AppTheme.accent)
+                                                    )
+                                                    .offset(x: 6, y: -6)
+                                                    .transition(.scale.combined(with: .opacity))
+                                            }
+                                        }
                                     }
                                 }
                                 .buttonStyle(.plain)
-                                .accessibilityLabel(autoScrollPaused ? "Resume auto-scroll" : "Scroll to bottom")
+                                .accessibilityLabel(autoScrollPaused ? "Resume auto-scroll" : "Scroll to bottom\(unreadCount > 0 ? ", \(unreadCount) new messages" : "")")
                                 .padding(.trailing, focusMode ? 0 : 16)
                                 .padding(.bottom, 16)
                                 .frame(maxWidth: focusMode ? .infinity : nil, alignment: .center)
                                 .transition(.opacity.combined(with: .scale))
+                                .animation(.spring(response: 0.3, dampingFraction: 0.7), value: unreadCount)
                             }
                         }
                     }
@@ -1161,7 +1252,8 @@ struct ChatView: View {
                 showNewTagPopover = conv.id
             },
             titleSuggestions: renamingConversationId == conv.id ? appState.titleSuggestions(for: conv) : [],
-            parentTitle: appState.parentConversationTitle(for: conv)
+            parentTitle: appState.parentConversationTitle(for: conv),
+            tagColorProvider: { tag in appState.tagColor(for: tag) }
         )
     }
 
@@ -1197,45 +1289,191 @@ struct ChatView: View {
 
     // MARK: - Tag Helpers
 
-    private static let tagColors: [Color] = [.red, .orange, .yellow, .green, .blue, .purple, .pink, .teal]
-
     private func tagColor(for tag: String) -> Color {
-        let allTags = appState.allTags
-        if let idx = allTags.firstIndex(of: tag) {
-            return Self.tagColors[idx % Self.tagColors.count]
-        }
-        return .gray
+        appState.tagColor(for: tag)
     }
 
     @ViewBuilder
     private var tagFilterBar: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 4) {
-                tagFilterPill(label: "All", tag: nil)
-                ForEach(appState.allTags, id: \.self) { tag in
-                    tagFilterPill(label: tag, tag: tag)
+        VStack(spacing: 4) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 4) {
+                    // "All" pill clears multi-tag selection
+                    let allActive = appState.selectedFilterTags.isEmpty && appState.filterTag == nil
+                    Button {
+                        appState.selectedFilterTags.removeAll()
+                        appState.filterTag = nil
+                    } label: {
+                        Text("All")
+                            .font(.system(size: 10, weight: allActive ? .semibold : .regular))
+                            .foregroundColor(allActive ? .white : AppTheme.textSecondary)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(allActive ? AppTheme.accent : AppTheme.bgCard.opacity(0.6))
+                            .clipShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+
+                    ForEach(appState.allUniqueTags(), id: \.self) { tag in
+                        tagFilterPill(tag: tag)
+                    }
+
+                    // Manage Tags button
+                    Button {
+                        showTagManager.toggle()
+                    } label: {
+                        Image(systemName: "tag.fill")
+                            .font(.system(size: 9))
+                            .foregroundColor(AppTheme.textMuted)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 3)
+                            .background(AppTheme.bgCard.opacity(0.6))
+                            .clipShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Manage Tags")
+                    .popover(isPresented: $showTagManager, arrowEdge: .bottom) {
+                        tagManagerPopover
+                    }
                 }
+                .padding(.horizontal, 12)
             }
-            .padding(.horizontal, 12)
         }
         .padding(.bottom, 4)
     }
 
     @ViewBuilder
-    private func tagFilterPill(label: String, tag: String?) -> some View {
-        let isActive = appState.filterTag == tag
+    private func tagFilterPill(tag: String) -> some View {
+        let isActive = appState.selectedFilterTags.contains(tag)
         Button {
-            appState.filterTag = tag
+            if appState.selectedFilterTags.contains(tag) {
+                appState.selectedFilterTags.remove(tag)
+            } else {
+                appState.selectedFilterTags.insert(tag)
+                appState.filterTag = nil
+            }
         } label: {
-            Text(label)
+            Text(tag)
                 .font(.system(size: 10, weight: isActive ? .semibold : .regular))
                 .foregroundColor(isActive ? .white : AppTheme.textSecondary)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 3)
-                .background(isActive ? (tag.map { tagColor(for: $0) } ?? AppTheme.accent) : AppTheme.bgCard.opacity(0.6))
+                .background(isActive ? tagColor(for: tag) : AppTheme.bgCard.opacity(0.6))
                 .clipShape(Capsule())
         }
         .buttonStyle(.plain)
+    }
+
+    // MARK: - Tag Manager Popover
+
+    @ViewBuilder
+    private var tagManagerPopover: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Manage Tags")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundColor(AppTheme.textPrimary)
+                .padding(.bottom, 2)
+
+            let tags = appState.allUniqueTags()
+            if tags.isEmpty {
+                Text("No tags yet")
+                    .font(.system(size: 11))
+                    .foregroundColor(AppTheme.textMuted)
+                    .padding(.vertical, 8)
+            } else {
+                ScrollView(.vertical, showsIndicators: true) {
+                    VStack(spacing: 2) {
+                        ForEach(tags, id: \.self) { tag in
+                            tagManagerRow(tag: tag)
+                        }
+                    }
+                }
+                .frame(maxHeight: 240)
+            }
+        }
+        .padding(16)
+        .frame(width: 280)
+    }
+
+    @ViewBuilder
+    private func tagManagerRow(tag: String) -> some View {
+        HStack(spacing: 8) {
+            Menu {
+                ForEach(AppState.tagColorPalette, id: \.name) { item in
+                    Button {
+                        appState.tagColors[tag] = item.name
+                    } label: {
+                        HStack {
+                            Circle()
+                                .fill(item.color)
+                                .frame(width: 10, height: 10)
+                            Text(item.name.capitalized)
+                            if appState.tagColors[tag] == item.name {
+                                Image(systemName: "checkmark")
+                            }
+                        }
+                    }
+                }
+            } label: {
+                Circle()
+                    .fill(tagColor(for: tag))
+                    .frame(width: 12, height: 12)
+            }
+            .menuStyle(.borderlessButton)
+            .frame(width: 20)
+
+            if tagManagerRenaming == tag {
+                TextField("Tag name", text: $tagManagerRenameText)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 11))
+                    .foregroundColor(AppTheme.textPrimary)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 2)
+                    .background(AppTheme.bgCard.opacity(0.6))
+                    .clipShape(RoundedRectangle(cornerRadius: 4))
+                    .onSubmit {
+                        appState.renameTag(from: tag, to: tagManagerRenameText)
+                        tagManagerRenaming = nil
+                    }
+                    .onExitCommand {
+                        tagManagerRenaming = nil
+                    }
+            } else {
+                Text(tag)
+                    .font(.system(size: 11))
+                    .foregroundColor(AppTheme.textPrimary)
+                    .lineLimit(1)
+            }
+
+            Spacer()
+
+            Button {
+                tagManagerRenameText = tag
+                tagManagerRenaming = tag
+            } label: {
+                Image(systemName: "pencil")
+                    .font(.system(size: 10))
+                    .foregroundColor(AppTheme.textMuted)
+            }
+            .buttonStyle(.plain)
+            .help("Rename tag")
+
+            Button {
+                appState.deleteTag(tag)
+            } label: {
+                Image(systemName: "trash")
+                    .font(.system(size: 10))
+                    .foregroundColor(AppTheme.error.opacity(0.8))
+            }
+            .buttonStyle(.plain)
+            .help("Delete tag from all conversations")
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 4)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(AppTheme.bgCard.opacity(0.3))
+        )
     }
 
     private func toggleSelection(_ id: String) {
@@ -2129,7 +2367,7 @@ struct ChatView: View {
                 }
 
                 // Tag filter
-                if !appState.allTags.isEmpty {
+                if !appState.allUniqueTags().isEmpty {
                     tagFilterBar
                 }
 
@@ -2595,11 +2833,15 @@ struct ConversationRow: View {
     var onNewTag: (() -> Void)? = nil
     var titleSuggestions: [String] = []
     var parentTitle: String? = nil
+    var tagColorProvider: ((String) -> Color)? = nil
     @State private var isHovered = false
 
     private static let tagColors: [Color] = [.red, .orange, .yellow, .green, .blue, .purple, .pink, .teal]
 
     private func tagColor(for tag: String) -> Color {
+        if let provider = tagColorProvider {
+            return provider(tag)
+        }
         if let idx = allTags.firstIndex(of: tag) {
             return Self.tagColors[idx % Self.tagColors.count]
         }

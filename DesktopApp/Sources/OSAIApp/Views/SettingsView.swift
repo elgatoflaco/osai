@@ -636,6 +636,73 @@ struct SettingsView: View {
 
                 Divider().background(AppTheme.borderGlass)
 
+                // Code Theme
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Code Theme")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(AppTheme.textPrimary)
+
+                    Picker("Code Theme", selection: $appState.syntaxTheme) {
+                        ForEach(SyntaxTheme.themeNames, id: \.self) { name in
+                            Text(name).tag(name)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+
+                    // Preview snippet
+                    let previewTheme = SyntaxTheme.named(appState.syntaxTheme)
+                    VStack(alignment: .leading, spacing: 0) {
+                        HStack(spacing: 0) {
+                            Text("func ")
+                                .foregroundColor(previewTheme.keyword)
+                            Text("greet")
+                                .foregroundColor(previewTheme.function)
+                            Text("(name: ")
+                                .foregroundColor(previewTheme.foreground)
+                            Text("String")
+                                .foregroundColor(previewTheme.type)
+                            Text(")")
+                                .foregroundColor(previewTheme.foreground)
+                        }
+                        HStack(spacing: 0) {
+                            Text("  ")
+                                .foregroundColor(previewTheme.foreground)
+                            Text("// say hello")
+                                .foregroundColor(previewTheme.comment)
+                        }
+                        HStack(spacing: 0) {
+                            Text("  let ")
+                                .foregroundColor(previewTheme.keyword)
+                            Text("count ")
+                                .foregroundColor(previewTheme.foreground)
+                            Text("= ")
+                                .foregroundColor(previewTheme.operator)
+                            Text("42")
+                                .foregroundColor(previewTheme.number)
+                        }
+                        HStack(spacing: 0) {
+                            Text("  print(")
+                                .foregroundColor(previewTheme.foreground)
+                            Text("\"Hello\"")
+                                .foregroundColor(previewTheme.string)
+                            Text(")")
+                                .foregroundColor(previewTheme.foreground)
+                        }
+                    }
+                    .font(.system(size: 11, design: .monospaced))
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(previewTheme.background)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(Color.white.opacity(0.08), lineWidth: 0.5)
+                    )
+                }
+
+                Divider().background(AppTheme.borderGlass)
+
                 // Accent Color
                 VStack(alignment: .leading, spacing: 10) {
                     Text("Accent Color")

@@ -2559,6 +2559,86 @@ struct MarkdownTableView: View {
 
 // MARK: - Syntax Highlighting
 
+// MARK: - Syntax Theme
+
+struct SyntaxTheme {
+    let name: String
+    let keyword: Color
+    let string: Color
+    let comment: Color
+    let number: Color
+    let type: Color
+    let function: Color
+    let `operator`: Color
+    let background: Color
+    let foreground: Color
+
+    static let monokai = SyntaxTheme(
+        name: "Monokai",
+        keyword: Color(red: 0xF9/255, green: 0x26/255, blue: 0x72/255),
+        string: Color(red: 0xE6/255, green: 0xDB/255, blue: 0x74/255),
+        comment: Color(red: 0x75/255, green: 0x71/255, blue: 0x5E/255),
+        number: Color(red: 0xAE/255, green: 0x81/255, blue: 0xFF/255),
+        type: Color(red: 0x66/255, green: 0xD9/255, blue: 0xEF/255),
+        function: Color(red: 0xA6/255, green: 0xE2/255, blue: 0x2E/255),
+        operator: Color(red: 0xF9/255, green: 0x26/255, blue: 0x72/255),
+        background: Color(red: 0x27/255, green: 0x28/255, blue: 0x22/255),
+        foreground: Color(red: 0xF8/255, green: 0xF8/255, blue: 0xF2/255)
+    )
+
+    static let dracula = SyntaxTheme(
+        name: "Dracula",
+        keyword: Color(red: 0xFF/255, green: 0x79/255, blue: 0xC6/255),
+        string: Color(red: 0xF1/255, green: 0xFA/255, blue: 0x8C/255),
+        comment: Color(red: 0x62/255, green: 0x72/255, blue: 0xA4/255),
+        number: Color(red: 0xBD/255, green: 0x93/255, blue: 0xF9/255),
+        type: Color(red: 0x8B/255, green: 0xE9/255, blue: 0xFD/255),
+        function: Color(red: 0x50/255, green: 0xFA/255, blue: 0x7B/255),
+        operator: Color(red: 0xFF/255, green: 0x79/255, blue: 0xC6/255),
+        background: Color(red: 0x28/255, green: 0x2A/255, blue: 0x36/255),
+        foreground: Color(red: 0xF8/255, green: 0xF8/255, blue: 0xF2/255)
+    )
+
+    static let githubDark = SyntaxTheme(
+        name: "GitHub Dark",
+        keyword: Color(red: 0xFF/255, green: 0x7B/255, blue: 0x72/255),
+        string: Color(red: 0xA5/255, green: 0xD6/255, blue: 0xFF/255),
+        comment: Color(red: 0x8B/255, green: 0x94/255, blue: 0x9E/255),
+        number: Color(red: 0x79/255, green: 0xC0/255, blue: 0xFF/255),
+        type: Color(red: 0xFF/255, green: 0xD7/255, blue: 0x00/255),
+        function: Color(red: 0xD2/255, green: 0xA8/255, blue: 0xFF/255),
+        operator: Color(red: 0xFF/255, green: 0x7B/255, blue: 0x72/255),
+        background: Color(red: 0x0D/255, green: 0x11/255, blue: 0x17/255),
+        foreground: Color(red: 0xE6/255, green: 0xED/255, blue: 0xF3/255)
+    )
+
+    static let solarizedDark = SyntaxTheme(
+        name: "Solarized Dark",
+        keyword: Color(red: 0x85/255, green: 0x99/255, blue: 0x00/255),
+        string: Color(red: 0x2A/255, green: 0xA1/255, blue: 0x98/255),
+        comment: Color(red: 0x58/255, green: 0x6E/255, blue: 0x75/255),
+        number: Color(red: 0xD3/255, green: 0x36/255, blue: 0x82/255),
+        type: Color(red: 0xB5/255, green: 0x89/255, blue: 0x00/255),
+        function: Color(red: 0x26/255, green: 0x8B/255, blue: 0xD2/255),
+        operator: Color(red: 0xCB/255, green: 0x4B/255, blue: 0x16/255),
+        background: Color(red: 0x00/255, green: 0x2B/255, blue: 0x36/255),
+        foreground: Color(red: 0x83/255, green: 0x94/255, blue: 0x96/255)
+    )
+
+    static let availableThemes: [String: SyntaxTheme] = [
+        "Monokai": .monokai,
+        "Dracula": .dracula,
+        "GitHub Dark": .githubDark,
+        "Solarized Dark": .solarizedDark
+    ]
+
+    static let themeNames: [String] = ["Monokai", "Dracula", "GitHub Dark", "Solarized Dark"]
+
+    static func named(_ name: String) -> SyntaxTheme {
+        availableThemes[name] ?? .monokai
+    }
+}
+
 private struct SyntaxHighlighter {
     private static let swiftKeywords: Set<String> = [
         "func", "let", "var", "if", "else", "for", "while", "return", "import",
@@ -2614,20 +2694,14 @@ private struct SyntaxHighlighter {
         }
     }
 
-    static let keywordColor = Color(red: 0xFF/255, green: 0xAF/255, blue: 0x40/255)
-    static let stringColor = Color(red: 0x4E/255, green: 0xC9/255, blue: 0x78/255)
-    static let commentColor = Color(red: 0x6A/255, green: 0x6A/255, blue: 0x80/255)
-    static let numberColor = Color(red: 0xC0/255, green: 0x7E/255, blue: 0xF0/255)
-    static let typeColor = Color(red: 0x50/255, green: 0xC8/255, blue: 0xC8/255)
-
-    static func highlight(_ code: String, language: String) -> AttributedString {
+    static func highlight(_ code: String, language: String, theme: SyntaxTheme = .monokai) -> AttributedString {
         var result = AttributedString(code)
         let fullNS = code as NSString
         let fullRange = NSRange(location: 0, length: fullNS.length)
         let kw = keywords(for: language)
 
         result.font = .system(size: 12, design: .monospaced)
-        result.foregroundColor = Color(red: 0xD4/255, green: 0xD4/255, blue: 0xDA/255)
+        result.foregroundColor = theme.foreground
 
         var protectedRanges: [NSRange] = []
 
@@ -2635,7 +2709,7 @@ private struct SyntaxHighlighter {
         if let regex = try? NSRegularExpression(pattern: #"/\*[\s\S]*?\*/"#, options: [.dotMatchesLineSeparators]) {
             for match in regex.matches(in: code, range: fullRange) {
                 if let swiftRange = Range(match.range, in: code) {
-                    applyColor(to: &result, in: code, swiftRange: swiftRange, color: commentColor)
+                    applyColor(to: &result, in: code, swiftRange: swiftRange, color: theme.comment)
                     protectedRanges.append(match.range)
                 }
             }
@@ -2654,7 +2728,7 @@ private struct SyntaxHighlighter {
                 for match in regex.matches(in: code, range: fullRange) {
                     if isProtected(match.range, by: protectedRanges) { continue }
                     if let swiftRange = Range(match.range, in: code) {
-                        applyColor(to: &result, in: code, swiftRange: swiftRange, color: commentColor)
+                        applyColor(to: &result, in: code, swiftRange: swiftRange, color: theme.comment)
                         protectedRanges.append(match.range)
                     }
                 }
@@ -2667,7 +2741,7 @@ private struct SyntaxHighlighter {
                 for match in regex.matches(in: code, range: fullRange) {
                     if isProtected(match.range, by: protectedRanges) { continue }
                     if let swiftRange = Range(match.range, in: code) {
-                        applyColor(to: &result, in: code, swiftRange: swiftRange, color: stringColor)
+                        applyColor(to: &result, in: code, swiftRange: swiftRange, color: theme.string)
                         protectedRanges.append(match.range)
                     }
                 }
@@ -2679,7 +2753,7 @@ private struct SyntaxHighlighter {
             for match in regex.matches(in: code, range: fullRange) {
                 if isProtected(match.range, by: protectedRanges) { continue }
                 if let swiftRange = Range(match.range, in: code) {
-                    applyColor(to: &result, in: code, swiftRange: swiftRange, color: numberColor)
+                    applyColor(to: &result, in: code, swiftRange: swiftRange, color: theme.number)
                 }
             }
         }
@@ -2692,7 +2766,7 @@ private struct SyntaxHighlighter {
                 for match in regex.matches(in: code, range: fullRange) {
                     if isProtected(match.range, by: protectedRanges) { continue }
                     if let swiftRange = Range(match.range, in: code) {
-                        applyColor(to: &result, in: code, swiftRange: swiftRange, color: keywordColor)
+                        applyColor(to: &result, in: code, swiftRange: swiftRange, color: theme.keyword)
                     }
                 }
             }
@@ -2705,7 +2779,21 @@ private struct SyntaxHighlighter {
                 if let swiftRange = Range(match.range, in: code) {
                     let word = String(code[swiftRange])
                     if !kw.contains(word) {
-                        applyColor(to: &result, in: code, swiftRange: swiftRange, color: typeColor)
+                        applyColor(to: &result, in: code, swiftRange: swiftRange, color: theme.type)
+                    }
+                }
+            }
+        }
+
+        // Function calls: identifier followed by (
+        if let regex = try? NSRegularExpression(pattern: #"\b([a-zA-Z_]\w*)\s*\("#, options: []) {
+            for match in regex.matches(in: code, range: fullRange) {
+                let nameRange = match.range(at: 1)
+                if isProtected(nameRange, by: protectedRanges) { continue }
+                if let swiftRange = Range(nameRange, in: code) {
+                    let word = String(code[swiftRange])
+                    if !kw.contains(word) {
+                        applyColor(to: &result, in: code, swiftRange: swiftRange, color: theme.function)
                     }
                 }
             }
@@ -2761,7 +2849,9 @@ struct CodeBlockView: View {
     let language: String
     @State private var copied = false
     @State private var isExpanded = true
+    @AppStorage("syntaxTheme") private var syntaxThemeName: String = "Monokai"
 
+    private var currentTheme: SyntaxTheme { SyntaxTheme.named(syntaxThemeName) }
     private var lines: [String] { code.components(separatedBy: "\n") }
     private var lineCount: Int { lines.count }
     private var lineNumberWidth: CGFloat {
@@ -2866,7 +2956,7 @@ struct CodeBlockView: View {
                             .frame(width: 1)
                             .padding(.trailing, 10)
 
-                        Text(SyntaxHighlighter.highlight(code, language: language))
+                        Text(SyntaxHighlighter.highlight(code, language: language, theme: currentTheme))
                             .textSelection(.enabled)
                             .lineSpacing(0)
                             .fixedSize(horizontal: true, vertical: false)
@@ -2885,10 +2975,10 @@ struct CodeBlockView: View {
                         .padding(.vertical, 8)
                     Spacer()
                 }
-                .background(Color(red: 16/255, green: 16/255, blue: 22/255))
+                .background(currentTheme.background)
             }
         }
-        .background(Color(red: 16/255, green: 16/255, blue: 22/255))
+        .background(currentTheme.background)
         .clipShape(RoundedRectangle(cornerRadius: 10))
         .overlay(
             RoundedRectangle(cornerRadius: 10)

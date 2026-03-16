@@ -403,6 +403,8 @@ class AppState: ObservableObject {
     @AppStorage("textToSpeechEnabled") var textToSpeechEnabled: Bool = true
     @AppStorage("sidebarWidth") var sidebarWidth: Double = 280
     @AppStorage("chatFontSize") var chatFontSize: Double = 13.0
+    @AppStorage("syntaxTheme") var syntaxTheme: String = "Monokai"
+    @AppStorage("autoScrollEnabled") var autoScrollEnabled: Bool = true
 
     // MARK: - Dashboard Customization
 
@@ -758,6 +760,14 @@ class AppState: ObservableObject {
     @Published var showArchived: Bool = false
     @Published var showRawMarkdown: Bool = false
     @Published var filterTag: String?
+    @Published var selectedFilterTags: Set<String> = []
+    @Published var tagColors: [String: String] = {
+        (UserDefaults.standard.dictionary(forKey: "tagColors") as? [String: String]) ?? [:]
+    }() {
+        didSet {
+            UserDefaults.standard.set(tagColors, forKey: "tagColors")
+        }
+    }
     @Published var notifications: [AppNotification] = []
     @Published var showNotificationPanel: Bool = false
     @Published var selectedModel: String = "anthropic/claude-sonnet-4-20250514"
@@ -2065,6 +2075,71 @@ class AppState: ObservableObject {
         }
         if let updated = conversations.first(where: { $0.id == conversationId }) {
             service.saveConversation(updated)
+        }
+    }
+
+    func allUniqueTags() -> [String] {
+        Array(Set(conversations.flatMap { $0.tags })).sorted()
+    }
+
+    /// Predefined tag color palette
+    static let tagColorPalette: [(name: String, color: Color)] = [
+        ("red", .red), ("orange", .orange), ("yellow", .yellow), ("green", .green),
+        ("blue", .blue), ("purple", .purple), ("pink", .pink), ("gray", .gray)
+    ]
+
+    func tagColor(for tag: String) -> Color {
+        if let colorName = tagColors[tag],
+           let match = Self.tagColorPalette.first(where: { $0.name == colorName }) {
+            return match.color
+        }
+        // Fallback: assign based on index in sorted unique tags
+        let sorted = allUniqueTags()
+        if let idx = sorted.firstIndex(of: tag) {
+            return Self.tagColorPalette[idx % Self.tagColorPalette.count].color
+        }
+        return .gray
+    }
+
+    func renameTag(from oldName: String, to newName: String) {
+        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, oldName != trimmed else { return }
+        for idx in conversations.indices {
+            if let tagIdx = conversations[idx].tags.firstIndex(of: oldName) {
+                conversations[idx].tags[tagIdx] = trimmed
+                service.saveConversation(conversations[idx])
+            }
+        }
+        if let tagIdx = activeConversation?.tags.firstIndex(of: oldName) {
+            activeConversation?.tags[tagIdx] = trimmed
+        }
+        // Migrate color mapping
+        if let color = tagColors[oldName] {
+            tagColors.removeValue(forKey: oldName)
+            tagColors[trimmed] = color
+        }
+        // Migrate filter selection
+        if selectedFilterTags.contains(oldName) {
+            selectedFilterTags.remove(oldName)
+            selectedFilterTags.insert(trimmed)
+        }
+        if filterTag == oldName {
+            filterTag = trimmed
+        }
+    }
+
+    func deleteTag(_ tag: String) {
+        for idx in conversations.indices {
+            if conversations[idx].tags.contains(tag) {
+                conversations[idx].tags.removeAll { $0 == tag }
+                service.saveConversation(conversations[idx])
+            }
+        }
+        activeConversation?.tags.removeAll { $0 == tag }
+        tagColors.removeValue(forKey: tag)
+        selectedFilterTags.remove(tag)
+        if filterTag == tag {
+            filterTag = nil
         }
     }
 
