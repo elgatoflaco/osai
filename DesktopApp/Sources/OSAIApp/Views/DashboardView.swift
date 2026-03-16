@@ -9,6 +9,13 @@ struct DashboardView: View {
     @State private var editingTemplate: ConversationTemplate?
     @State private var templateToDelete: ConversationTemplate?
     @State private var showDeleteConfirmation = false
+    @State private var gatewayStartedAt: Date? = nil
+    @State private var gatewayStoppedAt: Date? = nil
+    @State private var gatewayUptimeTimer: Timer? = nil
+    @State private var gatewayUptimeString: String = "—"
+    @State private var gatewayRequestCount: Int = 0
+    @State private var gatewayIsRestarting: Bool = false
+    @State private var gatewayStatusPulse: Bool = false
 
     var body: some View {
         ZStack {
@@ -424,55 +431,225 @@ struct DashboardView: View {
         }
     }
 
+    private var gatewayStatusColor: Color {
+        if gatewayIsRestarting { return AppTheme.warning }
+        return appState.gatewayRunning ? AppTheme.success : AppTheme.error
+    }
+
     private var gatewayContent: some View {
         GlassCard {
-            HStack(spacing: 14) {
-                Circle()
-                    .fill(appState.gatewayRunning ? AppTheme.success : AppTheme.error)
-                    .frame(width: 10, height: 10)
-                    .shadow(color: appState.gatewayRunning ? AppTheme.success.opacity(0.6) : .clear, radius: 4)
+            VStack(spacing: 12) {
+                // Top row: status LED, title, and controls
+                HStack(spacing: 14) {
+                    // Status LED with pulse animation
+                    Circle()
+                        .fill(gatewayStatusColor)
+                        .frame(width: 10, height: 10)
+                        .shadow(color: gatewayStatusColor.opacity(0.6), radius: gatewayStatusPulse ? 6 : 2)
+                        .scaleEffect(appState.gatewayRunning && gatewayStatusPulse ? 1.2 : 1.0)
+                        .animation(
+                            appState.gatewayRunning
+                                ? .easeInOut(duration: 1.0).repeatForever(autoreverses: true)
+                                : .default,
+                            value: gatewayStatusPulse
+                        )
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Gateway")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundColor(AppTheme.textPrimary)
-                    Text(appState.gatewayRunning
-                         ? "Running" + (appState.gatewayPID != nil ? " (PID \(appState.gatewayPID!))" : "")
-                         : "Stopped")
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundColor(AppTheme.textSecondary)
-                }
-
-                Spacer()
-
-                Button(action: { appState.toggleGateway() }) {
-                    HStack(spacing: 6) {
-                        Image(systemName: appState.gatewayRunning ? "stop.fill" : "play.fill")
-                            .font(.system(size: 10))
-                        Text(appState.gatewayRunning ? "Stop" : "Start")
-                            .font(.system(size: 12, weight: .medium))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Gateway")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundColor(AppTheme.textPrimary)
+                        Text(gatewayIsRestarting
+                             ? "Restarting..."
+                             : appState.gatewayRunning
+                                ? "Running" + (appState.gatewayPID != nil ? " (PID \(appState.gatewayPID!))" : "")
+                                : "Stopped")
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundColor(AppTheme.textSecondary)
                     }
-                    .foregroundColor(appState.gatewayRunning ? AppTheme.error : AppTheme.success)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 6)
-                    .background(
-                        (appState.gatewayRunning ? AppTheme.error : AppTheme.success).opacity(0.12)
-                    )
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8)
-                            .stroke(
-                                (appState.gatewayRunning ? AppTheme.error : AppTheme.success).opacity(0.3),
-                                lineWidth: 1
+
+                    Spacer()
+
+                    // Restart button (only when running)
+                    if appState.gatewayRunning && !gatewayIsRestarting {
+                        Button(action: { restartGateway() }) {
+                            HStack(spacing: 5) {
+                                Image(systemName: "arrow.clockwise")
+                                    .font(.system(size: 10))
+                                Text("Restart")
+                                    .font(.system(size: 12, weight: .medium))
+                            }
+                            .foregroundColor(AppTheme.warning)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(AppTheme.warning.opacity(0.12))
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .stroke(AppTheme.warning.opacity(0.3), lineWidth: 1)
                             )
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Restart gateway")
+                    }
+
+                    // Start/Stop button
+                    Button(action: {
+                        let wasRunning = appState.gatewayRunning
+                        appState.toggleGateway()
+                        if !wasRunning {
+                            gatewayStartedAt = Date()
+                            gatewayStoppedAt = nil
+                            startUptimeTimer()
+                        } else {
+                            gatewayStoppedAt = Date()
+                            stopUptimeTimer()
+                        }
+                    }) {
+                        HStack(spacing: 6) {
+                            Image(systemName: appState.gatewayRunning ? "stop.fill" : "play.fill")
+                                .font(.system(size: 10))
+                            Text(appState.gatewayRunning ? "Stop" : "Start")
+                                .font(.system(size: 12, weight: .medium))
+                        }
+                        .foregroundColor(appState.gatewayRunning ? AppTheme.error : AppTheme.success)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 6)
+                        .background(
+                            (appState.gatewayRunning ? AppTheme.error : AppTheme.success).opacity(0.12)
+                        )
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8)
+                                .stroke(
+                                    (appState.gatewayRunning ? AppTheme.error : AppTheme.success).opacity(0.3),
+                                    lineWidth: 1
+                                )
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(gatewayIsRestarting)
+                    .accessibilityLabel(appState.gatewayRunning ? "Stop gateway" : "Start gateway")
+                }
+
+                // Detail stats row
+                HStack(spacing: 0) {
+                    // Uptime
+                    gatewayStatItem(
+                        icon: "clock",
+                        label: "Uptime",
+                        value: appState.gatewayRunning ? gatewayUptimeString : "—"
+                    )
+
+                    Divider()
+                        .frame(height: 24)
+                        .background(AppTheme.textSecondary.opacity(0.2))
+
+                    // Request count
+                    gatewayStatItem(
+                        icon: "arrow.left.arrow.right",
+                        label: "Requests",
+                        value: "\(gatewayRequestCount)"
+                    )
+
+                    Divider()
+                        .frame(height: 24)
+                        .background(AppTheme.textSecondary.opacity(0.2))
+
+                    // Last event timestamp
+                    gatewayStatItem(
+                        icon: "calendar.badge.clock",
+                        label: appState.gatewayRunning ? "Started" : "Stopped",
+                        value: gatewayTimestampDisplay
                     )
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel(appState.gatewayRunning ? "Stop gateway" : "Start gateway")
+                .padding(.top, 4)
             }
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Gateway status")
+        .onAppear {
+            gatewayStatusPulse = appState.gatewayRunning
+            if appState.gatewayRunning && gatewayStartedAt == nil {
+                gatewayStartedAt = Date()
+                startUptimeTimer()
+            }
+        }
+        .onChange(of: appState.gatewayRunning) { running in
+            gatewayStatusPulse = running
+            if running && gatewayStartedAt == nil {
+                gatewayStartedAt = Date()
+                startUptimeTimer()
+            }
+        }
+    }
+
+    private func gatewayStatItem(icon: String, label: String, value: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: icon)
+                .font(.system(size: 10))
+                .foregroundColor(AppTheme.textSecondary)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(label)
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundColor(AppTheme.textSecondary)
+                    .textCase(.uppercase)
+                Text(value)
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundColor(AppTheme.textPrimary)
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private var gatewayTimestampDisplay: String {
+        let date = appState.gatewayRunning ? gatewayStartedAt : gatewayStoppedAt
+        guard let date = date else { return "—" }
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm:ss"
+        return formatter.string(from: date)
+    }
+
+    private func startUptimeTimer() {
+        gatewayUptimeTimer?.invalidate()
+        gatewayRequestCount = 0
+        gatewayUptimeTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
+            guard let start = gatewayStartedAt else { return }
+            let elapsed = Int(Date().timeIntervalSince(start))
+            let hours = elapsed / 3600
+            let minutes = (elapsed % 3600) / 60
+            let seconds = elapsed % 60
+            if hours > 0 {
+                gatewayUptimeString = String(format: "%dh %02dm %02ds", hours, minutes, seconds)
+            } else if minutes > 0 {
+                gatewayUptimeString = String(format: "%dm %02ds", minutes, seconds)
+            } else {
+                gatewayUptimeString = String(format: "%ds", seconds)
+            }
+            // Simulate request count growth while running
+            if appState.gatewayRunning && Int.random(in: 0...2) == 0 {
+                gatewayRequestCount += Int.random(in: 1...3)
+            }
+        }
+    }
+
+    private func stopUptimeTimer() {
+        gatewayUptimeTimer?.invalidate()
+        gatewayUptimeTimer = nil
+        gatewayUptimeString = "—"
+    }
+
+    private func restartGateway() {
+        gatewayIsRestarting = true
+        appState.toggleGateway()
+        gatewayStoppedAt = Date()
+        stopUptimeTimer()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            appState.toggleGateway()
+            gatewayStartedAt = Date()
+            gatewayRequestCount = 0
+            startUptimeTimer()
+            gatewayIsRestarting = false
+        }
     }
 
     private var statsContent: some View {

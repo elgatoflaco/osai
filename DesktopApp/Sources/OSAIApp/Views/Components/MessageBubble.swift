@@ -5567,6 +5567,14 @@ struct RichTextView: View {
                     .lineSpacing(lineSpacingValue)
                     .textSelection(.enabled)
                     .environment(\.openURL, OpenURLAction { url in
+                        if url.scheme == "osai-copy",
+                           let encoded = url.host,
+                           let data = Data(base64Encoded: encoded),
+                           let code = String(data: data, encoding: .utf8) {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(code, forType: .string)
+                            return .handled
+                        }
                         NSWorkspace.shared.open(url)
                         return .handled
                     })
@@ -5641,6 +5649,14 @@ struct RichTextView: View {
             Text(combined)
                 .lineSpacing(lineSpacingValue).textSelection(.enabled)
                 .environment(\.openURL, OpenURLAction { url in
+                    if url.scheme == "osai-copy",
+                       let encoded = url.host,
+                       let data = Data(base64Encoded: encoded),
+                       let code = String(data: data, encoding: .utf8) {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(code, forType: .string)
+                        return .handled
+                    }
                     NSWorkspace.shared.open(url)
                     return .handled
                 })
@@ -5662,21 +5678,28 @@ struct RichTextView: View {
                         combined.append(attr)
                     }
                 case .code(let c):
-                    var space = AttributedString("\u{200A}")
-                    space.font = .system(size: 2)
-                    combined.append(space)
-                    var attr = AttributedString(c)
-                    attr.font = .system(size: codeInlineFontSize, design: .monospaced)
-                    attr.foregroundColor = AppTheme.accent
-                    attr.backgroundColor = AppTheme.bgCard
-                    combined.append(attr)
-                    combined.append(space)
+                    let pad = Self.inlineCodePadding(fontSize: codeInlineFontSize)
+                    combined.append(pad)
+                    var styled = Self.styledInlineCode(c, fontSize: codeInlineFontSize)
+                    if let copyURL = Self.copyLinkForInlineCode(c) {
+                        styled.link = copyURL
+                    }
+                    combined.append(styled)
+                    combined.append(pad)
                 }
                 return combined
             }
             Text(combined)
                 .lineSpacing(lineSpacingValue).textSelection(.enabled)
                 .environment(\.openURL, OpenURLAction { url in
+                    if url.scheme == "osai-copy",
+                       let encoded = url.host,
+                       let data = Data(base64Encoded: encoded),
+                       let code = String(data: data, encoding: .utf8) {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(code, forType: .string)
+                        return .handled
+                    }
                     NSWorkspace.shared.open(url)
                     return .handled
                 })
@@ -5710,15 +5733,14 @@ struct RichTextView: View {
                 if ch == "`" {
                     if inCode {
                         if !current.isEmpty {
-                            var attr = AttributedString(current)
-                            attr.font = .system(size: codeSize, design: .monospaced)
-                            attr.foregroundColor = AppTheme.accent
-                            attr.backgroundColor = AppTheme.bgCard
-                            var space = AttributedString("\u{200A}")
-                            space.font = .system(size: 2)
-                            result.append(space)
-                            result.append(attr)
-                            result.append(space)
+                            let pad = inlineCodePadding(fontSize: codeSize)
+                            result.append(pad)
+                            var styled = styledInlineCode(current, fontSize: codeSize)
+                            if let copyURL = copyLinkForInlineCode(current) {
+                                styled.link = copyURL
+                            }
+                            result.append(styled)
+                            result.append(pad)
                         }
                         current = ""
                         inCode = false
@@ -5797,6 +5819,86 @@ struct RichTextView: View {
     private enum InlineSegment {
         case text(String)
         case code(String)
+    }
+
+    // MARK: - Inline Code Styling
+
+    /// Keywords to highlight inside inline code spans
+    private static let inlineCodeKeywords: Set<String> = [
+        "if", "else", "return", "func", "var", "let", "class", "import",
+        "for", "while", "switch", "case", "struct", "enum", "guard",
+        "true", "false", "nil", "self", "throw", "try", "catch", "async", "await"
+    ]
+
+    /// Builds a syntax-colored AttributedString for inline code content.
+    /// Applies monospaced font, background, and syntax-aware coloring for keywords, strings, and numbers.
+    private static func styledInlineCode(_ code: String, fontSize: CGFloat) -> AttributedString {
+        let keywordColor = Color(red: 0.68, green: 0.51, blue: 0.98)  // purple
+        let stringColor = Color(red: 0.40, green: 0.78, blue: 0.45)   // green
+        let numberColor = Color(red: 0.95, green: 0.65, blue: 0.30)   // orange
+        let defaultColor = AppTheme.textPrimary
+
+        // Tokenize with regex: strings, numbers, words, other
+        let tokenPattern = #"\"[^\"]*\"|'[^']*'|\b\d+(?:\.\d+)?\b|\b[A-Za-z_]\w*\b|[^\s\w]|\s+"#
+        guard let regex = try? NSRegularExpression(pattern: tokenPattern, options: []) else {
+            var attr = AttributedString(code)
+            attr.font = .system(size: fontSize, design: .monospaced)
+            attr.foregroundColor = defaultColor
+            attr.backgroundColor = AppTheme.bgSecondary
+            return attr
+        }
+
+        let nsCode = code as NSString
+        let range = NSRange(location: 0, length: nsCode.length)
+        let matches = regex.matches(in: code, range: range)
+
+        var result = AttributedString()
+        for match in matches {
+            let token = nsCode.substring(with: match.range)
+            var attr = AttributedString(token)
+            attr.font = .system(size: fontSize, weight: .medium, design: .monospaced)
+            attr.backgroundColor = AppTheme.bgSecondary
+
+            if (token.hasPrefix("\"") && token.hasSuffix("\"")) ||
+               (token.hasPrefix("'") && token.hasSuffix("'")) {
+                attr.foregroundColor = stringColor
+            } else if let first = token.first, (first.isNumber || (first == "." && token.count > 1)) {
+                attr.foregroundColor = numberColor
+            } else if inlineCodeKeywords.contains(token) {
+                attr.foregroundColor = keywordColor
+                attr.font = .system(size: fontSize, weight: .semibold, design: .monospaced)
+            } else {
+                attr.foregroundColor = defaultColor
+            }
+            result.append(attr)
+        }
+
+        // If regex missed characters, fallback
+        if result.characters.isEmpty && !code.isEmpty {
+            var attr = AttributedString(code)
+            attr.font = .system(size: fontSize, weight: .medium, design: .monospaced)
+            attr.foregroundColor = defaultColor
+            attr.backgroundColor = AppTheme.bgSecondary
+            return attr
+        }
+
+        return result
+    }
+
+    /// Builds padding and bookend spaces for inline code spans
+    private static func inlineCodePadding(fontSize: CGFloat) -> AttributedString {
+        var space = AttributedString("\u{2005}")  // four-per-em space for visual padding
+        space.font = .system(size: fontSize * 0.5)
+        space.backgroundColor = AppTheme.bgSecondary
+        return space
+    }
+
+    /// Wraps inline code as a tappable link that copies to clipboard when clicked.
+    /// Uses a custom URL scheme: osai-copy://base64(code)
+    private static func copyLinkForInlineCode(_ code: String) -> URL? {
+        guard let data = code.data(using: .utf8) else { return nil }
+        let encoded = data.base64EncodedString()
+        return URL(string: "osai-copy://\(encoded)")
     }
 
     /// Splits text into alternating text and inline code segments

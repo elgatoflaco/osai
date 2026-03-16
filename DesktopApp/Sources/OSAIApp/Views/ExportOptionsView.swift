@@ -11,6 +11,7 @@ struct ExportOptionsView: View {
     @State private var includeTimestamps = true
     @State private var includeToolActivities = true
     @State private var includeTokenStats = true
+    @State private var showPreview = true
 
     private var options: AppState.ExportOptions {
         AppState.ExportOptions(
@@ -29,6 +30,78 @@ struct ExportOptionsView: View {
         let content = exportContent
         if content.count <= 500 { return content }
         return String(content.prefix(500)) + "\n..."
+    }
+
+    @ViewBuilder
+    private var previewContent: some View {
+        switch format {
+        case .markdown:
+            markdownPreview
+        case .json:
+            Text(previewText)
+                .font(AppTheme.fontMono)
+                .foregroundColor(AppTheme.accent)
+        case .plainText:
+            Text(previewText)
+                .font(AppTheme.fontBody)
+                .foregroundColor(AppTheme.textPrimary)
+        case .html:
+            Text(previewText)
+                .font(AppTheme.fontMono)
+                .foregroundColor(AppTheme.textSecondary)
+        }
+    }
+
+    @ViewBuilder
+    private var markdownPreview: some View {
+        let lines = previewText.components(separatedBy: "\n")
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                if line.hasPrefix("# ") {
+                    Text(line.dropFirst(2))
+                        .font(.system(size: 16, weight: .bold, design: .rounded))
+                        .foregroundColor(AppTheme.textPrimary)
+                        .padding(.bottom, 2)
+                } else if line.hasPrefix("## ") {
+                    Text(line.dropFirst(3))
+                        .font(.system(size: 14, weight: .semibold, design: .rounded))
+                        .foregroundColor(AppTheme.textPrimary)
+                        .padding(.bottom, 1)
+                } else if line.hasPrefix("### ") {
+                    Text(line.dropFirst(4))
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(AppTheme.textSecondary)
+                } else if line.hasPrefix("- ") || line.hasPrefix("* ") {
+                    HStack(alignment: .top, spacing: 6) {
+                        Text("\u{2022}")
+                            .foregroundColor(AppTheme.accent)
+                        Text(line.dropFirst(2))
+                            .font(AppTheme.fontBody)
+                            .foregroundColor(AppTheme.textPrimary)
+                    }
+                } else if line.hasPrefix("```") {
+                    Text(line)
+                        .font(AppTheme.fontMono)
+                        .foregroundColor(AppTheme.textMuted)
+                } else if line.hasPrefix("> ") {
+                    Text(line.dropFirst(2))
+                        .font(.system(size: 13, weight: .regular, design: .serif))
+                        .foregroundColor(AppTheme.textSecondary)
+                        .padding(.leading, 8)
+                        .overlay(alignment: .leading) {
+                            Rectangle()
+                                .fill(AppTheme.accent.opacity(0.4))
+                                .frame(width: 3)
+                        }
+                } else if line.trimmingCharacters(in: .whitespaces).isEmpty {
+                    Spacer().frame(height: 4)
+                } else {
+                    Text(line)
+                        .font(AppTheme.fontBody)
+                        .foregroundColor(AppTheme.textPrimary)
+                }
+            }
+        }
     }
 
     /// Estimates byte size of the export and returns a human-readable string.
@@ -134,23 +207,43 @@ struct ExportOptionsView: View {
                             Text("\(exportContent.count) chars")
                                 .font(.system(size: 10, design: .monospaced))
                                 .foregroundColor(AppTheme.textMuted)
+                            Button(action: {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    showPreview.toggle()
+                                }
+                            }) {
+                                HStack(spacing: 4) {
+                                    Image(systemName: showPreview ? "eye.fill" : "eye.slash")
+                                        .font(.system(size: 10))
+                                    Text(showPreview ? "Hide" : "Show")
+                                        .font(.system(size: 10, weight: .medium))
+                                }
+                                .foregroundColor(AppTheme.accent)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 3)
+                                .background(AppTheme.accent.opacity(0.1))
+                                .clipShape(RoundedRectangle(cornerRadius: 6))
+                            }
+                            .buttonStyle(.plain)
                         }
 
-                        ScrollView {
-                            Text(previewText)
-                                .font(AppTheme.fontMono)
-                                .foregroundColor(AppTheme.textSecondary)
-                                .textSelection(.enabled)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(AppTheme.paddingSm)
+                        if showPreview {
+                            ScrollView {
+                                previewContent
+                                    .textSelection(.enabled)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(AppTheme.paddingSm)
+                            }
+                            .frame(height: 160)
+                            .background(.ultraThinMaterial)
+                            .background(AppTheme.bgGlass)
+                            .clipShape(RoundedRectangle(cornerRadius: AppTheme.cornerRadiusSm))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: AppTheme.cornerRadiusSm)
+                                    .stroke(AppTheme.borderGlass, lineWidth: 1)
+                            )
+                            .transition(.opacity.combined(with: .move(edge: .top)))
                         }
-                        .frame(height: 140)
-                        .background(AppTheme.bgSecondary.opacity(0.5))
-                        .clipShape(RoundedRectangle(cornerRadius: AppTheme.cornerRadiusSm))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: AppTheme.cornerRadiusSm)
-                                .stroke(AppTheme.borderGlass, lineWidth: 1)
-                        )
                     }
                 }
                 .padding(AppTheme.paddingLg)
