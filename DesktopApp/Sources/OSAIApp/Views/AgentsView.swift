@@ -2,120 +2,105 @@ import SwiftUI
 
 struct AgentsView: View {
     @EnvironmentObject var appState: AppState
-    @State private var selectedAgent: AgentInfo?
     @State private var showCreateSheet = false
-    @State private var testResult: String?
-    @State private var isTesting = false
+
+    private let columns = [
+        GridItem(.flexible(), spacing: 16),
+        GridItem(.flexible(), spacing: 16),
+    ]
 
     var body: some View {
-        HStack(spacing: 0) {
-            // Agent list
-            VStack(spacing: 0) {
-                HStack {
-                    Text("Agents")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(AppTheme.textPrimary)
+        ScrollView(.vertical, showsIndicators: false) {
+            VStack(alignment: .leading, spacing: AppTheme.paddingLg) {
+                // Header
+                HStack(alignment: .bottom) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(spacing: 10) {
+                            Image(systemName: "person.3.fill")
+                                .font(.system(size: 20))
+                                .foregroundColor(AppTheme.accent)
+                            Text("Agents")
+                                .font(AppTheme.fontTitle)
+                                .foregroundColor(AppTheme.textPrimary)
+                            Text("\(appState.agents.count)")
+                                .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                                .foregroundColor(AppTheme.accent)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 3)
+                                .background(AppTheme.accent.opacity(0.12))
+                                .clipShape(Capsule())
+                        }
 
-                    Text("(\(appState.agents.count))")
-                        .font(.system(size: 12))
+                        HStack(spacing: 4) {
+                            Image(systemName: "folder")
+                                .font(.system(size: 10))
+                            Text("~/.desktop-agent/agents/")
+                                .font(.system(size: 11, design: .monospaced))
+                        }
                         .foregroundColor(AppTheme.textMuted)
+                    }
 
                     Spacer()
 
                     Button(action: { showCreateSheet = true }) {
-                        Image(systemName: "plus")
-                            .font(.system(size: 13))
-                            .foregroundColor(AppTheme.accent)
+                        HStack(spacing: 6) {
+                            Image(systemName: "plus.circle.fill")
+                            Text("New Agent")
+                        }
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 9)
+                        .background(AppTheme.accent)
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
                     }
                     .buttonStyle(.plain)
-                    .help("Create Agent")
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 12)
-
-                Divider().background(AppTheme.borderGlass)
+                .padding(.bottom, 4)
 
                 if appState.agents.isEmpty {
-                    VStack(spacing: 12) {
-                        Spacer()
+                    // Empty state
+                    VStack(spacing: 16) {
+                        Spacer(minLength: 60)
                         Image(systemName: "person.3")
-                            .font(.system(size: 28))
+                            .font(.system(size: 48))
                             .foregroundColor(AppTheme.textMuted)
-                        Text("No agents")
-                            .font(.system(size: 12))
+                        Text("No agents configured")
+                            .font(AppTheme.fontHeadline)
+                            .foregroundColor(AppTheme.textSecondary)
+                        Text("Create an agent to get started. Each agent is a markdown file\nwith a model, triggers, and system prompt.")
+                            .font(AppTheme.fontBody)
                             .foregroundColor(AppTheme.textMuted)
-                        Button("Create one") { showCreateSheet = true }
-                            .font(.system(size: 12))
-                            .foregroundColor(AppTheme.accent)
-                            .buttonStyle(.plain)
-                        Spacer()
-                    }
-                } else {
-                    ScrollView(.vertical, showsIndicators: false) {
-                        LazyVStack(spacing: 2) {
-                            ForEach(appState.agents) { agent in
-                                AgentListRow(
-                                    agent: agent,
-                                    isSelected: selectedAgent?.id == agent.id
-                                ) {
-                                    withAnimation(.easeOut(duration: 0.2)) {
-                                        selectedAgent = agent
-                                        testResult = nil
-                                    }
-                                }
+                            .multilineTextAlignment(.center)
+                        Button(action: { showCreateSheet = true }) {
+                            HStack(spacing: 6) {
+                                Image(systemName: "plus")
+                                Text("Create your first agent")
                             }
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundColor(AppTheme.accent)
                         }
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
+                        .buttonStyle(.plain)
+                        Spacer(minLength: 60)
+                    }
+                    .frame(maxWidth: .infinity)
+                } else {
+                    // Agent cards grid
+                    LazyVGrid(columns: columns, spacing: 16) {
+                        ForEach(appState.agents) { agent in
+                            AgentCard(agent: agent, onChat: {
+                                startChatWith(agent)
+                            }, onDelete: {
+                                appState.deleteAgent(agent)
+                            })
+                        }
                     }
                 }
-            }
-            .frame(width: 240)
-            .background(AppTheme.bgSecondary.opacity(0.3))
 
-            Divider().background(AppTheme.borderGlass)
-
-            // Detail panel
-            if let agent = selectedAgent {
-                AgentDetailPanel(
-                    agent: agent,
-                    testResult: $testResult,
-                    isTesting: $isTesting,
-                    onTest: { testAgent(agent) },
-                    onDelete: {
-                        appState.deleteAgent(agent)
-                        selectedAgent = nil
-                    },
-                    onChat: {
-                        let conv = Conversation(
-                            id: UUID().uuidString,
-                            title: "Chat with \(agent.name)",
-                            messages: [],
-                            createdAt: Date(),
-                            agentName: agent.name
-                        )
-                        appState.activeConversation = conv
-                        appState.conversations.insert(conv, at: 0)
-                        appState.selectedTab = .chat
-                    }
-                )
-            } else {
-                // Empty detail
-                VStack(spacing: 16) {
-                    Spacer()
-                    Image(systemName: "person.3")
-                        .font(.system(size: 48))
-                        .foregroundColor(AppTheme.textMuted)
-                    Text("Select an agent to view details")
-                        .font(AppTheme.fontBody)
-                        .foregroundColor(AppTheme.textSecondary)
-                    Text("or create a new one")
-                        .font(AppTheme.fontCaption)
-                        .foregroundColor(AppTheme.textMuted)
-                    Spacer()
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                Spacer(minLength: 40)
             }
+            .padding(.horizontal, AppTheme.paddingXl)
+            .padding(.top, AppTheme.paddingLg)
         }
         .sheet(isPresented: $showCreateSheet) {
             CreateAgentSheet {
@@ -124,245 +109,147 @@ struct AgentsView: View {
         }
     }
 
-    private func testAgent(_ agent: AgentInfo) {
-        isTesting = true
-        testResult = nil
-        Task {
-            do {
-                let result = try await appState.service.run(args: ["--model", agent.model, "Say hello in 10 words or less"])
-                await MainActor.run {
-                    testResult = result.isEmpty ? "(empty response)" : result
-                    isTesting = false
-                }
-            } catch {
-                await MainActor.run {
-                    testResult = "Error: \(error.localizedDescription)"
-                    isTesting = false
-                }
-            }
-        }
+    private func startChatWith(_ agent: AgentInfo) {
+        let conv = Conversation(
+            id: UUID().uuidString,
+            title: "Chat with \(agent.name)",
+            messages: [],
+            createdAt: Date(),
+            agentName: agent.name
+        )
+        appState.activeConversation = conv
+        appState.conversations.insert(conv, at: 0)
+        appState.selectedTab = .chat
     }
 }
 
-// MARK: - Agent List Row
+// MARK: - Agent Card
 
-struct AgentListRow: View {
+struct AgentCard: View {
     let agent: AgentInfo
-    let isSelected: Bool
-    let onSelect: () -> Void
+    let onChat: () -> Void
+    let onDelete: () -> Void
     @State private var isHovered = false
+    @State private var showConfirmDelete = false
 
     var body: some View {
-        Button(action: onSelect) {
-            HStack(spacing: 10) {
-                GhostIcon(size: 22, animate: false, tint: agentColor(agent.name))
+        VStack(alignment: .leading, spacing: 14) {
+            // Top row: icon + name + actions
+            HStack(spacing: 12) {
+                GhostIcon(size: 36, animate: false, tint: agentColor(agent.name))
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(agent.name.capitalized)
-                        .font(.system(size: 12, weight: isSelected ? .semibold : .regular))
-                        .foregroundColor(isSelected ? AppTheme.textPrimary : AppTheme.textSecondary)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundColor(AppTheme.textPrimary)
                         .lineLimit(1)
-                    Text(agent.displayModel)
-                        .font(.system(size: 9))
+
+                    Text(agent.backendLabel)
+                        .font(.system(size: 10, weight: .medium))
                         .foregroundColor(AppTheme.textMuted)
-                        .lineLimit(1)
                 }
 
                 Spacer()
 
-                Image(systemName: agent.backendIcon)
-                    .font(.system(size: 9))
-                    .foregroundColor(AppTheme.textMuted)
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .background(
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(isSelected ? AppTheme.accent.opacity(0.12) : (isHovered ? AppTheme.bgCard.opacity(0.4) : .clear))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(isSelected ? AppTheme.accent.opacity(0.2) : .clear, lineWidth: 1)
-            )
-        }
-        .buttonStyle(.plain)
-        .onHover { isHovered = $0 }
-    }
-}
-
-// MARK: - Agent Detail Panel
-
-struct AgentDetailPanel: View {
-    let agent: AgentInfo
-    @Binding var testResult: String?
-    @Binding var isTesting: Bool
-    let onTest: () -> Void
-    let onDelete: () -> Void
-    let onChat: () -> Void
-
-    var body: some View {
-        ScrollView(.vertical, showsIndicators: false) {
-            VStack(alignment: .leading, spacing: AppTheme.paddingLg) {
-                // Header
-                HStack(spacing: 14) {
-                    GhostIcon(size: 48, animate: false, tint: agentColor(agent.name))
-
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(agent.name.capitalized)
-                            .font(AppTheme.fontTitle)
-                            .foregroundColor(AppTheme.textPrimary)
-
-                        Text(agent.description)
-                            .font(AppTheme.fontBody)
-                            .foregroundColor(AppTheme.textSecondary)
-                    }
-
-                    Spacer()
-                }
-
-                // Action buttons
-                HStack(spacing: 10) {
-                    ActionButton(label: "Chat", icon: "bubble.left", color: AppTheme.accent, action: onChat)
-                    ActionButton(label: "Test", icon: "play.circle", color: AppTheme.success, action: onTest)
-                    ActionButton(label: "Open File", icon: "doc.text", color: AppTheme.textSecondary) {
+                // Context menu for more actions
+                Menu {
+                    Button(action: {
                         let path = NSHomeDirectory() + "/.desktop-agent/agents/\(agent.name).md"
                         NSWorkspace.shared.open(URL(fileURLWithPath: path))
+                    }) {
+                        Label("Open File", systemImage: "doc.text")
                     }
-
-                    Spacer()
-
-                    Button(action: onDelete) {
-                        HStack(spacing: 4) {
-                            Image(systemName: "trash")
-                            Text("Delete")
-                        }
-                        .font(.system(size: 12))
-                        .foregroundColor(AppTheme.error)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 7)
-                        .background(AppTheme.error.opacity(0.1))
-                        .clipShape(Capsule())
+                    Divider()
+                    Button(role: .destructive, action: { showConfirmDelete = true }) {
+                        Label("Delete Agent", systemImage: "trash")
                     }
-                    .buttonStyle(.plain)
-                }
-
-                // Info cards
-                GlassCard {
-                    VStack(alignment: .leading, spacing: 12) {
-                        InfoRow(label: "Model", value: agent.model, icon: "cpu")
-                        Divider().background(AppTheme.borderGlass)
-                        InfoRow(label: "Provider", value: agent.providerName, icon: "cloud")
-                        Divider().background(AppTheme.borderGlass)
-                        InfoRow(label: "Backend", value: agent.backendLabel, icon: agent.backendIcon)
-                    }
-                }
-
-                // Triggers
-                if !agent.triggers.isEmpty {
-                    GlassCard {
-                        VStack(alignment: .leading, spacing: 10) {
-                            HStack(spacing: 6) {
-                                Image(systemName: "tag")
-                                    .font(.system(size: 12))
-                                    .foregroundColor(AppTheme.accent)
-                                Text("Triggers (\(agent.triggers.count))")
-                                    .font(.system(size: 13, weight: .semibold))
-                                    .foregroundColor(AppTheme.textPrimary)
-                            }
-
-                            FlowLayout(spacing: 6) {
-                                ForEach(agent.triggers, id: \.self) { trigger in
-                                    Text(trigger)
-                                        .font(.system(size: 11, weight: .medium))
-                                        .foregroundColor(AppTheme.textSecondary)
-                                        .padding(.horizontal, 10)
-                                        .padding(.vertical, 5)
-                                        .background(AppTheme.bgPrimary.opacity(0.4))
-                                        .clipShape(Capsule())
-                                        .overlay(
-                                            Capsule()
-                                                .stroke(AppTheme.borderGlass, lineWidth: 0.5)
-                                        )
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // System Prompt
-                if !agent.systemPrompt.isEmpty {
-                    GlassCard {
-                        VStack(alignment: .leading, spacing: 8) {
-                            HStack(spacing: 6) {
-                                Image(systemName: "text.alignleft")
-                                    .font(.system(size: 12))
-                                    .foregroundColor(AppTheme.accent)
-                                Text("System Prompt")
-                                    .font(.system(size: 13, weight: .semibold))
-                                    .foregroundColor(AppTheme.textPrimary)
-                            }
-
-                            Text(agent.systemPrompt)
-                                .font(AppTheme.fontMono)
-                                .foregroundColor(AppTheme.textSecondary)
-                                .textSelection(.enabled)
-                                .padding(10)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(AppTheme.bgPrimary.opacity(0.4))
-                                .clipShape(RoundedRectangle(cornerRadius: 8))
-                        }
-                    }
-                }
-
-                // Test result
-                if isTesting {
-                    GlassCard {
-                        HStack {
-                            ProgressView()
-                                .controlSize(.small)
-                            Text("Testing agent...")
-                                .font(AppTheme.fontBody)
-                                .foregroundColor(AppTheme.textSecondary)
-                            Spacer()
-                        }
-                    }
-                }
-
-                if let result = testResult {
-                    GlassCard {
-                        VStack(alignment: .leading, spacing: 8) {
-                            HStack(spacing: 6) {
-                                Image(systemName: "checkmark.circle")
-                                    .font(.system(size: 12))
-                                    .foregroundColor(AppTheme.success)
-                                Text("Test Result")
-                                    .font(.system(size: 13, weight: .semibold))
-                                    .foregroundColor(AppTheme.textPrimary)
-                            }
-
-                            Text(result)
-                                .font(AppTheme.fontBody)
-                                .foregroundColor(AppTheme.textSecondary)
-                                .textSelection(.enabled)
-                                .padding(10)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(AppTheme.bgPrimary.opacity(0.4))
-                                .clipShape(RoundedRectangle(cornerRadius: 8))
-                        }
-                    }
-                }
-
-                // File path
-                HStack {
-                    Text("~/.desktop-agent/agents/\(agent.name).md")
-                        .font(.system(size: 10, design: .monospaced))
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                        .font(.system(size: 14))
                         .foregroundColor(AppTheme.textMuted)
-                    Spacer()
                 }
-
-                Spacer(minLength: 40)
+                .menuStyle(.borderlessButton)
+                .frame(width: 20)
             }
-            .padding(AppTheme.paddingXl)
+
+            // Description
+            if !agent.description.isEmpty {
+                Text(agent.description)
+                    .font(AppTheme.fontBody)
+                    .foregroundColor(AppTheme.textSecondary)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            // Model pill
+            HStack(spacing: 6) {
+                Image(systemName: "cpu")
+                    .font(.system(size: 10))
+                    .foregroundColor(AppTheme.accent)
+                Text(agent.model)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundColor(AppTheme.textSecondary)
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(AppTheme.accent.opacity(0.08))
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+
+            // Trigger keywords
+            if !agent.triggers.isEmpty {
+                FlowLayout(spacing: 5) {
+                    ForEach(agent.triggers, id: \.self) { trigger in
+                        Text(trigger)
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundColor(agentColor(agent.name))
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(agentColor(agent.name).opacity(0.1))
+                            .clipShape(Capsule())
+                            .overlay(
+                                Capsule()
+                                    .stroke(agentColor(agent.name).opacity(0.2), lineWidth: 0.5)
+                            )
+                    }
+                }
+            }
+
+            Spacer(minLength: 0)
+
+            // Chat button
+            Button(action: onChat) {
+                HStack(spacing: 6) {
+                    Image(systemName: "bubble.left.fill")
+                        .font(.system(size: 11))
+                    Text("Chat with \(agent.name.capitalized)")
+                        .font(.system(size: 12, weight: .semibold))
+                }
+                .foregroundColor(.white)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 9)
+                .background(agentColor(agent.name))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(16)
+        .background(.ultraThinMaterial)
+        .background(AppTheme.bgGlass)
+        .clipShape(RoundedRectangle(cornerRadius: AppTheme.cornerRadius))
+        .overlay(
+            RoundedRectangle(cornerRadius: AppTheme.cornerRadius)
+                .stroke(isHovered ? agentColor(agent.name).opacity(0.3) : AppTheme.borderGlass, lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(isHovered ? 0.3 : 0.2), radius: isHovered ? 20 : 12, x: 0, y: isHovered ? 10 : 6)
+        .offset(y: isHovered ? -2 : 0)
+        .animation(.easeOut(duration: 0.2), value: isHovered)
+        .onHover { isHovered = $0 }
+        .alert("Delete Agent", isPresented: $showConfirmDelete) {
+            Button("Cancel", role: .cancel) {}
+            Button("Delete", role: .destructive, action: onDelete)
+        } message: {
+            Text("Are you sure you want to delete \"\(agent.name)\"? This will remove the agent file.")
         }
     }
 }

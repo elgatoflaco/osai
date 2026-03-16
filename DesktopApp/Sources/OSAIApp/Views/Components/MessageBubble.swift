@@ -4,9 +4,12 @@ import SwiftUI
 
 struct MessageBubble: View {
     let message: ChatMessage
+    var isLastAssistantMessage: Bool = false
     var onCancel: (() -> Void)?
+    var onRetry: (() -> Void)?
     @State private var appeared = false
     @State private var copied = false
+    @State private var isHovered = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -27,15 +30,22 @@ struct MessageBubble: View {
 
     private var userBubble: some View {
         HStack(alignment: .top, spacing: 8) {
-            Text(message.content)
-                .font(.system(size: 14))
-                .foregroundColor(AppTheme.textPrimary)
-                .textSelection(.enabled)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
-                .background(AppTheme.accent.opacity(0.12))
-                .clipShape(RoundedRectangle(cornerRadius: 18))
-                .overlay(RoundedRectangle(cornerRadius: 18).stroke(AppTheme.accent.opacity(0.2), lineWidth: 0.5))
+            VStack(alignment: .trailing, spacing: 3) {
+                Text(message.content)
+                    .font(.system(size: 14))
+                    .foregroundColor(AppTheme.textPrimary)
+                    .textSelection(.enabled)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                    .background(AppTheme.accent.opacity(0.12))
+                    .clipShape(RoundedRectangle(cornerRadius: 18))
+                    .overlay(RoundedRectangle(cornerRadius: 18).stroke(AppTheme.accent.opacity(0.2), lineWidth: 0.5))
+
+                Text(timeString(message.timestamp))
+                    .font(.system(size: 9))
+                    .foregroundColor(AppTheme.textMuted)
+                    .padding(.trailing, 4)
+            }
 
             Image(systemName: "person.circle.fill")
                 .font(.system(size: 26))
@@ -59,36 +69,68 @@ struct MessageBubble: View {
                     ActivityStrip(activities: message.activities, isStreaming: message.isStreaming)
                 }
 
-                // Content
-                if let toolName = message.toolName {
-                    ToolCallCard(name: toolName, result: message.toolResult ?? "")
-                } else if message.isStreaming && message.content.isEmpty {
-                    StreamingPlaceholder(hasActivities: !message.activities.isEmpty)
-                } else if !message.content.isEmpty {
-                    ResponseView(text: message.content, isStreaming: message.isStreaming)
+                // Content with hover copy button
+                ZStack(alignment: .topTrailing) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        if let toolName = message.toolName {
+                            ToolCallCard(name: toolName, result: message.toolResult ?? "")
+                        } else if message.isStreaming && message.content.isEmpty {
+                            StreamingPlaceholder(hasActivities: !message.activities.isEmpty)
+                        } else if !message.content.isEmpty {
+                            ResponseView(text: message.content, isStreaming: message.isStreaming)
+                        }
+                    }
+
+                    // Copy & retry buttons on hover
+                    if message.role == .assistant && !message.content.isEmpty && !message.isStreaming && (isHovered || copied) {
+                        HStack(spacing: 4) {
+                            Button(action: {
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString(message.content, forType: .string)
+                                copied = true
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 2) { copied = false }
+                            }) {
+                                HStack(spacing: 3) {
+                                    Image(systemName: copied ? "checkmark" : "doc.on.doc").font(.system(size: 9))
+                                    Text(copied ? "Copied" : "Copy").font(.system(size: 9))
+                                }
+                                .foregroundColor(copied ? AppTheme.success : AppTheme.textMuted)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 3)
+                                .background(AppTheme.bgCard.opacity(0.9))
+                                .clipShape(RoundedRectangle(cornerRadius: 6))
+                                .overlay(RoundedRectangle(cornerRadius: 6).stroke(AppTheme.borderGlass, lineWidth: 0.5))
+                            }
+                            .buttonStyle(.plain)
+
+                            if isLastAssistantMessage, let onRetry = onRetry {
+                                Button(action: onRetry) {
+                                    HStack(spacing: 3) {
+                                        Image(systemName: "arrow.clockwise").font(.system(size: 9))
+                                        Text("Retry").font(.system(size: 9))
+                                    }
+                                    .foregroundColor(AppTheme.textMuted)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 3)
+                                    .background(AppTheme.bgCard.opacity(0.9))
+                                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(AppTheme.borderGlass, lineWidth: 0.5))
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        .transition(.opacity)
+                    }
+                }
+                .onHover { hovering in
+                    withAnimation(.easeInOut(duration: 0.15)) { isHovered = hovering }
                 }
 
                 // Footer
                 HStack(spacing: 10) {
                     Text(timeString(message.timestamp))
-                        .font(.system(size: 10))
+                        .font(.system(size: 9))
                         .foregroundColor(AppTheme.textMuted)
-
-                    if message.role == .assistant && !message.content.isEmpty && !message.isStreaming {
-                        Button(action: {
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(message.content, forType: .string)
-                            copied = true
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { copied = false }
-                        }) {
-                            HStack(spacing: 3) {
-                                Image(systemName: copied ? "checkmark" : "doc.on.doc").font(.system(size: 9))
-                                Text(copied ? "Copied" : "Copy").font(.system(size: 9))
-                            }
-                            .foregroundColor(copied ? AppTheme.success : AppTheme.textMuted)
-                        }
-                        .buttonStyle(.plain)
-                    }
 
                     Spacer()
 
@@ -513,16 +555,38 @@ struct ClickableOutputView: View {
 struct ResponseView: View {
     let text: String
     let isStreaming: Bool
+    @State private var cursorVisible = true
 
     var body: some View {
         let sections = ResponseParser.parse(text)
         VStack(alignment: .leading, spacing: 10) {
-            ForEach(Array(sections.enumerated()), id: \.offset) { _, section in
-                sectionView(section)
+            ForEach(Array(sections.enumerated()), id: \.offset) { idx, section in
+                if isStreaming && idx == sections.count - 1 {
+                    // Last section with blinking cursor appended
+                    HStack(alignment: .lastTextBaseline, spacing: 0) {
+                        sectionView(section)
+                        if cursorVisible {
+                            Text("\u{258C}")
+                                .font(.system(size: 14))
+                                .foregroundColor(AppTheme.accent)
+                        }
+                    }
+                } else {
+                    sectionView(section)
+                }
             }
-            if isStreaming {
-                TypingIndicator().padding(.top, 2)
-            }
+        }
+        .onAppear { startCursorTimer() }
+        .onChange(of: isStreaming) { streaming in
+            if streaming { cursorVisible = true; startCursorTimer() }
+        }
+    }
+
+    private func startCursorTimer() {
+        guard isStreaming else { return }
+        Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { timer in
+            if !isStreaming { timer.invalidate(); return }
+            cursorVisible.toggle()
         }
     }
 
@@ -697,24 +761,31 @@ struct CodeBlockView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if !language.isEmpty {
-                HStack {
-                    Text(language).font(.system(size: 10, weight: .medium)).foregroundColor(AppTheme.textMuted)
-                    Spacer()
-                    Button(action: {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(code, forType: .string)
-                        copied = true
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { copied = false }
-                    }) {
+            // Header bar with language label and copy button
+            HStack {
+                Text(language.isEmpty ? "code" : language)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(AppTheme.textMuted)
+                Spacer()
+                Button(action: {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(code, forType: .string)
+                    copied = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) { copied = false }
+                }) {
+                    HStack(spacing: 3) {
                         Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                            .font(.system(size: 9)).foregroundColor(copied ? AppTheme.success : AppTheme.textMuted)
+                            .font(.system(size: 9))
+                        Text(copied ? "Copied" : "Copy")
+                            .font(.system(size: 9))
                     }
-                    .buttonStyle(.plain)
+                    .foregroundColor(copied ? AppTheme.success : AppTheme.textMuted)
                 }
-                .padding(.horizontal, 10).padding(.vertical, 5)
-                .background(AppTheme.bgPrimary.opacity(0.9))
+                .buttonStyle(.plain)
             }
+            .padding(.horizontal, 10).padding(.vertical, 5)
+            .background(AppTheme.bgPrimary.opacity(0.9))
+
             Text(code)
                 .font(.system(size: 12, design: .monospaced))
                 .foregroundColor(AppTheme.textSecondary)
@@ -825,11 +896,17 @@ struct ResponseParser {
                 let lang = String(trimmed.dropFirst(3)).trimmingCharacters(in: .whitespaces)
                 var code: [String] = []
                 i += 1
-                while i < lines.count && !lines[i].trimmingCharacters(in: .whitespaces).hasPrefix("```") {
+                var foundClose = false
+                while i < lines.count {
+                    if lines[i].trimmingCharacters(in: .whitespaces).hasPrefix("```") {
+                        foundClose = true
+                        break
+                    }
                     code.append(lines[i]); i += 1
                 }
                 sections.append(.codeBlock(code.joined(separator: "\n"), lang))
-                i += 1; continue
+                if foundClose { i += 1 }
+                continue
             }
 
             // Divider
@@ -1013,7 +1090,7 @@ struct ResponseParser {
     }
 }
 
-// MARK: - Rich Text View (markdown + clickable paths)
+// MARK: - Rich Text View (markdown + clickable paths + inline code highlighting)
 
 struct RichTextView: View {
     let text: String
@@ -1022,31 +1099,15 @@ struct RichTextView: View {
         let parts = splitByPaths(text)
         // Use a FlowLayout-like approach: if there are paths, render mixed
         if parts.count == 1, case .plain(let str) = parts[0] {
-            // Simple text, just render markdown
-            if let attributed = try? AttributedString(markdown: str, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)) {
-                Text(attributed)
-                    .font(.system(size: 14)).foregroundColor(AppTheme.textPrimary)
-                    .lineSpacing(4).textSelection(.enabled)
-            } else {
-                Text(str)
-                    .font(.system(size: 14)).foregroundColor(AppTheme.textPrimary)
-                    .lineSpacing(4).textSelection(.enabled)
-            }
+            // Simple text — render with inline code highlighting
+            inlineMarkdownText(str)
         } else {
             // Has paths — render inline
             VStack(alignment: .leading, spacing: 2) {
                 ForEach(Array(parts.enumerated()), id: \.offset) { _, part in
                     switch part {
                     case .plain(let str):
-                        if let attributed = try? AttributedString(markdown: str, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)) {
-                            Text(attributed)
-                                .font(.system(size: 14)).foregroundColor(AppTheme.textPrimary)
-                                .lineSpacing(4).textSelection(.enabled)
-                        } else {
-                            Text(str)
-                                .font(.system(size: 14)).foregroundColor(AppTheme.textPrimary)
-                                .lineSpacing(4).textSelection(.enabled)
-                        }
+                        inlineMarkdownText(str)
                     case .path(let path):
                         Button(action: {
                             let clean = path.trimmingCharacters(in: CharacterSet(charactersIn: ".,;:"))
@@ -1068,6 +1129,95 @@ struct RichTextView: View {
                 }
             }
         }
+    }
+
+    /// Renders text with AttributedString markdown and highlights inline code with a background
+    @ViewBuilder
+    private func inlineMarkdownText(_ str: String) -> some View {
+        if str.contains("`") {
+            // Split on inline code to render code spans with background
+            let segments = parseInlineCode(str)
+            let combined = segments.reduce(AttributedString()) { result, segment in
+                var combined = result
+                switch segment {
+                case .text(let t):
+                    if var attr = try? AttributedString(markdown: t, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)) {
+                        attr.font = .system(size: 14)
+                        attr.foregroundColor = AppTheme.textPrimary
+                        combined.append(attr)
+                    } else {
+                        var attr = AttributedString(t)
+                        attr.font = .system(size: 14)
+                        attr.foregroundColor = AppTheme.textPrimary
+                        combined.append(attr)
+                    }
+                case .code(let c):
+                    var attr = AttributedString(c)
+                    attr.font = .system(size: 12.5, design: .monospaced)
+                    attr.foregroundColor = AppTheme.accent
+                    attr.backgroundColor = AppTheme.bgPrimary.opacity(0.6)
+                    combined.append(attr)
+                }
+                return combined
+            }
+            Text(combined)
+                .lineSpacing(4).textSelection(.enabled)
+        } else {
+            if let attributed = try? AttributedString(markdown: str, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)) {
+                Text(attributed)
+                    .font(.system(size: 14)).foregroundColor(AppTheme.textPrimary)
+                    .lineSpacing(4).textSelection(.enabled)
+            } else {
+                Text(str)
+                    .font(.system(size: 14)).foregroundColor(AppTheme.textPrimary)
+                    .lineSpacing(4).textSelection(.enabled)
+            }
+        }
+    }
+
+    private enum InlineSegment {
+        case text(String)
+        case code(String)
+    }
+
+    /// Splits text into alternating text and inline code segments
+    private func parseInlineCode(_ text: String) -> [InlineSegment] {
+        var segments: [InlineSegment] = []
+        var current = ""
+        var inCode = false
+        var i = text.startIndex
+
+        while i < text.endIndex {
+            let ch = text[i]
+            if ch == "`" {
+                if inCode {
+                    // End of code span
+                    if !current.isEmpty { segments.append(.code(current)) }
+                    current = ""
+                    inCode = false
+                } else {
+                    // Start of code span
+                    if !current.isEmpty { segments.append(.text(current)) }
+                    current = ""
+                    inCode = true
+                }
+            } else {
+                current.append(ch)
+            }
+            i = text.index(after: i)
+        }
+
+        // Flush remaining
+        if !current.isEmpty {
+            if inCode {
+                // Unclosed backtick during streaming — render as text with the backtick
+                segments.append(.text("`" + current))
+            } else {
+                segments.append(.text(current))
+            }
+        }
+
+        return segments
     }
 
     private enum TextPart {

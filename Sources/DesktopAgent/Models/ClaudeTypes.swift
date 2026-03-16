@@ -237,12 +237,12 @@ struct AnyCodable: Codable {
         let container = try decoder.singleValueContainer()
         if let str = try? container.decode(String.self) {
             value = str
+        } else if let bool = try? container.decode(Bool.self) {
+            value = bool
         } else if let int = try? container.decode(Int.self) {
             value = int
         } else if let double = try? container.decode(Double.self) {
             value = double
-        } else if let bool = try? container.decode(Bool.self) {
-            value = bool
         } else if let dict = try? container.decode([String: AnyCodable].self) {
             value = dict.mapValues { $0.value }
         } else if let arr = try? container.decode([AnyCodable].self) {

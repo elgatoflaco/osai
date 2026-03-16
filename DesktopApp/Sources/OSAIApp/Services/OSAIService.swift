@@ -335,6 +335,9 @@ class OSAIService {
             "messages": messages
         ]
         if let agent = conv.agentName { json["agentName"] = agent }
+        if conv.isPinned { json["isPinned"] = true }
+        if conv.totalInputTokens > 0 { json["totalInputTokens"] = conv.totalInputTokens }
+        if conv.totalOutputTokens > 0 { json["totalOutputTokens"] = conv.totalOutputTokens }
 
         let path = "\(dir)/\(conv.id).json"
         if let data = try? JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted]) {
@@ -370,7 +373,10 @@ class OSAIService {
 
         return Conversation(
             id: id, title: title, messages: messages, createdAt: createdAt,
-            agentName: json["agentName"] as? String
+            agentName: json["agentName"] as? String,
+            isPinned: json["isPinned"] as? Bool ?? false,
+            totalInputTokens: json["totalInputTokens"] as? Int ?? 0,
+            totalOutputTokens: json["totalOutputTokens"] as? Int ?? 0
         )
     }
 

@@ -1,21 +1,59 @@
 import SwiftUI
+import AppKit
 
 struct AppTheme {
-    // Accent
+    // MARK: - Adaptive color helper
+    // Creates a Color that automatically switches between light and dark variants
+    // based on the current system/app appearance (driven by .preferredColorScheme).
+    private static func adaptive(light: NSColor, dark: NSColor) -> Color {
+        Color(nsColor: NSColor(name: nil) { appearance in
+            if appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua {
+                return dark
+            } else {
+                return light
+            }
+        })
+    }
+
+    // Accent — same teal/cyan in both modes
     static let accent = Color(red: 80/255, green: 200/255, blue: 200/255)
     static let accentGlow = Color(red: 80/255, green: 200/255, blue: 200/255).opacity(0.3)
 
     // Backgrounds
-    static let bgPrimary = Color(red: 10/255, green: 10/255, blue: 15/255)
-    static let bgSecondary = Color(red: 18/255, green: 18/255, blue: 26/255)
-    static let bgGlass = Color(red: 18/255, green: 18/255, blue: 26/255).opacity(0.7)
-    static let bgCard = Color(red: 24/255, green: 24/255, blue: 34/255)
-    static let borderGlass = Color(red: 80/255, green: 200/255, blue: 200/255).opacity(0.15)
+    static let bgPrimary = adaptive(
+        light: NSColor(red: 244/255, green: 244/255, blue: 247/255, alpha: 1),
+        dark:  NSColor(red: 10/255,  green: 10/255,  blue: 15/255,  alpha: 1)
+    )
+    static let bgSecondary = adaptive(
+        light: NSColor(red: 232/255, green: 232/255, blue: 237/255, alpha: 1),
+        dark:  NSColor(red: 18/255,  green: 18/255,  blue: 26/255,  alpha: 1)
+    )
+    static let bgGlass = adaptive(
+        light: NSColor(red: 255/255, green: 255/255, blue: 255/255, alpha: 0.7),
+        dark:  NSColor(red: 18/255,  green: 18/255,  blue: 26/255,  alpha: 0.7)
+    )
+    static let bgCard = adaptive(
+        light: NSColor(red: 255/255, green: 255/255, blue: 255/255, alpha: 0.85),
+        dark:  NSColor(red: 24/255,  green: 24/255,  blue: 34/255,  alpha: 1)
+    )
+    static let borderGlass = adaptive(
+        light: NSColor(red: 0, green: 0, blue: 0, alpha: 0.1),
+        dark:  NSColor(red: 80/255, green: 200/255, blue: 200/255, alpha: 0.15)
+    )
 
     // Text
-    static let textPrimary = Color(red: 232/255, green: 232/255, blue: 237/255)
-    static let textSecondary = Color(red: 136/255, green: 136/255, blue: 160/255)
-    static let textMuted = Color(red: 90/255, green: 90/255, blue: 110/255)
+    static let textPrimary = adaptive(
+        light: NSColor(red: 28/255,  green: 28/255,  blue: 30/255,  alpha: 1),
+        dark:  NSColor(red: 232/255, green: 232/255, blue: 237/255, alpha: 1)
+    )
+    static let textSecondary = adaptive(
+        light: NSColor(red: 100/255, green: 100/255, blue: 115/255, alpha: 1),
+        dark:  NSColor(red: 136/255, green: 136/255, blue: 160/255, alpha: 1)
+    )
+    static let textMuted = adaptive(
+        light: NSColor(red: 160/255, green: 160/255, blue: 175/255, alpha: 1),
+        dark:  NSColor(red: 90/255,  green: 90/255,  blue: 110/255, alpha: 1)
+    )
 
     // Semantic
     static let success = Color(red: 52/255, green: 199/255, blue: 89/255)

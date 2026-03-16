@@ -1,5 +1,38 @@
 import SwiftUI
 import Combine
+import UniformTypeIdentifiers
+
+// MARK: - Toast
+
+enum ToastType {
+    case success, error, info
+
+    var icon: String {
+        switch self {
+        case .success: return "checkmark.circle.fill"
+        case .error: return "xmark.circle.fill"
+        case .info: return "info.circle.fill"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .success: return AppTheme.success
+        case .error: return AppTheme.error
+        case .info: return AppTheme.accent
+        }
+    }
+}
+
+struct Toast: Identifiable, Equatable {
+    let id = UUID()
+    let message: String
+    let type: ToastType
+
+    static func == (lhs: Toast, rhs: Toast) -> Bool {
+        lhs.id == rhs.id
+    }
+}
 
 enum SidebarItem: String, CaseIterable, Identifiable {
     case home = "Home"
@@ -35,6 +68,7 @@ enum SidebarItem: String, CaseIterable, Identifiable {
 class AppState: ObservableObject {
     @AppStorage("isDarkMode") var isDarkMode: Bool = true
     @AppStorage("sidebarCollapsed") var sidebarCollapsed: Bool = false
+    @AppStorage("hasCompletedOnboarding") var hasCompletedOnboarding: Bool = false
 
     @Published var selectedTab: SidebarItem = .home
     @Published var agents: [AgentInfo] = []
@@ -49,13 +83,26 @@ class AppState: ObservableObject {
     @Published var costToday: Double = 0.0
     @Published var costMonth: Double = 0.0
     @Published var errorMessage: String?
+    @Published var toastMessage: Toast?
     @Published var isProcessing: Bool = false
+    @Published var shouldFocusInput: Bool = false
     @Published var contextPressurePercent: Int = 0
     private(set) var runningProcess: Process?
 
     let service = OSAIService()
     private let configService = ConfigService()
     private var refreshTimer: Timer?
+    private var toastDismissTask: Task<Void, Never>?
+
+    func showToast(_ message: String, type: ToastType = .info) {
+        toastDismissTask?.cancel()
+        toastMessage = Toast(message: message, type: type)
+        toastDismissTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(3))
+            guard !Task.isCancelled else { return }
+            self.toastMessage = nil
+        }
+    }
 
     func loadAll() {
         isLoading = true
@@ -108,14 +155,14 @@ class AppState: ObservableObject {
         }
     }
 
-    func sendMessage(_ text: String) {
+    func sendMessage(_ text: String, attachments: [URL] = []) {
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         guard !isProcessing else { return }
 
         if activeConversation == nil {
             let conv = Conversation(
                 id: UUID().uuidString,
-                title: String(text.prefix(50)),
+                title: smartTitle(from: text),
                 messages: [],
                 createdAt: Date(),
                 agentName: nil
@@ -125,7 +172,29 @@ class AppState: ObservableObject {
             selectedTab = .chat
         }
 
-        let userMsg = ChatMessage(id: UUID().uuidString, role: .user, content: text, timestamp: Date())
+        // Build message with attachment context
+        let textExtensions: Set<String> = ["swift", "py", "js", "ts", "md", "txt", "json", "yaml", "yml", "html", "css", "sh", "rb", "go", "rs", "c", "cpp", "h", "java", "kt", "toml", "xml", "csv", "log", "env", "cfg", "ini", "sql"]
+        let imageExtensions: Set<String> = ["png", "jpg", "jpeg", "gif", "bmp", "tiff", "webp", "heic"]
+
+        var fullText = ""
+        for url in attachments {
+            let ext = url.pathExtension.lowercased()
+            let name = url.lastPathComponent
+            if textExtensions.contains(ext) {
+                if let content = try? String(contentsOf: url, encoding: .utf8) {
+                    fullText += "File: \(name)\n```\n\(content)\n```\n\n"
+                } else {
+                    fullText += "[Attached: \(name)]\n\n"
+                }
+            } else if imageExtensions.contains(ext) {
+                fullText += "[Image: \(name)]\n\n"
+            } else {
+                fullText += "[Attached: \(name)]\n\n"
+            }
+        }
+        fullText += text
+
+        let userMsg = ChatMessage(id: UUID().uuidString, role: .user, content: fullText, timestamp: Date())
         activeConversation?.messages.append(userMsg)
         syncConversationToList()
 
@@ -139,11 +208,11 @@ class AppState: ObservableObject {
         let streamState = StreamState()
 
         // Build CLI args — if this conversation is tied to an agent, use --model
-        var args = [text]
+        var args = [fullText]
         if let agentName = activeConversation?.agentName,
            let agent = agents.first(where: { $0.name == agentName }),
            !agent.model.isEmpty {
-            args = ["--model", agent.model, text]
+            args = ["--model", agent.model, fullText]
         }
 
         Task {
@@ -254,8 +323,10 @@ class AppState: ObservableObject {
             )
             activeConversation?.messages[idx].activities.append(activity)
 
-        case .tokens(_, _):
-            break  // Could track for UI display later
+        case .tokens(let input, let output):
+            activeConversation?.totalInputTokens += input
+            activeConversation?.totalOutputTokens += output
+            tokensToday += input + output
 
         case .contextPressure(let percent):
             contextPressurePercent = percent
@@ -267,6 +338,7 @@ class AppState: ObservableObject {
                 state.accumulatedText += "\nError: \(message)"
             }
             activeConversation?.messages[idx].content = state.accumulatedText
+            showToast(message, type: .error)
 
         case .done:
             activeConversation?.messages[idx].isStreaming = false
@@ -300,6 +372,28 @@ class AppState: ObservableObject {
         }
     }
 
+    func retryLastMessage() {
+        guard !isProcessing else { return }
+        guard activeConversation != nil else { return }
+
+        // Find the last assistant message and remove it
+        if let lastAssistantIdx = activeConversation?.messages.lastIndex(where: { $0.role == .assistant }) {
+            activeConversation?.messages.remove(at: lastAssistantIdx)
+            syncConversationToList()
+        }
+
+        // Find the last user message content and re-send
+        if let lastUserMsg = activeConversation?.messages.last(where: { $0.role == .user }) {
+            let content = lastUserMsg.content
+            // Remove the last user message too (sendMessage will re-add it)
+            if let lastUserIdx = activeConversation?.messages.lastIndex(where: { $0.role == .user }) {
+                activeConversation?.messages.remove(at: lastUserIdx)
+                syncConversationToList()
+            }
+            sendMessage(content)
+        }
+    }
+
     func startNewChat() {
         activeConversation = nil
         selectedTab = .chat
@@ -321,24 +415,73 @@ class AppState: ObservableObject {
             activeConversation = nil
         }
         service.deleteConversation(conv.id)
+        showToast("Conversation deleted", type: .success)
+    }
+
+    func togglePin(_ conv: Conversation) {
+        if let idx = conversations.firstIndex(where: { $0.id == conv.id }) {
+            conversations[idx].isPinned.toggle()
+        }
+        if activeConversation?.id == conv.id {
+            activeConversation?.isPinned.toggle()
+        }
+        if let updated = conversations.first(where: { $0.id == conv.id }) {
+            service.saveConversation(updated)
+        }
+    }
+
+    func renameConversation(_ conv: Conversation, to newTitle: String) {
+        let trimmed = newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        if let idx = conversations.firstIndex(where: { $0.id == conv.id }) {
+            conversations[idx].title = trimmed
+        }
+        if activeConversation?.id == conv.id {
+            activeConversation?.title = trimmed
+        }
+        if let updated = conversations.first(where: { $0.id == conv.id }) {
+            service.saveConversation(updated)
+        }
+    }
+
+    /// Generate a clean, readable title from the user's first message.
+    private func smartTitle(from text: String) -> String {
+        // Clean up: collapse newlines and trim
+        let cleaned = text
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard cleaned.count > 40 else { return cleaned }
+
+        // Truncate at last word boundary before 40 chars
+        let prefix = String(cleaned.prefix(40))
+        if let lastSpace = prefix.lastIndex(of: " ") {
+            return String(prefix[prefix.startIndex..<lastSpace]) + "..."
+        }
+        return prefix + "..."
     }
 
     func toggleGateway() {
+        let wasRunning = gatewayRunning
         Task {
-            if gatewayRunning {
+            if wasRunning {
                 _ = try? await service.run(args: ["gateway", "--stop"])
             } else {
                 _ = try? await service.run(args: ["gateway", "--background"])
             }
             try? await Task.sleep(for: .seconds(1))
             refreshStatus()
+            showToast(wasRunning ? "Gateway stopped" : "Gateway started", type: .success)
         }
     }
 
     func deleteAgent(_ agent: AgentInfo) {
-        let path = NSHomeDirectory() + "/.desktop-agent/agents/\(agent.name).md"
+        let name = agent.name
+        let path = NSHomeDirectory() + "/.desktop-agent/agents/\(name).md"
         try? FileManager.default.removeItem(atPath: path)
         agents = service.loadAgents()
+        showToast("Agent \"\(name)\" deleted", type: .success)
     }
 
     // MARK: - Task CRUD
@@ -372,12 +515,14 @@ class AppState: ObservableObject {
         }
 
         tasks = service.loadTasks()
+        showToast("Task created", type: .success)
     }
 
     func deleteTask(_ task: TaskInfo) {
         let path = NSHomeDirectory() + "/.desktop-agent/tasks/\(task.id).json"
         try? FileManager.default.removeItem(atPath: path)
         tasks = service.loadTasks()
+        showToast("Task deleted", type: .success)
     }
 
     func toggleTask(_ task: TaskInfo) {
@@ -385,11 +530,13 @@ class AppState: ObservableObject {
         guard let data = FileManager.default.contents(atPath: path),
               var json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
 
-        json["enabled"] = !(task.enabled)
+        let newEnabled = !(task.enabled)
+        json["enabled"] = newEnabled
         if let newData = try? JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted]) {
             try? newData.write(to: URL(fileURLWithPath: path))
         }
         tasks = service.loadTasks()
+        showToast("Task \(newEnabled ? "enabled" : "disabled")", type: .info)
     }
 
     // MARK: - Gateway controls
@@ -423,6 +570,54 @@ class AppState: ObservableObject {
     var isGatewayAutoStart: Bool {
         let plistPath = NSHomeDirectory() + "/Library/LaunchAgents/com.osai.gateway.plist"
         return FileManager.default.fileExists(atPath: plistPath)
+    }
+
+    // MARK: - Export
+
+    func exportConversation(_ conv: Conversation) -> String {
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateStyle = .long
+        dateFormatter.timeStyle = .short
+
+        var md = "# \(conv.title)\n"
+        md += "Date: \(dateFormatter.string(from: conv.createdAt))"
+        if let agent = conv.agentName {
+            md += " | Agent: \(agent)"
+        }
+        md += "\n\n---\n"
+
+        let timeFormatter = DateFormatter()
+        timeFormatter.dateFormat = "HH:mm"
+
+        for msg in conv.messages {
+            guard msg.role == .user || msg.role == .assistant else { continue }
+            let label = msg.role == .user ? "User" : "Assistant"
+            md += "\n**\(label)** _(\(timeFormatter.string(from: msg.timestamp)))_:\n\n"
+            md += msg.content.trimmingCharacters(in: .whitespacesAndNewlines)
+            md += "\n\n---\n"
+        }
+
+        return md
+    }
+
+    func exportAndSave(_ conv: Conversation) {
+        let panel = NSSavePanel()
+        panel.title = "Export Conversation"
+        let safeName = conv.title
+            .replacingOccurrences(of: "[^a-zA-Z0-9_ -]", with: "", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        panel.nameFieldStringValue = String(safeName.prefix(60)) + ".md"
+        panel.allowedContentTypes = [.plainText]
+        panel.canCreateDirectories = true
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let markdown = exportConversation(conv)
+        do {
+            try markdown.write(to: url, atomically: true, encoding: .utf8)
+            showToast("Conversation exported", type: .success)
+        } catch {
+            showToast("Export failed: \(error.localizedDescription)", type: .error)
+        }
     }
 }
 

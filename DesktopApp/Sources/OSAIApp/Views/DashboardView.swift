@@ -24,22 +24,70 @@ struct DashboardView: View {
 
                     // Quick actions
                     HStack(spacing: 10) {
-                        QuickAction(icon: "envelope", label: "Check email") {
-                            appState.sendMessage("Check my emails")
+                        QuickAction(icon: "plus.bubble", label: "New chat") {
+                            appState.startNewChat()
                         }
-                        QuickAction(icon: "calendar", label: "Calendar") {
-                            appState.sendMessage("What's on my calendar today?")
+                        QuickAction(icon: "person.3", label: "Agents") {
+                            appState.selectedTab = .agents
                         }
-                        QuickAction(icon: "newspaper", label: "News") {
-                            appState.sendMessage("Dame un briefing de noticias de hoy")
+                        QuickAction(icon: "clock", label: "Tasks") {
+                            appState.selectedTab = .tasks
                         }
-                        QuickAction(icon: "terminal", label: "Code") {
-                            appState.selectedTab = .chat
+                        QuickAction(icon: "gearshape", label: "Settings") {
+                            appState.selectedTab = .settings
                         }
                     }
                 }
                 .padding(.top, 30)
                 .padding(.bottom, 10)
+
+                // Gateway status bar
+                GlassCard {
+                    HStack(spacing: 14) {
+                        Circle()
+                            .fill(appState.gatewayRunning ? AppTheme.success : AppTheme.error)
+                            .frame(width: 10, height: 10)
+                            .shadow(color: appState.gatewayRunning ? AppTheme.success.opacity(0.6) : .clear, radius: 4)
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Gateway")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundColor(AppTheme.textPrimary)
+                            Text(appState.gatewayRunning
+                                 ? "Running" + (appState.gatewayPID != nil ? " (PID \(appState.gatewayPID!))" : "")
+                                 : "Stopped")
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundColor(AppTheme.textSecondary)
+                        }
+
+                        Spacer()
+
+                        Button(action: { appState.toggleGateway() }) {
+                            HStack(spacing: 6) {
+                                Image(systemName: appState.gatewayRunning ? "stop.fill" : "play.fill")
+                                    .font(.system(size: 10))
+                                Text(appState.gatewayRunning ? "Stop" : "Start")
+                                    .font(.system(size: 12, weight: .medium))
+                            }
+                            .foregroundColor(appState.gatewayRunning ? AppTheme.error : AppTheme.success)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 6)
+                            .background(
+                                (appState.gatewayRunning ? AppTheme.error : AppTheme.success).opacity(0.12)
+                            )
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .stroke(
+                                        (appState.gatewayRunning ? AppTheme.error : AppTheme.success).opacity(0.3),
+                                        lineWidth: 1
+                                    )
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .frame(maxWidth: 800)
 
                 // Stats grid
                 LazyVGrid(columns: [
@@ -49,26 +97,27 @@ struct DashboardView: View {
                     GridItem(.flexible(), spacing: 14),
                 ], spacing: 14) {
                     StatCard(
+                        icon: "dollarsign.circle", label: "Cost today",
+                        value: String(format: "$%.2f", appState.costToday),
+                        color: appState.config.spendingLimits.dailyUSD > 0 && appState.costToday / appState.config.spendingLimits.dailyUSD > 0.7
+                            ? AppTheme.warning : AppTheme.accent,
+                        progress: appState.config.spendingLimits.dailyUSD > 0
+                            ? appState.costToday / appState.config.spendingLimits.dailyUSD : nil
+                    )
+                    StatCard(
                         icon: "cpu", label: "Tokens today",
                         value: formatNumber(appState.tokensToday),
                         color: AppTheme.accent
                     )
                     StatCard(
-                        icon: "dollarsign.circle", label: "Cost today",
-                        value: String(format: "$%.2f", appState.costToday),
-                        color: appState.costToday / appState.config.spendingLimits.dailyUSD > 0.7 ? AppTheme.warning : AppTheme.accent,
-                        progress: appState.config.spendingLimits.dailyUSD > 0
-                            ? appState.costToday / appState.config.spendingLimits.dailyUSD : 0
+                        icon: "bubble.left.and.bubble.right", label: "Conversations",
+                        value: "\(appState.conversations.count)",
+                        color: Color(red: 80/255, green: 120/255, blue: 200/255)
                     )
                     StatCard(
                         icon: "person.3", label: "Agents",
-                        value: "\(appState.agents.count) active",
+                        value: "\(appState.agents.count)",
                         color: Color(red: 200/255, green: 80/255, blue: 200/255)
-                    )
-                    StatCard(
-                        icon: "bolt.circle", label: "Gateway",
-                        value: appState.gatewayRunning ? "Active" : "Off",
-                        color: appState.gatewayRunning ? AppTheme.success : AppTheme.textMuted
                     )
                 }
                 .frame(maxWidth: 800)
@@ -95,132 +144,143 @@ struct DashboardView: View {
 
                 // Two-column layout
                 HStack(alignment: .top, spacing: AppTheme.paddingLg) {
-                    // Running Tasks
-                    VStack(alignment: .leading, spacing: 12) {
-                        SectionHeader(title: "Active Tasks", icon: "clock.fill")
-
-                        if appState.tasks.filter({ $0.enabled }).isEmpty {
-                            GlassCard {
-                                HStack {
-                                    Image(systemName: "clock")
-                                        .foregroundColor(AppTheme.textMuted)
-                                    Text("No active tasks")
-                                        .font(AppTheme.fontBody)
-                                        .foregroundColor(AppTheme.textSecondary)
-                                    Spacer()
-                                }
-                            }
-                        } else {
-                            ForEach(appState.tasks.filter { $0.enabled }.prefix(5)) { task in
-                                MiniTaskRow(task: task) {
-                                    appState.selectedTab = .tasks
-                                }
-                            }
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                    // Agents preview
+                    // Recent Conversations
                     VStack(alignment: .leading, spacing: 12) {
                         HStack {
-                            SectionHeader(title: "Agents", icon: "person.3.fill")
+                            SectionHeader(title: "Recent Conversations", icon: "clock.arrow.circlepath")
                             Spacer()
-                            Button(action: { appState.selectedTab = .agents }) {
-                                Text("View all")
-                                    .font(.system(size: 11))
-                                    .foregroundColor(AppTheme.accent)
+                            if !appState.conversations.isEmpty {
+                                Button(action: { appState.selectedTab = .chat }) {
+                                    Text("View all")
+                                        .font(.system(size: 11))
+                                        .foregroundColor(AppTheme.accent)
+                                }
+                                .buttonStyle(.plain)
                             }
-                            .buttonStyle(.plain)
                         }
 
-                        if appState.agents.isEmpty {
+                        if appState.conversations.isEmpty {
                             GlassCard {
                                 HStack {
-                                    Image(systemName: "person.3")
+                                    Image(systemName: "bubble.left.and.bubble.right")
                                         .foregroundColor(AppTheme.textMuted)
-                                    Text("No agents configured")
+                                    Text("No conversations yet")
                                         .font(AppTheme.fontBody)
                                         .foregroundColor(AppTheme.textSecondary)
                                     Spacer()
                                 }
                             }
                         } else {
-                            ForEach(appState.agents.prefix(5)) { agent in
-                                AgentPill(agent: agent)
-                            }
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
+                            ForEach(appState.conversations.prefix(5)) { conv in
+                                Button(action: { appState.openConversation(conv) }) {
+                                    HoverGlassCard {
+                                        HStack(spacing: 12) {
+                                            if let agent = conv.agentName {
+                                                GhostIcon(size: 20, animate: false, tint: agentColor(agent))
+                                            } else {
+                                                Image(systemName: "bubble.left")
+                                                    .font(.system(size: 14))
+                                                    .foregroundColor(AppTheme.textMuted)
+                                            }
 
-                // Recent Conversations
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack {
-                        SectionHeader(title: "Recent Conversations", icon: "clock.arrow.circlepath")
-                        Spacer()
-                        if !appState.conversations.isEmpty {
-                            Button(action: { appState.selectedTab = .chat }) {
-                                Text("View all")
-                                    .font(.system(size: 11))
-                                    .foregroundColor(AppTheme.accent)
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
+                                            VStack(alignment: .leading, spacing: 3) {
+                                                Text(conv.title)
+                                                    .font(.system(size: 13, weight: .medium))
+                                                    .foregroundColor(AppTheme.textPrimary)
+                                                    .lineLimit(1)
+                                                Text(conv.preview)
+                                                    .font(.system(size: 11))
+                                                    .foregroundColor(AppTheme.textSecondary)
+                                                    .lineLimit(1)
+                                            }
 
-                    if appState.conversations.isEmpty {
-                        HoverGlassCard {
-                            HStack {
-                                Image(systemName: "bubble.left.and.bubble.right")
-                                    .foregroundColor(AppTheme.textMuted)
-                                Text("No recent conversations — start chatting!")
-                                    .font(AppTheme.fontBody)
-                                    .foregroundColor(AppTheme.textSecondary)
-                                Spacer()
-                            }
-                        }
-                    } else {
-                        ForEach(appState.conversations.prefix(5)) { conv in
-                            Button(action: { appState.openConversation(conv) }) {
-                                HoverGlassCard {
-                                    HStack(spacing: 12) {
-                                        if let agent = conv.agentName {
-                                            GhostIcon(size: 20, animate: false, tint: agentColor(agent))
-                                        } else {
-                                            Image(systemName: "bubble.left")
-                                                .font(.system(size: 14))
-                                                .foregroundColor(AppTheme.textMuted)
-                                        }
+                                            Spacer()
 
-                                        VStack(alignment: .leading, spacing: 3) {
-                                            Text(conv.title)
-                                                .font(.system(size: 13, weight: .medium))
-                                                .foregroundColor(AppTheme.textPrimary)
-                                                .lineLimit(1)
-                                            Text(conv.preview)
-                                                .font(.system(size: 11))
-                                                .foregroundColor(AppTheme.textSecondary)
-                                                .lineLimit(1)
-                                        }
-
-                                        Spacer()
-
-                                        VStack(alignment: .trailing, spacing: 2) {
-                                            Text(relativeTime(conv.createdAt))
-                                                .font(.system(size: 10))
-                                                .foregroundColor(AppTheme.textMuted)
-                                            Text("\(conv.messages.count) msgs")
-                                                .font(.system(size: 10))
-                                                .foregroundColor(AppTheme.textMuted)
+                                            VStack(alignment: .trailing, spacing: 2) {
+                                                Text(relativeTime(conv.createdAt))
+                                                    .font(.system(size: 10))
+                                                    .foregroundColor(AppTheme.textMuted)
+                                                Text("\(conv.messages.count) msgs")
+                                                    .font(.system(size: 10))
+                                                    .foregroundColor(AppTheme.textMuted)
+                                            }
                                         }
                                     }
                                 }
+                                .buttonStyle(.plain)
                             }
-                            .buttonStyle(.plain)
                         }
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                    // Right column: Active Tasks + Agents
+                    VStack(alignment: .leading, spacing: 20) {
+                        // Active Tasks
+                        VStack(alignment: .leading, spacing: 12) {
+                            HStack {
+                                SectionHeader(title: "Active Tasks", icon: "clock.fill")
+                                Spacer()
+                                Button(action: { appState.selectedTab = .tasks }) {
+                                    Text("View all")
+                                        .font(.system(size: 11))
+                                        .foregroundColor(AppTheme.accent)
+                                }
+                                .buttonStyle(.plain)
+                            }
+
+                            if appState.tasks.filter({ $0.enabled }).isEmpty {
+                                GlassCard {
+                                    HStack {
+                                        Image(systemName: "clock")
+                                            .foregroundColor(AppTheme.textMuted)
+                                        Text("No active tasks")
+                                            .font(AppTheme.fontBody)
+                                            .foregroundColor(AppTheme.textSecondary)
+                                        Spacer()
+                                    }
+                                }
+                            } else {
+                                ForEach(appState.tasks.filter { $0.enabled }.prefix(3)) { task in
+                                    MiniTaskRow(task: task) {
+                                        appState.selectedTab = .tasks
+                                    }
+                                }
+                            }
+                        }
+
+                        // Agents preview
+                        VStack(alignment: .leading, spacing: 12) {
+                            HStack {
+                                SectionHeader(title: "Agents", icon: "person.3.fill")
+                                Spacer()
+                                Button(action: { appState.selectedTab = .agents }) {
+                                    Text("View all")
+                                        .font(.system(size: 11))
+                                        .foregroundColor(AppTheme.accent)
+                                }
+                                .buttonStyle(.plain)
+                            }
+
+                            if appState.agents.isEmpty {
+                                GlassCard {
+                                    HStack {
+                                        Image(systemName: "person.3")
+                                            .foregroundColor(AppTheme.textMuted)
+                                        Text("No agents configured")
+                                            .font(AppTheme.fontBody)
+                                            .foregroundColor(AppTheme.textSecondary)
+                                        Spacer()
+                                    }
+                                }
+                            } else {
+                                ForEach(appState.agents.prefix(4)) { agent in
+                                    AgentPill(agent: agent)
+                                }
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
 
                 // System Health
                 GlassCard {

@@ -1,5 +1,7 @@
 import SwiftUI
 
+/// Compact task card used on the Dashboard overview (horizontal scroll).
+/// For the full task list, see TaskCardImproved in TasksView.swift.
 struct TaskCard: View {
     let task: TaskInfo
     @State private var isHovered = false
@@ -20,7 +22,7 @@ struct TaskCard: View {
                 Spacer()
 
                 if let delivery = task.delivery {
-                    Image(systemName: platformIcon(delivery.platform))
+                    Image(systemName: delivery.icon)
                         .font(.system(size: 11))
                         .foregroundColor(AppTheme.textSecondary)
                 }
@@ -38,9 +40,19 @@ struct TaskCard: View {
 
                 Spacer()
 
-                Text("\(task.runCount)x")
+                Text("\(task.runCount) run\(task.runCount == 1 ? "" : "s")")
                     .font(.system(size: 10, design: .monospaced))
                     .foregroundColor(AppTheme.textMuted)
+            }
+
+            if let lastRun = task.lastRun {
+                HStack(spacing: 4) {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .font(.system(size: 9))
+                    Text(relativeTime(lastRun))
+                        .font(.system(size: 9))
+                }
+                .foregroundColor(AppTheme.textMuted)
             }
         }
         .padding(14)
@@ -58,12 +70,9 @@ struct TaskCard: View {
         .onHover { isHovered = $0 }
     }
 
-    private func platformIcon(_ platform: String) -> String {
-        switch platform.lowercased() {
-        case "discord": return "message.badge.circle"
-        case "whatsapp": return "phone.circle"
-        case "watch": return "applewatch"
-        default: return "arrow.up.circle"
-        }
+    private func relativeTime(_ date: Date) -> String {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .abbreviated
+        return formatter.localizedString(for: date, relativeTo: Date())
     }
 }

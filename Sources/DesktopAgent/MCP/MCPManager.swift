@@ -99,12 +99,72 @@ final class MCPManager {
             return ToolResult(success: false, output: "MCP tool '\(qualifiedName)' not found", screenshot: nil)
         }
 
+        // Coerce argument types to match the tool's input schema.
+        // AI models sometimes return 0/1 instead of false/true for boolean params.
+        let coercedArgs = coerceArguments(arguments, forTool: qualifiedName)
+
         do {
-            let result = try client.callTool(name: originalName, arguments: arguments)
+            let result = try client.callTool(name: originalName, arguments: coercedArgs)
             return ToolResult(success: true, output: result, screenshot: nil)
         } catch {
             return ToolResult(success: false, output: "MCP error: \(error)", screenshot: nil)
         }
+    }
+
+    /// Coerce argument values to match the MCP tool's declared schema types.
+    /// Handles common AI model mismatches like sending Int 0/1 for boolean parameters.
+    private func coerceArguments(_ arguments: [String: Any], forTool qualifiedName: String) -> [String: Any] {
+        guard let toolInfo = toolInfos.first(where: { $0.qualifiedName == qualifiedName }),
+              let properties = toolInfo.inputSchema["properties"] as? [String: Any] else {
+            return arguments
+        }
+
+        var result = arguments
+        for (key, value) in arguments {
+            guard let propSchema = properties[key] as? [String: Any],
+                  let expectedType = propSchema["type"] as? String else {
+                continue
+            }
+
+            switch expectedType {
+            case "boolean":
+                // Coerce Int/Double 0/1 to Bool
+                if let intVal = value as? Int {
+                    result[key] = intVal != 0
+                } else if let doubleVal = value as? Double {
+                    result[key] = doubleVal != 0
+                } else if let strVal = value as? String {
+                    switch strVal.lowercased() {
+                    case "true", "1", "yes": result[key] = true
+                    case "false", "0", "no": result[key] = false
+                    default: break
+                    }
+                }
+            case "integer":
+                if let boolVal = value as? Bool {
+                    result[key] = boolVal ? 1 : 0
+                } else if let doubleVal = value as? Double {
+                    result[key] = Int(doubleVal)
+                } else if let strVal = value as? String, let intVal = Int(strVal) {
+                    result[key] = intVal
+                }
+            case "number":
+                if let boolVal = value as? Bool {
+                    result[key] = boolVal ? 1.0 : 0.0
+                } else if let intVal = value as? Int {
+                    result[key] = Double(intVal)
+                } else if let strVal = value as? String, let dblVal = Double(strVal) {
+                    result[key] = dblVal
+                }
+            case "string":
+                if !(value is String) {
+                    result[key] = "\(value)"
+                }
+            default:
+                break
+            }
+        }
+        return result
     }
 
     // MARK: - Get Claude tools for all MCP servers

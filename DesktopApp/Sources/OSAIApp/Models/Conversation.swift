@@ -61,6 +61,20 @@ struct Conversation: Identifiable {
     var messages: [ChatMessage]
     let createdAt: Date
     var agentName: String?
+    var isPinned: Bool = false
+    var totalInputTokens: Int = 0
+    var totalOutputTokens: Int = 0
+
+    /// Estimated cost based on typical rates ($3/M input, $15/M output for Sonnet)
+    var estimatedCost: Double {
+        let inputCost = Double(totalInputTokens) / 1_000_000.0 * 3.0
+        let outputCost = Double(totalOutputTokens) / 1_000_000.0 * 15.0
+        return inputCost + outputCost
+    }
+
+    var totalTokens: Int {
+        totalInputTokens + totalOutputTokens
+    }
 
     var lastMessage: String {
         messages.last?.content ?? ""
