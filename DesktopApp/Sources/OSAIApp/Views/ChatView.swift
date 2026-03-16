@@ -66,6 +66,7 @@ struct ChatView: View {
     @State private var infoTagInput: String = ""
     @State private var infoTagFocused: Bool = false
     @State private var budgetIndicatorDismissed: Bool = false
+    @State private var showConversationList: Bool = false
 
     private var filteredConversations: [Conversation] {
         var sorted = appState.workspaceFilteredConversations(appState.sortedConversations)
@@ -423,9 +424,10 @@ struct ChatView: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            // Conversation list sidebar (hidden in focus mode or narrow windows)
-            if !effectiveFocusMode {
+            // Conversation list sidebar (togglable, hidden in focus mode)
+            if !effectiveFocusMode && showConversationList {
                 conversationListSidebar
+                    .transition(.move(edge: .leading).combined(with: .opacity))
             }
 
             // Main chat area
@@ -445,6 +447,19 @@ struct ChatView: View {
 
                 // Header
                 HStack(spacing: 12) {
+                    // Toggle conversation list panel
+                    Button(action: {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            showConversationList.toggle()
+                        }
+                    }) {
+                        Image(systemName: showConversationList ? "sidebar.left" : "sidebar.left")
+                            .font(.system(size: 14))
+                            .foregroundColor(showConversationList ? AppTheme.accent : AppTheme.textMuted)
+                    }
+                    .buttonStyle(.plain)
+                    .help(showConversationList ? "Hide conversations" : "Show conversations")
+
                     if focusMode {
                         // Minimal zen header: ghost icon + title only
                         GhostIcon(size: 18, animate: false)
