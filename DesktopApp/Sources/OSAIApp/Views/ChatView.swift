@@ -24,6 +24,10 @@ struct ChatView: View {
     @State private var deleteConfirmConversation: Conversation? = nil
     @State private var newTagText: String = ""
     @State private var showNewTagPopover: String? = nil
+    @State private var scrollProgress: CGFloat = 0
+    @State private var autoScrollPaused: Bool = false
+    @State private var scrollContentHeight: CGFloat = 0
+    @State private var scrollViewHeight: CGFloat = 0
 
     // MARK: - Date grouping
 
@@ -231,9 +235,35 @@ struct ChatView: View {
 
             // Main chat area
             VStack(spacing: 0) {
+                // Reading progress bar (focus mode only)
+                if focusMode {
+                    GeometryReader { geo in
+                        Rectangle()
+                            .fill(AppTheme.accent.opacity(0.5))
+                            .frame(width: max(0, scrollProgress) * geo.size.width, height: 2)
+                            .animation(.easeOut(duration: 0.15), value: scrollProgress)
+                    }
+                    .frame(height: 2)
+                    .background(AppTheme.bgSecondary.opacity(0.3))
+                    .transition(.opacity)
+                }
+
                 // Header
                 HStack(spacing: 12) {
-                    if let conv = appState.activeConversation {
+                    if focusMode {
+                        // Minimal zen header: ghost icon + title only
+                        GhostIcon(size: 18, animate: false)
+                        if let conv = appState.activeConversation {
+                            Text(conv.title)
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundColor(AppTheme.textPrimary)
+                                .lineLimit(1)
+                        } else {
+                            Text("New Conversation")
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundColor(AppTheme.textPrimary)
+                        }
+                    } else if let conv = appState.activeConversation {
                         VStack(alignment: .leading, spacing: 2) {
                             if let editing = editingTitle {
                                 TextField("Conversation title", text: Binding(
@@ -277,7 +307,7 @@ struct ChatView: View {
                                     .font(.system(size: 11))
                                     .foregroundColor(AppTheme.textMuted)
                                 if conv.totalTokens > 0 {
-                                    Text("·")
+                                    Text("\u{00B7}")
                                         .font(.system(size: 11))
                                         .foregroundColor(AppTheme.textMuted)
                                     Text(abbreviatedTokens(conv.totalTokens))
@@ -301,7 +331,7 @@ struct ChatView: View {
 
                     Spacer()
 
-                    if appState.isProcessing {
+                    if appState.isProcessing && !focusMode {
                         HStack(spacing: 6) {
                             ProgressView()
                                 .controlSize(.small)
@@ -311,7 +341,7 @@ struct ChatView: View {
                         }
                     }
 
-                    if appState.contextPressurePercent > 0 {
+                    if appState.contextPressurePercent > 0 && !focusMode {
                         HStack(spacing: 4) {
                             Circle()
                                 .fill(contextPressureColor(appState.contextPressurePercent))
@@ -323,7 +353,7 @@ struct ChatView: View {
                         .help("Context window usage")
                     }
 
-                    if let conv = appState.activeConversation, !conv.messages.isEmpty {
+                    if !focusMode, let conv = appState.activeConversation, !conv.messages.isEmpty {
                         Button(action: { appState.presentExportSheet(for: conv) }) {
                             Image(systemName: "square.and.arrow.up")
                                 .font(.system(size: 14))
@@ -333,24 +363,29 @@ struct ChatView: View {
                         .help("Export conversation")
                     }
 
-                    Button(action: { withAnimation(.easeInOut(duration: 0.2)) { focusMode.toggle() } }) {
-                        Image(systemName: focusMode ? "sidebar.leading" : "rectangle.leadinghalf.filled")
+                    Button(action: { withAnimation(.easeInOut(duration: 0.25)) {
+                        focusMode.toggle()
+                        if !focusMode { autoScrollPaused = false }
+                    } }) {
+                        Image(systemName: focusMode ? "eye.slash" : "eye")
                             .font(.system(size: 14))
-                            .foregroundColor(AppTheme.textSecondary)
+                            .foregroundColor(focusMode ? AppTheme.accent : AppTheme.textSecondary)
                     }
                     .buttonStyle(.plain)
-                    .help("Toggle focus mode")
+                    .help("Toggle focus mode (\u{2318}\u{21E7}F)")
 
-                    Button(action: { appState.startNewChat() }) {
-                        Image(systemName: "plus.circle")
-                            .font(.system(size: 16))
-                            .foregroundColor(AppTheme.textSecondary)
+                    if !focusMode {
+                        Button(action: { appState.startNewChat() }) {
+                            Image(systemName: "plus.circle")
+                                .font(.system(size: 16))
+                                .foregroundColor(AppTheme.textSecondary)
+                        }
+                        .buttonStyle(.plain)
+                        .help("New Chat (Cmd+N)")
                     }
-                    .buttonStyle(.plain)
-                    .help("New Chat (Cmd+N)")
                 }
                 .padding(.horizontal, AppTheme.paddingLg)
-                .padding(.vertical, 12)
+                .padding(.vertical, focusMode ? 8 : 12)
                 .background(AppTheme.bgSecondary.opacity(0.2))
 
                 Divider().background(AppTheme.borderGlass)
@@ -424,23 +459,28 @@ struct ChatView: View {
                     )
                 }
 
-                // Quick actions bar
-                quickActionsBarView
+                // Quick actions bar (hidden in focus mode)
+                if !focusMode {
+                    quickActionsBarView
+                }
 
                 // Messages
                 if let conv = appState.activeConversation, !conv.messages.isEmpty || appState.isProcessing {
                     let lastAssistantId = conv.messages.last(where: { $0.role == .assistant })?.id
                     ScrollViewReader { proxy in
                         ZStack(alignment: .bottomTrailing) {
-                            ScrollView(.vertical, showsIndicators: true) {
-                                LazyVStack(spacing: 14) {
+                            ScrollView(.vertical, showsIndicators: !focusMode) {
+                                LazyVStack(spacing: focusMode ? 22 : 14) {
                                     ForEach(conv.messages) { msg in
-                                        messageBubbleView(msg: msg, conv: conv, lastAssistantId: lastAssistantId)
+                                        // In focus mode, skip tool-only messages (no text content)
+                                        if !focusMode || msg.toolName == nil || !msg.content.isEmpty {
+                                            messageBubbleView(msg: msg, conv: conv, lastAssistantId: lastAssistantId)
+                                        }
                                     }
                                     .animation(.spring(response: 0.35, dampingFraction: 0.85), value: conv.messages.count)
 
-                                    // Streaming status bar with elapsed timer
-                                    if let lastMsg = conv.messages.last, lastMsg.isStreaming, !lastMsg.content.isEmpty || !lastMsg.activities.isEmpty {
+                                    // Streaming status bar with elapsed timer (hidden in focus mode)
+                                    if !focusMode, let lastMsg = conv.messages.last, lastMsg.isStreaming, !lastMsg.content.isEmpty || !lastMsg.activities.isEmpty {
                                         StreamingStatusBar(
                                             activities: lastMsg.activities,
                                             startTime: appState.streamingStartTime
@@ -452,32 +492,81 @@ struct ChatView: View {
                                     // Invisible anchor at the very bottom
                                     Color.clear.frame(height: 1).id("scroll_bottom_anchor")
                                 }
+                                .frame(maxWidth: focusMode ? 700 : .infinity)
+                                .frame(maxWidth: .infinity)
                                 .padding(AppTheme.paddingLg)
                                 .background(
                                     GeometryReader { geo in
-                                        Color.clear.preference(
-                                            key: ScrollOffsetPreferenceKey.self,
-                                            value: geo.frame(in: .named("chatScroll")).maxY
-                                        )
+                                        let frame = geo.frame(in: .named("chatScroll"))
+                                        Color.clear
+                                            .preference(
+                                                key: ScrollOffsetPreferenceKey.self,
+                                                value: frame.maxY
+                                            )
+                                            .preference(
+                                                key: ScrollContentHeightKey.self,
+                                                value: frame.height
+                                            )
+                                            .preference(
+                                                key: ScrollOriginYKey.self,
+                                                value: frame.minY
+                                            )
                                     }
                                 )
                             }
                             .coordinateSpace(name: "chatScroll")
+                            .background(
+                                GeometryReader { geo in
+                                    Color.clear.onAppear {
+                                        scrollViewHeight = geo.size.height
+                                    }
+                                    .onChange(of: geo.size.height) { _, h in
+                                        scrollViewHeight = h
+                                    }
+                                }
+                            )
                             .onPreferenceChange(ScrollOffsetPreferenceKey.self) { maxY in
                                 isAtBottom = maxY < 1000 || appState.isProcessing
                             }
+                            .onPreferenceChange(ScrollContentHeightKey.self) { h in
+                                scrollContentHeight = h
+                            }
+                            .onPreferenceChange(ScrollOriginYKey.self) { originY in
+                                // Calculate scroll progress for focus mode progress bar
+                                if scrollContentHeight > scrollViewHeight && scrollContentHeight > 0 {
+                                    let scrolled = -originY
+                                    let maxScroll = scrollContentHeight - scrollViewHeight
+                                    scrollProgress = min(1, max(0, scrolled / maxScroll))
+                                } else {
+                                    scrollProgress = 1
+                                }
+                            }
                             .onChange(of: appState.activeConversation?.messages.count) { _, _ in
-                                scrollToBottom(proxy)
-                                isAtBottom = true
+                                if !autoScrollPaused {
+                                    scrollToBottom(proxy)
+                                    isAtBottom = true
+                                }
                             }
                             .onChange(of: appState.activeConversation?.messages.last?.content) { _, _ in
-                                if isAtBottom {
+                                if isAtBottom && !autoScrollPaused {
                                     scrollToBottom(proxy)
                                 }
                             }
                             .onChange(of: appState.activeConversation?.messages.last?.activities.count) { _, _ in
-                                if isAtBottom {
+                                if isAtBottom && !autoScrollPaused {
                                     scrollToBottom(proxy)
+                                }
+                            }
+                            .onChange(of: isAtBottom) { _, newValue in
+                                // In focus mode, detect user scrolling up to pause auto-scroll
+                                if focusMode && !newValue && !autoScrollPaused && appState.isProcessing {
+                                    autoScrollPaused = true
+                                }
+                            }
+                            .onChange(of: appState.isProcessing) { _, processing in
+                                // Reset auto-scroll pause when processing completes
+                                if !processing {
+                                    autoScrollPaused = false
                                 }
                             }
 
@@ -510,24 +599,42 @@ struct ChatView: View {
                                 }
                             }
 
-                            // Scroll-to-bottom floating button
-                            if !isAtBottom {
+                            // Scroll-to-bottom / Resume auto-scroll button
+                            if !isAtBottom || autoScrollPaused {
                                 Button(action: {
                                     withAnimation(.easeOut(duration: 0.3)) {
                                         proxy.scrollTo("scroll_bottom_anchor", anchor: .bottom)
                                     }
                                     isAtBottom = true
+                                    autoScrollPaused = false
                                 }) {
-                                    Image(systemName: "chevron.down.circle.fill")
-                                        .font(.system(size: 32))
-                                        .foregroundColor(AppTheme.accent.opacity(0.8))
-                                        .background(Circle().fill(AppTheme.bgCard).padding(4))
-                                        .shadow(color: .black.opacity(0.3), radius: 4, y: 2)
+                                    if focusMode && autoScrollPaused {
+                                        // Resume auto-scroll pill
+                                        HStack(spacing: 6) {
+                                            Image(systemName: "arrow.down")
+                                                .font(.system(size: 11, weight: .medium))
+                                            Text("Resume auto-scroll")
+                                                .font(.system(size: 12, weight: .medium))
+                                        }
+                                        .foregroundColor(.white)
+                                        .padding(.horizontal, 14)
+                                        .padding(.vertical, 8)
+                                        .background(AppTheme.accent.opacity(0.85))
+                                        .clipShape(Capsule())
+                                        .shadow(color: .black.opacity(0.25), radius: 6, y: 3)
+                                    } else {
+                                        Image(systemName: "chevron.down.circle.fill")
+                                            .font(.system(size: 32))
+                                            .foregroundColor(AppTheme.accent.opacity(0.8))
+                                            .background(Circle().fill(AppTheme.bgCard).padding(4))
+                                            .shadow(color: .black.opacity(0.3), radius: 4, y: 2)
+                                    }
                                 }
                                 .buttonStyle(.plain)
-                                .accessibilityLabel("Scroll to bottom")
-                                .padding(.trailing, 16)
+                                .accessibilityLabel(autoScrollPaused ? "Resume auto-scroll" : "Scroll to bottom")
+                                .padding(.trailing, focusMode ? 0 : 16)
                                 .padding(.bottom, 16)
+                                .frame(maxWidth: focusMode ? .infinity : nil, alignment: .center)
                                 .transition(.opacity.combined(with: .scale))
                             }
                         }
@@ -586,10 +693,17 @@ struct ChatView: View {
                         }
                     }
 
-                    ChatInputBar(text: $messageText, attachedFiles: $attachedFiles, isDisabled: appState.isProcessing, onUpArrowInEmptyInput: {
+                    ChatInputBar(text: $messageText, attachedFiles: $attachedFiles, isDisabled: appState.isProcessing, isDragOver: isDragOver, onUpArrowInEmptyInput: {
                         if let lastContent = appState.lastUserMessageContent() {
                             messageText = lastContent
                         }
+                    }, onPasteImages: { urls in
+                        for url in urls {
+                            if !attachedFiles.contains(url) {
+                                attachedFiles.append(url)
+                            }
+                        }
+                        appState.showToast("\(urls.count) image\(urls.count == 1 ? "" : "s") pasted", type: .success)
                     }) {
                         guard !messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
                         let files = attachedFiles
@@ -604,28 +718,42 @@ struct ChatView: View {
                 .background(AppTheme.bgSecondary.opacity(0.2))
             }
             .overlay(
-                Group {
+                ZStack {
                     if isDragOver {
+                        // Semi-transparent glass background
                         RoundedRectangle(cornerRadius: 12)
-                            .stroke(AppTheme.accent, style: StrokeStyle(lineWidth: 2, dash: [8]))
-                            .background(AppTheme.accent.opacity(0.08))
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
-                            .overlay(
-                                VStack(spacing: 8) {
-                                    Image(systemName: "arrow.down.doc")
-                                        .font(.system(size: 28))
-                                        .foregroundColor(AppTheme.accent)
-                                    Text("Drop files to attach")
-                                        .font(.system(size: 14, weight: .medium))
-                                        .foregroundColor(AppTheme.accent)
-                                }
-                            )
+                            .fill(.ultraThinMaterial)
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(AppTheme.accent.opacity(0.06))
+
+                        // Dashed border
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(AppTheme.accent, style: StrokeStyle(lineWidth: 2.5, dash: [10, 6]))
                             .padding(4)
+
+                        // Center icon and text
+                        VStack(spacing: 12) {
+                            Image(systemName: "arrow.down.doc")
+                                .font(.system(size: 40, weight: .light))
+                                .foregroundColor(AppTheme.accent)
+                                .symbolEffect(.pulse, options: .repeating)
+                            Text("Drop files to attach")
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundColor(AppTheme.accent)
+                            Text("Images, documents, code files...")
+                                .font(.system(size: 12))
+                                .foregroundColor(AppTheme.textMuted)
+                        }
                     }
                 }
+                .animation(.easeInOut(duration: 0.2), value: isDragOver)
             )
             .onDrop(of: [.fileURL], isTargeted: $isDragOver) { providers in
+                let totalProviders = providers.count
+                var addedCount = 0
+                let group = DispatchGroup()
                 for provider in providers {
+                    group.enter()
                     provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { data, _ in
                         if let data = data as? Data,
                            let urlString = String(data: data, encoding: .utf8),
@@ -633,10 +761,16 @@ struct ChatView: View {
                             DispatchQueue.main.async {
                                 if !attachedFiles.contains(url) {
                                     attachedFiles.append(url)
+                                    addedCount += 1
                                 }
                             }
                         }
+                        group.leave()
                     }
+                }
+                group.notify(queue: .main) {
+                    let count = max(addedCount, totalProviders)
+                    appState.showToast("\(count) file\(count == 1 ? "" : "s") attached", type: .success)
                 }
                 return true
             }
@@ -647,17 +781,29 @@ struct ChatView: View {
             }
         }
         .background(
-            Button("") {
-                withAnimation(.easeInOut(duration: 0.15)) {
-                    showConversationSearch.toggle()
+            Group {
+                Button("") {
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        showConversationSearch.toggle()
+                    }
+                    if !showConversationSearch {
+                        searchInConversation = ""
+                        currentMatchIndex = 0
+                    }
                 }
-                if !showConversationSearch {
-                    searchInConversation = ""
-                    currentMatchIndex = 0
+                .keyboardShortcut("f", modifiers: .command)
+                .hidden()
+
+                // Cmd+Shift+F: Toggle focus/zen mode
+                Button("") {
+                    withAnimation(.easeInOut(duration: 0.25)) {
+                        focusMode.toggle()
+                        if !focusMode { autoScrollPaused = false }
+                    }
                 }
+                .keyboardShortcut("f", modifiers: [.command, .shift])
+                .hidden()
             }
-            .keyboardShortcut("f", modifiers: .command)
-            .hidden()
         )
         .sheet(isPresented: $appState.showExportSheet) {
             if let conv = appState.exportConversationTarget {
@@ -852,6 +998,7 @@ struct ChatView: View {
         MessageBubble(
             message: msg,
             isLastAssistantMessage: isLastAssistant,
+            zenMode: focusMode,
             onCancel: msg.isStreaming ? { appState.cancelProcessing() } : nil,
             onRetry: canRetry ? { appState.retryLastMessage() } : nil,
             onReaction: msg.role == .assistant ? { reaction in appState.setReaction(messageId: msg.id, reaction: reaction) } : nil,
@@ -1605,6 +1752,20 @@ struct ConversationRow: View {
 // MARK: - Scroll Offset Preference Key
 
 private struct ScrollOffsetPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
+private struct ScrollContentHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
+private struct ScrollOriginYKey: PreferenceKey {
     static var defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         value = nextValue()

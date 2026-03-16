@@ -2,6 +2,19 @@ import SwiftUI
 import AppKit
 import Quartz
 
+// MARK: - Zen Mode Environment Key
+
+private struct ZenModeKey: EnvironmentKey {
+    static let defaultValue: Bool = false
+}
+
+extension EnvironmentValues {
+    var zenMode: Bool {
+        get { self[ZenModeKey.self] }
+        set { self[ZenModeKey.self] = newValue }
+    }
+}
+
 // MARK: - Image Path Detection
 
 private let imageExtensions: Set<String> = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "tiff", "heic"]
@@ -204,6 +217,7 @@ struct InlineImageView: View {
 struct MessageBubble: View {
     let message: ChatMessage
     var isLastAssistantMessage: Bool = false
+    var zenMode: Bool = false
     var onCancel: (() -> Void)?
     var onRetry: (() -> Void)?
     var onReaction: ((MessageReaction?) -> Void)?
@@ -226,6 +240,7 @@ struct MessageBubble: View {
                 Spacer(minLength: 20)
             }
         }
+        .environment(\.zenMode, zenMode)
         .opacity(appeared ? 1 : 0)
         .offset(y: appeared ? 0 : 12)
         .onAppear {
@@ -244,11 +259,11 @@ struct MessageBubble: View {
                     editingView
                 } else {
                     Text(message.content)
-                        .font(.system(size: 14))
+                        .font(.system(size: zenMode ? 15 : 14))
                         .foregroundColor(AppTheme.textPrimary)
                         .textSelection(.enabled)
                         .padding(.horizontal, 16)
-                        .padding(.vertical, 12)
+                        .padding(.vertical, zenMode ? 14 : 12)
                         .background(AppTheme.accent.opacity(0.12))
                         .clipShape(RoundedRectangle(cornerRadius: 18))
                         .overlay(RoundedRectangle(cornerRadius: 18).stroke(AppTheme.accent.opacity(0.2), lineWidth: 0.5))
@@ -400,20 +415,20 @@ struct MessageBubble: View {
                     AgentBadge(name: agent)
                 }
 
-                // Activity strip
-                if !message.activities.isEmpty {
+                // Activity strip (hidden in zen mode)
+                if !message.activities.isEmpty && !zenMode {
                     ActivityStrip(activities: message.activities, isStreaming: message.isStreaming)
                 }
 
                 // Content with hover copy button
                 ZStack(alignment: .topTrailing) {
                     VStack(alignment: .leading, spacing: 6) {
-                        if let toolName = message.toolName {
+                        if let toolName = message.toolName, !zenMode {
                             ToolCallCard(name: toolName, result: message.toolResult ?? "")
                         } else if message.isStreaming && message.content.isEmpty {
                             StreamingPlaceholder(hasActivities: !message.activities.isEmpty)
                         } else if !message.content.isEmpty {
-                            ResponseView(text: message.content, isStreaming: message.isStreaming)
+                            ResponseView(text: message.content, isStreaming: message.isStreaming, zenMode: zenMode)
                         }
 
                         // Inline images detected in message content
@@ -1064,11 +1079,12 @@ struct ImagePreviewView: View {
 struct ResponseView: View {
     let text: String
     let isStreaming: Bool
+    var zenMode: Bool = false
     @State private var cursorVisible = true
 
     var body: some View {
         let sections = ResponseParser.parse(text)
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: zenMode ? 14 : 10) {
             ForEach(Array(sections.enumerated()), id: \.offset) { idx, section in
                 if isStreaming && idx == sections.count - 1 {
                     // Last section with blinking cursor appended
@@ -2134,6 +2150,7 @@ struct ResponseParser {
 
 struct RichTextView: View {
     let text: String
+    @Environment(\.zenMode) private var zenMode
 
     var body: some View {
         let parts = splitByPaths(text)
@@ -2171,6 +2188,10 @@ struct RichTextView: View {
         }
     }
 
+    private var bodyFontSize: CGFloat { zenMode ? 15 : 14 }
+    private var codeInlineFontSize: CGFloat { zenMode ? 13.5 : 12.5 }
+    private var lineSpacingValue: CGFloat { zenMode ? 5.5 : 4 }
+
     /// Renders text with AttributedString markdown and highlights inline code with a background
     @ViewBuilder
     private func inlineMarkdownText(_ str: String) -> some View {
@@ -2182,12 +2203,12 @@ struct RichTextView: View {
                 switch segment {
                 case .text(let t):
                     if var attr = try? AttributedString(markdown: t, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)) {
-                        attr.font = .system(size: 14)
+                        attr.font = .system(size: bodyFontSize)
                         Self.styleLinks(&attr)
                         combined.append(attr)
                     } else {
                         var attr = AttributedString(t)
-                        attr.font = .system(size: 14)
+                        attr.font = .system(size: bodyFontSize)
                         attr.foregroundColor = AppTheme.textPrimary
                         combined.append(attr)
                     }
@@ -2196,7 +2217,7 @@ struct RichTextView: View {
                     space.font = .system(size: 2)
                     combined.append(space)
                     var attr = AttributedString(c)
-                    attr.font = .system(size: 12.5, design: .monospaced)
+                    attr.font = .system(size: codeInlineFontSize, design: .monospaced)
                     attr.foregroundColor = AppTheme.accent
                     attr.backgroundColor = AppTheme.bgCard
                     combined.append(attr)
@@ -2205,7 +2226,7 @@ struct RichTextView: View {
                 return combined
             }
             Text(combined)
-                .lineSpacing(4).textSelection(.enabled)
+                .lineSpacing(lineSpacingValue).textSelection(.enabled)
                 .environment(\.openURL, OpenURLAction { url in
                     NSWorkspace.shared.open(url)
                     return .handled
@@ -2214,16 +2235,16 @@ struct RichTextView: View {
             if var attributed = try? AttributedString(markdown: str, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)) {
                 let _ = Self.styleLinks(&attributed)
                 Text(attributed)
-                    .font(.system(size: 14)).foregroundColor(AppTheme.textPrimary)
-                    .lineSpacing(4).textSelection(.enabled)
+                    .font(.system(size: bodyFontSize)).foregroundColor(AppTheme.textPrimary)
+                    .lineSpacing(lineSpacingValue).textSelection(.enabled)
                     .environment(\.openURL, OpenURLAction { url in
                         NSWorkspace.shared.open(url)
                         return .handled
                     })
             } else {
                 Text(str)
-                    .font(.system(size: 14)).foregroundColor(AppTheme.textPrimary)
-                    .lineSpacing(4).textSelection(.enabled)
+                    .font(.system(size: bodyFontSize)).foregroundColor(AppTheme.textPrimary)
+                    .lineSpacing(lineSpacingValue).textSelection(.enabled)
             }
         }
     }

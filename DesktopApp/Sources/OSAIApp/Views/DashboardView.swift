@@ -153,6 +153,10 @@ struct DashboardView: View {
                 AnalyticsSectionView(conversations: appState.conversations, agents: appState.agents)
                     .frame(maxWidth: 800)
 
+                // Chat Insights
+                ChatInsightsSection(conversations: appState.conversations)
+                    .frame(maxWidth: 800)
+
                 // Two-column layout
                 HStack(alignment: .top, spacing: AppTheme.paddingLg) {
                     // Recent Conversations
@@ -1209,6 +1213,426 @@ struct ConversationCostRow: View {
             return String(format: "$%.2f", cost)
         }
         return String(format: "$%.4f", cost)
+    }
+}
+
+// MARK: - Chat Insights Section
+
+struct ChatInsightsSection: View {
+    let conversations: [Conversation]
+
+    var body: some View {
+        VStack(spacing: AppTheme.paddingLg) {
+            // 1. Top stats row
+            GlassCard {
+                VStack(alignment: .leading, spacing: 12) {
+                    SectionHeader(title: "Chat Insights", icon: "lightbulb")
+
+                    LazyVGrid(columns: [
+                        GridItem(.flexible(), spacing: 14),
+                        GridItem(.flexible(), spacing: 14),
+                        GridItem(.flexible(), spacing: 14),
+                        GridItem(.flexible(), spacing: 14),
+                        GridItem(.flexible(), spacing: 14),
+                    ], spacing: 14) {
+                        QuickStatItem(
+                            label: "Conversations",
+                            value: "\(conversations.count)",
+                            icon: "bubble.left.and.bubble.right"
+                        )
+                        QuickStatItem(
+                            label: "Messages Sent",
+                            value: formatLargeNumber(insightTotalMessages),
+                            icon: "text.bubble"
+                        )
+                        QuickStatItem(
+                            label: "Avg / Conv",
+                            value: insightAvgMessages,
+                            icon: "divide"
+                        )
+                        QuickStatItem(
+                            label: "Longest Conv",
+                            value: "\(insightLongestConversation)",
+                            icon: "arrow.up.to.line"
+                        )
+                        QuickStatItem(
+                            label: "Most Active Day",
+                            value: insightMostActiveDay,
+                            icon: "calendar.badge.clock"
+                        )
+                    }
+                }
+            }
+
+            // 2. Activity heatmap (last 30 days)
+            GlassCard {
+                VStack(alignment: .leading, spacing: 14) {
+                    HStack {
+                        SectionHeader(title: "Activity Heatmap", icon: "square.grid.3x3.fill")
+                        Spacer()
+                        Text("Last 30 days")
+                            .font(.system(size: 11))
+                            .foregroundColor(AppTheme.textMuted)
+                    }
+
+                    ActivityHeatmap(heatmapData: heatmapGrid)
+                }
+            }
+
+            // 3. Most used agents (horizontal bar chart)
+            if !insightAgentUsage.isEmpty {
+                GlassCard {
+                    VStack(alignment: .leading, spacing: 12) {
+                        SectionHeader(title: "Most Used Agents", icon: "person.3.sequence.fill")
+
+                        ForEach(insightAgentUsage, id: \.name) { entry in
+                            AgentBarRow(
+                                name: entry.name,
+                                count: entry.count,
+                                maxCount: insightAgentUsage.first?.count ?? 1,
+                                color: agentColor(entry.name)
+                            )
+                        }
+                    }
+                }
+            }
+
+            // 4. Conversation length distribution
+            GlassCard {
+                VStack(alignment: .leading, spacing: 14) {
+                    SectionHeader(title: "Conversation Length Distribution", icon: "chart.bar.xaxis.ascending")
+
+                    ConversationLengthHistogram(buckets: insightLengthBuckets)
+                        .frame(height: 120)
+                }
+            }
+        }
+    }
+
+    // MARK: - Computed properties
+
+    private var insightTotalMessages: Int {
+        conversations.reduce(0) { $0 + $1.messages.count }
+    }
+
+    private var insightAvgMessages: String {
+        guard !conversations.isEmpty else { return "0" }
+        let avg = Double(insightTotalMessages) / Double(conversations.count)
+        if avg == avg.rounded() {
+            return "\(Int(avg))"
+        }
+        return String(format: "%.1f", avg)
+    }
+
+    private var insightLongestConversation: Int {
+        conversations.map(\.messages.count).max() ?? 0
+    }
+
+    private var insightMostActiveDay: String {
+        guard !conversations.isEmpty else { return "--" }
+        let calendar = Calendar.current
+        let dayFormatter = DateFormatter()
+        dayFormatter.dateFormat = "EEE"
+
+        var dayCounts: [Int: Int] = [:] // weekday number -> count
+        for conv in conversations {
+            for msg in conv.messages {
+                let weekday = calendar.component(.weekday, from: msg.timestamp)
+                dayCounts[weekday, default: 0] += 1
+            }
+        }
+
+        guard let topDay = dayCounts.max(by: { $0.value < $1.value }) else { return "--" }
+        // Convert weekday number to name
+        let names = calendar.shortWeekdaySymbols
+        let index = topDay.key - 1 // weekday is 1-based
+        guard index >= 0, index < names.count else { return "--" }
+        return names[index]
+    }
+
+    /// Agent usage ranked by conversation count
+    private var insightAgentUsage: [AgentCount] {
+        var counts: [String: Int] = [:]
+        for conv in conversations {
+            if let name = conv.agentName {
+                counts[name, default: 0] += 1
+            }
+        }
+        return counts
+            .map { AgentCount(name: $0.key, count: $0.value) }
+            .sorted { $0.count > $1.count }
+            .prefix(6)
+            .map { $0 }
+    }
+
+    /// Heatmap grid data: 30 days, grouped into weeks (7 rows x ~5 columns)
+    var heatmapGrid: [HeatmapDay] {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateFormat = "MMM d (EEE)"
+
+        // Count messages per day across all conversations
+        var messageCounts: [Date: Int] = [:]
+        for conv in conversations {
+            for msg in conv.messages {
+                let day = calendar.startOfDay(for: msg.timestamp)
+                messageCounts[day, default: 0] += 1
+            }
+        }
+
+        var days: [HeatmapDay] = []
+        for offset in stride(from: -29, through: 0, by: 1) {
+            guard let date = calendar.date(byAdding: .day, value: offset, to: today) else { continue }
+            let count = messageCounts[date] ?? 0
+            let weekday = calendar.component(.weekday, from: date) // 1=Sun, 7=Sat
+            let label = dateFormatter.string(from: date)
+            days.append(HeatmapDay(date: date, count: count, weekday: weekday, label: label))
+        }
+        return days
+    }
+
+    /// Conversation length distribution buckets
+    var insightLengthBuckets: [LengthBucket] {
+        var b1 = 0, b2 = 0, b3 = 0, b4 = 0
+        for conv in conversations {
+            let c = conv.messages.count
+            if c <= 5 { b1 += 1 }
+            else if c <= 10 { b2 += 1 }
+            else if c <= 20 { b3 += 1 }
+            else { b4 += 1 }
+        }
+        return [
+            LengthBucket(label: "1-5", count: b1),
+            LengthBucket(label: "6-10", count: b2),
+            LengthBucket(label: "11-20", count: b3),
+            LengthBucket(label: "20+", count: b4),
+        ]
+    }
+
+    private func formatLargeNumber(_ n: Int) -> String {
+        if n >= 1_000_000 { return String(format: "%.1fM", Double(n) / 1_000_000) }
+        if n >= 1_000 { return String(format: "%.1fK", Double(n) / 1_000) }
+        return "\(n)"
+    }
+}
+
+// MARK: - Heatmap Data
+
+struct HeatmapDay: Identifiable {
+    let id = UUID()
+    let date: Date
+    let count: Int
+    let weekday: Int // 1=Sun..7=Sat
+    let label: String
+}
+
+// MARK: - Activity Heatmap View
+
+struct ActivityHeatmap: View {
+    let heatmapData: [HeatmapDay]
+
+    private let cellSize: CGFloat = 10
+    private let cellSpacing: CGFloat = 3
+
+    var body: some View {
+        let grid = buildGrid()
+        let maxCount = max(heatmapData.map(\.count).max() ?? 1, 1)
+
+        VStack(alignment: .leading, spacing: 4) {
+            // Day labels + grid
+            HStack(alignment: .top, spacing: 4) {
+                // Day-of-week labels
+                VStack(spacing: cellSpacing) {
+                    ForEach(dayLabels, id: \.self) { label in
+                        Text(label)
+                            .font(.system(size: 8, weight: .medium))
+                            .foregroundColor(AppTheme.textMuted)
+                            .frame(width: 20, height: cellSize)
+                    }
+                }
+
+                // Grid columns (weeks)
+                HStack(spacing: cellSpacing) {
+                    ForEach(0..<grid.count, id: \.self) { col in
+                        VStack(spacing: cellSpacing) {
+                            ForEach(0..<grid[col].count, id: \.self) { row in
+                                if let day = grid[col][row] {
+                                    heatmapCell(day: day, maxCount: maxCount)
+                                } else {
+                                    RoundedRectangle(cornerRadius: 2)
+                                        .fill(Color.clear)
+                                        .frame(width: cellSize, height: cellSize)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Legend
+            HStack(spacing: 4) {
+                Spacer()
+                Text("Less")
+                    .font(.system(size: 9))
+                    .foregroundColor(AppTheme.textMuted)
+                ForEach(0..<5, id: \.self) { level in
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(heatmapColor(level: level, maxLevel: 4))
+                        .frame(width: 10, height: 10)
+                }
+                Text("More")
+                    .font(.system(size: 9))
+                    .foregroundColor(AppTheme.textMuted)
+            }
+            .padding(.top, 4)
+        }
+    }
+
+    private var dayLabels: [String] {
+        ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+    }
+
+    /// Build a column-major grid: each column is a week, each row is a day of week (Sun=0..Sat=6)
+    private func buildGrid() -> [[HeatmapDay?]] {
+        guard !heatmapData.isEmpty else { return [] }
+
+        // Group days into weekly columns
+        var columns: [[HeatmapDay?]] = []
+        var currentColumn: [HeatmapDay?] = Array(repeating: nil, count: 7)
+
+        for day in heatmapData {
+            let row = day.weekday - 1 // 0-based row index
+            // If we already have a value in this row, start a new column
+            if currentColumn[row] != nil {
+                columns.append(currentColumn)
+                currentColumn = Array(repeating: nil, count: 7)
+            }
+            currentColumn[row] = day
+        }
+        // Append the last column
+        if currentColumn.contains(where: { $0 != nil }) {
+            columns.append(currentColumn)
+        }
+
+        return columns
+    }
+
+    @ViewBuilder
+    private func heatmapCell(day: HeatmapDay, maxCount: Int) -> some View {
+        let level = day.count == 0 ? 0 : min(Int(ceil(Double(day.count) / Double(maxCount) * 4.0)), 4)
+
+        RoundedRectangle(cornerRadius: 2)
+            .fill(heatmapColor(level: level, maxLevel: 4))
+            .frame(width: cellSize, height: cellSize)
+            .help("\(day.label): \(day.count) message\(day.count == 1 ? "" : "s")")
+    }
+
+    private func heatmapColor(level: Int, maxLevel: Int) -> Color {
+        switch level {
+        case 0:
+            return AppTheme.textMuted.opacity(0.15)
+        case 1:
+            return AppTheme.accent.opacity(0.25)
+        case 2:
+            return AppTheme.accent.opacity(0.5)
+        case 3:
+            return AppTheme.accent.opacity(0.75)
+        default:
+            return AppTheme.accent
+        }
+    }
+}
+
+// MARK: - Agent Bar Row (horizontal bar)
+
+struct AgentBarRow: View {
+    let name: String
+    let count: Int
+    let maxCount: Int
+    let color: Color
+
+    var body: some View {
+        HStack(spacing: 12) {
+            GhostIcon(size: 20, animate: false, tint: color)
+
+            Text(name)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundColor(AppTheme.textPrimary)
+                .frame(width: 100, alignment: .leading)
+
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(AppTheme.bgPrimary.opacity(0.5))
+
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(color.opacity(0.7))
+                        .frame(width: max(CGFloat(count) / CGFloat(max(maxCount, 1)) * geo.size.width, 4))
+                }
+            }
+            .frame(height: 8)
+
+            Text("\(count)")
+                .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                .foregroundColor(AppTheme.textSecondary)
+                .frame(width: 30, alignment: .trailing)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Agent \(name): \(count) conversations")
+    }
+}
+
+// MARK: - Conversation Length Distribution
+
+struct LengthBucket: Identifiable {
+    let id = UUID()
+    let label: String
+    let count: Int
+}
+
+struct ConversationLengthHistogram: View {
+    let buckets: [LengthBucket]
+
+    var body: some View {
+        let maxCount = max(buckets.map(\.count).max() ?? 1, 1)
+
+        GeometryReader { geo in
+            HStack(alignment: .bottom, spacing: 16) {
+                ForEach(buckets) { bucket in
+                    VStack(spacing: 6) {
+                        if bucket.count > 0 {
+                            Text("\(bucket.count)")
+                                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                                .foregroundColor(AppTheme.textSecondary)
+                        }
+
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(
+                                bucket.count > 0
+                                    ? AppTheme.accent
+                                    : AppTheme.textMuted.opacity(0.2)
+                            )
+                            .frame(
+                                height: bucket.count > 0
+                                    ? max(CGFloat(bucket.count) / CGFloat(maxCount) * (geo.size.height - 40), 6)
+                                    : 6
+                            )
+
+                        Text(bucket.label)
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundColor(AppTheme.textMuted)
+
+                        Text("msgs")
+                            .font(.system(size: 8))
+                            .foregroundColor(AppTheme.textMuted.opacity(0.7))
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+            }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Conversation length distribution")
     }
 }
 

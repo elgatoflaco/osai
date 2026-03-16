@@ -72,6 +72,7 @@ struct GrowingTextEditor: NSViewRepresentable {
     var onSubmit: () -> Void
     var onUpArrowInEmptyInput: (() -> Void)?
     var onEscapeKey: (() -> Void)?
+    var onPasteImages: (([URL]) -> Void)?
 
     private let lineHeight: CGFloat = 20
     private let maxLines: Int = 5
@@ -94,6 +95,7 @@ struct GrowingTextEditor: NSViewRepresentable {
         textView.onSubmit = onSubmit
         textView.onUpArrowInEmptyInput = onUpArrowInEmptyInput
         textView.onEscapeKey = onEscapeKey
+        textView.onPasteImages = onPasteImages
         textView.font = font
         textView.textColor = textColor
         textView.backgroundColor = .clear
@@ -125,6 +127,7 @@ struct GrowingTextEditor: NSViewRepresentable {
         textView.onSubmit = onSubmit
         textView.onUpArrowInEmptyInput = onUpArrowInEmptyInput
         textView.onEscapeKey = onEscapeKey
+        textView.onPasteImages = onPasteImages
 
         // Only update text if it differs (avoid cursor jumping)
         if textView.string != text {
@@ -224,11 +227,12 @@ struct GrowingTextEditor: NSViewRepresentable {
 }
 
 /// NSTextView subclass that intercepts Return (submit) vs Shift+Return (newline),
-/// and Up arrow in empty input to recall the last user message.
+/// Up arrow in empty input to recall the last user message, and Cmd+V to paste images.
 class SubmittableTextView: NSTextView {
     var onSubmit: (() -> Void)?
     var onUpArrowInEmptyInput: (() -> Void)?
     var onEscapeKey: (() -> Void)?
+    var onPasteImages: (([URL]) -> Void)?
 
     override func keyDown(with event: NSEvent) {
         // Return key without Shift modifier -> submit
@@ -247,6 +251,52 @@ class SubmittableTextView: NSTextView {
             return
         }
         super.keyDown(with: event)
+    }
+
+    override func paste(_ sender: Any?) {
+        let pb = NSPasteboard.general
+
+        // Check for image data on the pasteboard before falling back to default paste
+        let imageTypes: [NSPasteboard.PasteboardType] = [.png, .tiff]
+        let hasImage = imageTypes.contains(where: { pb.data(forType: $0) != nil })
+
+        if hasImage, let handler = onPasteImages {
+            var savedURLs: [URL] = []
+
+            for imageType in imageTypes {
+                if let data = pb.data(forType: imageType) {
+                    let ext = imageType == .png ? "png" : "tiff"
+                    let tempDir = FileManager.default.temporaryDirectory
+                    let filename = "pasted-image-\(UUID().uuidString.prefix(8)).\(ext)"
+                    let fileURL = tempDir.appendingPathComponent(filename)
+                    do {
+                        // Convert TIFF to PNG for consistency
+                        if imageType == .tiff, let image = NSImage(data: data),
+                           let tiffData = image.tiffRepresentation,
+                           let bitmap = NSBitmapImageRep(data: tiffData),
+                           let pngData = bitmap.representation(using: .png, properties: [:]) {
+                            let pngURL = tempDir.appendingPathComponent("pasted-image-\(UUID().uuidString.prefix(8)).png")
+                            try pngData.write(to: pngURL)
+                            savedURLs.append(pngURL)
+                        } else {
+                            try data.write(to: fileURL)
+                            savedURLs.append(fileURL)
+                        }
+                    } catch {
+                        // Fall through to default paste
+                    }
+                    break // Only handle the first available image type
+                }
+            }
+
+            if !savedURLs.isEmpty {
+                handler(savedURLs)
+                return
+            }
+        }
+
+        // Default paste behavior for text
+        super.paste(sender)
     }
 }
 
@@ -396,7 +446,9 @@ struct ChatInputBar: View {
     @Binding var text: String
     @Binding var attachedFiles: [URL]
     var isDisabled: Bool = false
+    var isDragOver: Bool = false
     var onUpArrowInEmptyInput: (() -> Void)?
+    var onPasteImages: (([URL]) -> Void)?
     var onSubmit: () -> Void
 
     @State private var isFocused: Bool = false
@@ -487,7 +539,8 @@ struct ChatInputBar: View {
                         } else {
                             appState.closeCurrentConversation()
                         }
-                    }
+                    },
+                    onPasteImages: onPasteImages
                 )
 
                 Button(action: submitIfValid) {
@@ -508,8 +561,15 @@ struct ChatInputBar: View {
             .clipShape(RoundedRectangle(cornerRadius: 18))
             .overlay(
                 RoundedRectangle(cornerRadius: 18)
-                    .stroke(isFocused ? AppTheme.accent.opacity(0.3) : AppTheme.borderGlass, lineWidth: 1)
+                    .stroke(
+                        isDragOver ? AppTheme.accent.opacity(0.7) :
+                        isFocused ? AppTheme.accent.opacity(0.3) :
+                        AppTheme.borderGlass,
+                        lineWidth: isDragOver ? 2 : 1
+                    )
             )
+            .shadow(color: isDragOver ? AppTheme.accentGlow.opacity(0.35) : .clear, radius: 16, x: 0, y: 0)
+            .animation(.easeInOut(duration: 0.25), value: isDragOver)
         }
         .onChange(of: text) { _, newValue in
             if newValue.hasPrefix("/") {
