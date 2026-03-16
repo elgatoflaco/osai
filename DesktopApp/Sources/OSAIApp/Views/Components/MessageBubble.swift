@@ -723,6 +723,7 @@ struct MessageBubble: View {
     var onReaction: ((MessageReaction?) -> Void)?
     var onBranch: (() -> Void)?
     var onEdit: ((String) -> Void)?
+    var onRestoreEdit: ((String) -> Void)?
     var onBookmark: (() -> Void)?
     var shareMode: Bool = false
     var isSelectedForShare: Bool = false
@@ -742,6 +743,7 @@ struct MessageBubble: View {
     @State private var speakerPulse = false
     /// Per-message raw markdown override: nil follows global, true/false overrides
     @State private var localRawMode: Bool?
+    @State private var showEditHistory = false
     /// Pulse animation state for streaming border glow
     @State private var streamingPulse = false
 
@@ -1199,12 +1201,112 @@ struct MessageBubble: View {
             }
 
             if showTimestamp {
-                Text(timeString(message.timestamp))
-                    .font(.system(size: 9))
-                    .foregroundColor(AppTheme.textMuted)
-                    .padding(.trailing, 4)
+                HStack(spacing: 4) {
+                    Text(timeString(message.timestamp))
+                        .font(.system(size: 9))
+                        .foregroundColor(AppTheme.textMuted)
+
+                    if !message.editHistory.isEmpty {
+                        Button(action: { showEditHistory.toggle() }) {
+                            Text("(edited)")
+                                .font(.system(size: 9, weight: .medium))
+                                .foregroundColor(AppTheme.accent.opacity(0.8))
+                        }
+                        .buttonStyle(.plain)
+                        .popover(isPresented: $showEditHistory, arrowEdge: .bottom) {
+                            editHistoryPopover
+                        }
+                    }
+                }
+                .padding(.trailing, 4)
             }
         }
+    }
+
+    private var editHistoryPopover: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Image(systemName: "clock.arrow.circlepath")
+                    .font(.system(size: 11))
+                    .foregroundColor(AppTheme.accent)
+                Text("Edit History")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(AppTheme.textPrimary)
+                Spacer()
+                Text("\(message.editHistory.count) edit\(message.editHistory.count == 1 ? "" : "s")")
+                    .font(.system(size: 9))
+                    .foregroundColor(AppTheme.textMuted)
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 10)
+            .padding(.bottom, 8)
+
+            Divider().opacity(0.3)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(message.editHistory.reversed()) { record in
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                Text(editHistoryTimeString(record.editedAt))
+                                    .font(.system(size: 9, weight: .medium))
+                                    .foregroundColor(AppTheme.textMuted)
+                                Spacer()
+                                if onRestoreEdit != nil {
+                                    Button(action: {
+                                        showEditHistory = false
+                                        onRestoreEdit?(record.content)
+                                    }) {
+                                        HStack(spacing: 3) {
+                                            Image(systemName: "arrow.uturn.backward")
+                                                .font(.system(size: 8))
+                                            Text("Restore")
+                                                .font(.system(size: 9, weight: .medium))
+                                        }
+                                        .foregroundColor(AppTheme.accent)
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 2)
+                                        .background(AppTheme.accent.opacity(0.1))
+                                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                            Text(record.content)
+                                .font(.system(size: 11))
+                                .foregroundColor(AppTheme.textSecondary)
+                                .lineLimit(4)
+                                .truncationMode(.tail)
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+
+                        if record.id != message.editHistory.first?.id {
+                            Divider().opacity(0.2).padding(.horizontal, 12)
+                        }
+                    }
+                }
+            }
+            .frame(maxHeight: 250)
+        }
+        .frame(width: 300)
+        .padding(.bottom, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(AppTheme.bgCard.opacity(0.95))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(AppTheme.borderGlass, lineWidth: 0.5)
+                )
+                .shadow(color: .black.opacity(0.2), radius: 12, y: 4)
+        )
+    }
+
+    private func editHistoryTimeString(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .short
+        formatter.timeStyle = .short
+        return formatter.string(from: date)
     }
 
     private var assistantBubble: some View {
@@ -1397,6 +1499,18 @@ struct MessageBubble: View {
                         Text(timeString(message.timestamp))
                             .font(.system(size: 9))
                             .foregroundColor(AppTheme.textMuted)
+
+                        if !message.editHistory.isEmpty {
+                            Button(action: { showEditHistory.toggle() }) {
+                                Text("(edited)")
+                                    .font(.system(size: 9, weight: .medium))
+                                    .foregroundColor(AppTheme.accent.opacity(0.8))
+                            }
+                            .buttonStyle(.plain)
+                            .popover(isPresented: $showEditHistory, arrowEdge: .bottom) {
+                                editHistoryPopover
+                            }
+                        }
 
                         if let rtMs = message.responseTimeMs {
                             Text(responseTimeLabel(rtMs))

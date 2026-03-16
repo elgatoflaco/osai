@@ -328,6 +328,15 @@ class OSAIService {
             if let reaction = msg.reaction { m["reaction"] = reaction.rawValue }
             if msg.isBookmarked { m["isBookmarked"] = true }
             if let rt = msg.responseTimeMs { m["responseTimeMs"] = rt }
+            if !msg.editHistory.isEmpty {
+                m["editHistory"] = msg.editHistory.map { record in
+                    [
+                        "id": record.id.uuidString,
+                        "content": record.content,
+                        "editedAt": ISO8601DateFormatter().string(from: record.editedAt)
+                    ]
+                }
+            }
             return m
         }
 
@@ -380,13 +389,25 @@ class OSAIService {
             }
             let isBookmarked = m["isBookmarked"] as? Bool ?? false
             let responseTimeMs = m["responseTimeMs"] as? Int
+            var editHistory: [EditRecord] = []
+            if let historyArray = m["editHistory"] as? [[String: String]] {
+                editHistory = historyArray.compactMap { record in
+                    guard let idStr = record["id"],
+                          let uid = UUID(uuidString: idStr),
+                          let content = record["content"],
+                          let dateStr = record["editedAt"],
+                          let date = ISO8601DateFormatter().date(from: dateStr) else { return nil }
+                    return EditRecord(id: uid, content: content, editedAt: date)
+                }
+            }
             return ChatMessage(
                 id: msgId, role: role, content: content, timestamp: ts,
                 toolName: m["toolName"] as? String,
                 toolResult: m["toolResult"] as? String,
                 reaction: reaction,
                 isBookmarked: isBookmarked,
-                responseTimeMs: responseTimeMs
+                responseTimeMs: responseTimeMs,
+                editHistory: editHistory
             )
         }
 

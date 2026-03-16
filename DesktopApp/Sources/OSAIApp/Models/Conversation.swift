@@ -60,6 +60,18 @@ struct ActivityItem: Identifiable, Equatable {
     }
 }
 
+struct EditRecord: Codable, Identifiable, Equatable {
+    let id: UUID
+    let content: String
+    let editedAt: Date
+
+    init(id: UUID = UUID(), content: String, editedAt: Date = Date()) {
+        self.id = id
+        self.content = content
+        self.editedAt = editedAt
+    }
+}
+
 struct ChatMessage: Identifiable, Equatable {
     let id: String
     let role: MessageRole
@@ -74,11 +86,13 @@ struct ChatMessage: Identifiable, Equatable {
     var isBookmarked: Bool = false
     /// Time in milliseconds from user send to first streaming text (assistant messages only)
     var responseTimeMs: Int?
+    var editHistory: [EditRecord] = []
 
     static func == (lhs: ChatMessage, rhs: ChatMessage) -> Bool {
         lhs.id == rhs.id && lhs.content == rhs.content && lhs.isStreaming == rhs.isStreaming &&
         lhs.activities == rhs.activities && lhs.agentName == rhs.agentName && lhs.reaction == rhs.reaction &&
-        lhs.isBookmarked == rhs.isBookmarked && lhs.responseTimeMs == rhs.responseTimeMs
+        lhs.isBookmarked == rhs.isBookmarked && lhs.responseTimeMs == rhs.responseTimeMs &&
+        lhs.editHistory == rhs.editHistory
     }
 }
 

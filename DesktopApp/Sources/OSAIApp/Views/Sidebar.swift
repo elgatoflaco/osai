@@ -4,6 +4,16 @@ struct Sidebar: View {
     @EnvironmentObject var appState: AppState
     @State private var hoveredItem: SidebarItem?
 
+    /// Returns the badge count for a given sidebar item.
+    private func badgeCount(for item: SidebarItem) -> Int {
+        switch item {
+        case .chat: return appState.unreadConversationIds.count
+        case .tasks: return appState.activeTaskCount
+        case .agents: return appState.availableAgentCount
+        case .home, .settings: return 0
+        }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             // Ghost branding
@@ -28,7 +38,8 @@ struct Sidebar: View {
                         isCollapsed: appState.sidebarCollapsed,
                         isHovered: hoveredItem == item,
                         isProcessing: item == .chat && appState.isProcessing,
-                        contextPressureHigh: item == .chat && appState.contextPressurePercent > 75
+                        contextPressureHigh: item == .chat && appState.contextPressurePercent > 75,
+                        badgeCount: badgeCount(for: item)
                     ) {
                         withAnimation(.easeOut(duration: 0.2)) {
                             appState.selectedTab = item
@@ -374,10 +385,12 @@ struct SidebarButton: View {
     let isHovered: Bool
     var isProcessing: Bool = false
     var contextPressureHigh: Bool = false
+    var badgeCount: Int = 0
     let action: () -> Void
 
     @State private var ringRotation: Double = 0
     @State private var dotPulse: Bool = false
+    @State private var badgeVisible: Bool = false
 
     var body: some View {
         Button(action: action) {
@@ -429,6 +442,33 @@ struct SidebarButton: View {
                                 dotPulse = false
                             }
                     }
+
+                    // Badge count overlay
+                    if badgeCount > 0 && !isProcessing {
+                        Text("\(min(badgeCount, 99))")
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundColor(.white)
+                            .frame(minWidth: 16, minHeight: 16)
+                            .background(AppTheme.error)
+                            .clipShape(Circle())
+                            .offset(x: 5, y: -5)
+                            .scaleEffect(badgeVisible ? 1.0 : 0.01)
+                            .opacity(badgeVisible ? 1.0 : 0.0)
+                            .onAppear {
+                                withAnimation(.spring(response: 0.4, dampingFraction: 0.6)) {
+                                    badgeVisible = true
+                                }
+                            }
+                            .onDisappear {
+                                badgeVisible = false
+                            }
+                            .onChange(of: badgeCount) { _ in
+                                badgeVisible = false
+                                withAnimation(.spring(response: 0.4, dampingFraction: 0.6)) {
+                                    badgeVisible = true
+                                }
+                            }
+                    }
                 }
 
                 if !isCollapsed {
@@ -458,7 +498,7 @@ struct SidebarButton: View {
         }
         .buttonStyle(.plain)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(item.rawValue) tab")
+        .accessibilityLabel("\(item.rawValue) tab\(badgeCount > 0 ? ", \(badgeCount) items" : "")")
         .accessibilityValue(isSelected ? "selected" : "")
         .accessibilityHint(isProcessing ? "Processing" : (contextPressureHigh ? "Context pressure high" : "Double tap to navigate"))
         .accessibilityAddTraits(isSelected ? .isSelected : [])

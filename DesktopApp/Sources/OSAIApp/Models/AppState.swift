@@ -392,6 +392,10 @@ class AppState: ObservableObject {
     @AppStorage("hasCompletedOnboarding") var hasCompletedOnboarding: Bool = false
     @AppStorage("globalHotkeyEnabled") var globalHotkeyEnabled: Bool = true
     @AppStorage("notificationsEnabled") var notificationsEnabled: Bool = true
+    @AppStorage("notificationSound") var notificationSound: String = "default"
+    @AppStorage("notifyOnTaskComplete") var notifyOnTaskComplete: Bool = true
+    @AppStorage("notifyOnAgentRoute") var notifyOnAgentRoute: Bool = false
+    @AppStorage("notifySoundEnabled") var notifySoundEnabled: Bool = true
     @AppStorage("compactMode") var compactMode: Bool = false
     @AppStorage("floatOnTop") var floatOnTop: Bool = false
     @AppStorage("windowOpacity") var windowOpacity: Double = 1.0
@@ -698,6 +702,27 @@ class AppState: ObservableObject {
     }
     @Published var conversations: [Conversation] = []
     @Published var activeConversation: Conversation?
+    @Published var unreadConversationIds: Set<String> = []
+
+    /// Number of active (enabled) tasks.
+    var activeTaskCount: Int {
+        tasks.filter { $0.enabled }.count
+    }
+
+    /// Number of available agents.
+    var availableAgentCount: Int {
+        agents.count
+    }
+
+    /// Marks a conversation as read, removing it from the unread set.
+    func markConversationRead(id: String) {
+        unreadConversationIds.remove(id)
+    }
+
+    /// Marks a conversation as unread (e.g. when a new message arrives while viewing a different conversation).
+    func markConversationUnread(id: String) {
+        unreadConversationIds.insert(id)
+    }
 
     /// Last 5 non-archived conversations, sorted by most recent activity, for dashboard display.
     var recentConversationsForDashboard: [Conversation] {
@@ -1136,9 +1161,35 @@ class AppState: ObservableObject {
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = String(body.prefix(100))
-        content.sound = .default
+        if notifySoundEnabled && notificationSound != "none" {
+            switch notificationSound {
+            case "ping":
+                content.sound = UNNotificationSound(named: UNNotificationSoundName("Ping"))
+            case "pop":
+                content.sound = UNNotificationSound(named: UNNotificationSoundName("Pop"))
+            case "glass":
+                content.sound = UNNotificationSound(named: UNNotificationSoundName("Glass"))
+            default:
+                content.sound = .default
+            }
+        } else {
+            content.sound = nil
+        }
         let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
         UNUserNotificationCenter.current().add(request)
+    }
+
+    func playNotificationSound() {
+        guard notificationsEnabled && notifySoundEnabled else { return }
+        let soundName: String
+        switch notificationSound {
+        case "ping": soundName = "Ping"
+        case "pop": soundName = "Pop"
+        case "glass": soundName = "Glass"
+        case "none": return
+        default: soundName = "Blow"
+        }
+        NSSound(named: NSSound.Name(soundName))?.play()
     }
 
     func showToast(_ message: String, type: ToastType = .info) {

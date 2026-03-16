@@ -49,6 +49,9 @@ struct SettingsView: View {
                 // 5. Appearance
                 appearanceSection
 
+                // 5b. Notifications
+                notificationsSection
+
                 // 6. Quick Actions & Paths
                 pathsSection
 
@@ -768,6 +771,95 @@ struct SettingsView: View {
                             .accessibilityLabel("Window Opacity")
                             .accessibilityValue("\(Int(appState.windowOpacity * 100)) percent")
                     }
+                }
+            }
+        }
+    }
+
+    // MARK: - Notifications
+
+    private var notificationsSection: some View {
+        SettingsSection(title: "Notifications", icon: "bell") {
+            VStack(spacing: 14) {
+                // Master switch
+                HStack {
+                    Text("Enable notifications")
+                        .font(AppTheme.fontBody)
+                        .foregroundColor(AppTheme.textPrimary)
+                    Spacer()
+                    Toggle("Enable notifications", isOn: $appState.notificationsEnabled)
+                        .toggleStyle(.switch)
+                        .tint(AppTheme.accent)
+                        .labelsHidden()
+                        .accessibilityLabel("Enable notifications")
+                        .accessibilityValue(appState.notificationsEnabled ? "On" : "Off")
+                }
+
+                // Sound on message received
+                HStack {
+                    Text("Sound on message received")
+                        .font(AppTheme.fontBody)
+                        .foregroundColor(appState.notificationsEnabled ? AppTheme.textPrimary : AppTheme.textMuted)
+                    Spacer()
+                    Toggle("Sound on message received", isOn: $appState.notifySoundEnabled)
+                        .toggleStyle(.switch)
+                        .tint(AppTheme.accent)
+                        .labelsHidden()
+                        .disabled(!appState.notificationsEnabled)
+                        .accessibilityLabel("Sound on message received")
+                        .accessibilityValue(appState.notifySoundEnabled ? "On" : "Off")
+                }
+
+                // Notify on task complete
+                HStack {
+                    Text("Show notification when task completes")
+                        .font(AppTheme.fontBody)
+                        .foregroundColor(appState.notificationsEnabled ? AppTheme.textPrimary : AppTheme.textMuted)
+                    Spacer()
+                    Toggle("Notify on task complete", isOn: $appState.notifyOnTaskComplete)
+                        .toggleStyle(.switch)
+                        .tint(AppTheme.accent)
+                        .labelsHidden()
+                        .disabled(!appState.notificationsEnabled)
+                        .accessibilityLabel("Show notification when task completes")
+                        .accessibilityValue(appState.notifyOnTaskComplete ? "On" : "Off")
+                }
+
+                // Notify on agent route
+                HStack {
+                    Text("Show notification when agent routes")
+                        .font(AppTheme.fontBody)
+                        .foregroundColor(appState.notificationsEnabled ? AppTheme.textPrimary : AppTheme.textMuted)
+                    Spacer()
+                    Toggle("Notify on agent route", isOn: $appState.notifyOnAgentRoute)
+                        .toggleStyle(.switch)
+                        .tint(AppTheme.accent)
+                        .labelsHidden()
+                        .disabled(!appState.notificationsEnabled)
+                        .accessibilityLabel("Show notification when agent routes")
+                        .accessibilityValue(appState.notifyOnAgentRoute ? "On" : "Off")
+                }
+
+                Divider().background(AppTheme.borderGlass)
+
+                // Notification sound picker
+                HStack {
+                    Text("Notification sound")
+                        .font(AppTheme.fontBody)
+                        .foregroundColor(appState.notificationsEnabled ? AppTheme.textPrimary : AppTheme.textMuted)
+                    Spacer()
+                    Picker("Notification sound", selection: $appState.notificationSound) {
+                        Text("Default").tag("default")
+                        Text("Ping").tag("ping")
+                        Text("Pop").tag("pop")
+                        Text("Glass").tag("glass")
+                        Text("None").tag("none")
+                    }
+                    .pickerStyle(.menu)
+                    .tint(AppTheme.accent)
+                    .labelsHidden()
+                    .disabled(!appState.notificationsEnabled)
+                    .accessibilityLabel("Notification sound")
                 }
             }
         }
