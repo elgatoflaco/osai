@@ -3,6 +3,7 @@ import SwiftUI
 struct AgentsView: View {
     @EnvironmentObject var appState: AppState
     @State private var showCreateSheet = false
+    @State private var agentToEdit: AgentInfo?
 
     private let columns = [
         GridItem(.flexible(), spacing: 16),
@@ -90,6 +91,8 @@ struct AgentsView: View {
                         ForEach(appState.agents) { agent in
                             AgentCard(agent: agent, onChat: {
                                 startChatWith(agent)
+                            }, onEdit: {
+                                agentToEdit = agent
                             }, onDelete: {
                                 appState.deleteAgent(agent)
                             })
@@ -104,6 +107,9 @@ struct AgentsView: View {
         }
         .sheet(isPresented: $showCreateSheet) {
             CreateAgentSheet(appState: appState)
+        }
+        .sheet(item: $agentToEdit) { agent in
+            EditAgentSheet(appState: appState, agent: agent)
         }
     }
 
@@ -126,6 +132,7 @@ struct AgentsView: View {
 struct AgentCard: View {
     let agent: AgentInfo
     let onChat: () -> Void
+    let onEdit: () -> Void
     let onDelete: () -> Void
     @State private var isHovered = false
     @State private var showConfirmDelete = false
@@ -151,6 +158,9 @@ struct AgentCard: View {
 
                 // Context menu for more actions
                 Menu {
+                    Button(action: onEdit) {
+                        Label("Edit Agent", systemImage: "pencil")
+                    }
                     Button(action: {
                         let path = NSHomeDirectory() + "/.desktop-agent/agents/\(agent.name).md"
                         NSWorkspace.shared.open(URL(fileURLWithPath: path))
@@ -341,6 +351,16 @@ struct FlowLayout: Layout {
     }
 }
 
+// MARK: - Shared Model Options
+
+private let agentModelOptions = [
+    "anthropic/claude-sonnet-4-20250514",
+    "anthropic/claude-haiku-4-5-20251001",
+    "google/gemini-2.5-flash",
+    "openrouter/x-ai/grok-3-mini",
+    "claude-code",
+]
+
 // MARK: - Create Agent Sheet
 
 struct CreateAgentSheet: View {
@@ -353,14 +373,6 @@ struct CreateAgentSheet: View {
     @State private var model = "anthropic/claude-sonnet-4-20250514"
     @State private var triggers = ""
     @State private var systemPrompt = ""
-
-    private let modelOptions = [
-        "anthropic/claude-sonnet-4-20250514",
-        "anthropic/claude-haiku-4-5-20251001",
-        "google/gemini-2.5-flash",
-        "openrouter/x-ai/grok-3-mini",
-        "claude-code",
-    ]
 
     private var slug: String {
         name.lowercased()
@@ -417,9 +429,11 @@ struct CreateAgentSheet: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     if step == 1 {
-                        stepOneBasics
+                        AgentFormIdentity(name: $name, description: $description, slug: slug, nameEditable: true)
+                        AgentFormModel(model: $model)
                     } else {
-                        stepTwoBehavior
+                        AgentFormSystemPrompt(systemPrompt: $systemPrompt)
+                        AgentFormTriggers(triggers: $triggers, triggerList: triggerList)
                     }
                 }
                 .padding(20)
@@ -485,138 +499,6 @@ struct CreateAgentSheet: View {
         .background(AppTheme.bgSecondary)
     }
 
-    // MARK: - Step 1: Basics
-
-    private var stepOneBasics: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            GlassCard {
-                VStack(alignment: .leading, spacing: 14) {
-                    Label("Identity", systemImage: "person.text.rectangle")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundColor(AppTheme.accent)
-
-                    FormField(label: "Name") {
-                        TextField("My Agent", text: $name)
-                            .textFieldStyle(.plain)
-                            .font(AppTheme.fontBody)
-                            .padding(10)
-                            .background(AppTheme.bgPrimary.opacity(0.5))
-                            .clipShape(RoundedRectangle(cornerRadius: 8))
-                    }
-
-                    if !slug.isEmpty {
-                        HStack(spacing: 4) {
-                            Image(systemName: "doc.text")
-                                .font(.system(size: 10))
-                            Text("~/.desktop-agent/agents/\(slug).md")
-                                .font(.system(size: 11, design: .monospaced))
-                        }
-                        .foregroundColor(AppTheme.textMuted)
-                    }
-
-                    FormField(label: "Description") {
-                        TextField("What does this agent do?", text: $description)
-                            .textFieldStyle(.plain)
-                            .font(AppTheme.fontBody)
-                            .padding(10)
-                            .background(AppTheme.bgPrimary.opacity(0.5))
-                            .clipShape(RoundedRectangle(cornerRadius: 8))
-                    }
-                }
-            }
-
-            GlassCard {
-                VStack(alignment: .leading, spacing: 14) {
-                    Label("Model", systemImage: "cpu")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundColor(AppTheme.accent)
-
-                    Picker("", selection: $model) {
-                        ForEach(modelOptions, id: \.self) { m in
-                            Text(m).tag(m)
-                        }
-                    }
-                    .pickerStyle(.menu)
-                    .tint(AppTheme.accent)
-
-                    if model == "claude-code" {
-                        HStack(spacing: 6) {
-                            Image(systemName: "terminal")
-                                .font(.system(size: 11))
-                            Text("Delegates to local Claude Code CLI for code tasks")
-                                .font(.system(size: 11))
-                        }
-                        .foregroundColor(AppTheme.textMuted)
-                    }
-                }
-            }
-        }
-    }
-
-    // MARK: - Step 2: Behavior
-
-    private var stepTwoBehavior: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            GlassCard {
-                VStack(alignment: .leading, spacing: 14) {
-                    Label("System Prompt", systemImage: "text.bubble")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundColor(AppTheme.accent)
-
-                    TextEditor(text: $systemPrompt)
-                        .font(AppTheme.fontMono)
-                        .foregroundColor(AppTheme.textPrimary)
-                        .scrollContentBackground(.hidden)
-                        .padding(10)
-                        .frame(minHeight: 120, maxHeight: 180)
-                        .background(AppTheme.bgPrimary.opacity(0.5))
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
-
-                    Text("Instructions that define how the agent behaves and responds.")
-                        .font(.system(size: 11))
-                        .foregroundColor(AppTheme.textMuted)
-                }
-            }
-
-            GlassCard {
-                VStack(alignment: .leading, spacing: 14) {
-                    Label("Trigger Keywords", systemImage: "tag")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundColor(AppTheme.accent)
-
-                    TextField("code, debug, implement, fix", text: $triggers)
-                        .textFieldStyle(.plain)
-                        .font(AppTheme.fontBody)
-                        .padding(10)
-                        .background(AppTheme.bgPrimary.opacity(0.5))
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
-
-                    if !triggerList.isEmpty {
-                        FlowLayout(spacing: 6) {
-                            ForEach(triggerList, id: \.self) { trigger in
-                                Text(trigger)
-                                    .font(.system(size: 11, weight: .medium))
-                                    .foregroundColor(AppTheme.accent)
-                                    .padding(.horizontal, 10)
-                                    .padding(.vertical, 4)
-                                    .background(AppTheme.accent.opacity(0.12))
-                                    .clipShape(Capsule())
-                                    .overlay(
-                                        Capsule()
-                                            .stroke(AppTheme.accent.opacity(0.25), lineWidth: 0.5)
-                                    )
-                            }
-                        }
-                    }
-
-                    Text("Messages containing these keywords will auto-route to this agent.")
-                        .font(.system(size: 11))
-                        .foregroundColor(AppTheme.textMuted)
-                }
-            }
-        }
-    }
-
     // MARK: - Save
 
     private func saveAndDismiss() {
@@ -653,6 +535,316 @@ struct CreateAgentSheet: View {
         dismiss()
     }
 }
+
+// MARK: - Edit Agent Sheet
+
+struct EditAgentSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject var appState: AppState
+    let agent: AgentInfo
+
+    @State private var step = 1
+    @State private var description: String = ""
+    @State private var model: String = ""
+    @State private var triggers: String = ""
+    @State private var systemPrompt: String = ""
+
+    private var triggerList: [String] {
+        triggers.split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Edit Agent")
+                        .font(AppTheme.fontHeadline)
+                        .foregroundColor(AppTheme.textPrimary)
+                    Text("Step \(step) of 2 — \(step == 1 ? "Basics" : "Behavior")")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(AppTheme.textMuted)
+                }
+                Spacer()
+                Button(action: { dismiss() }) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 18))
+                        .foregroundColor(AppTheme.textMuted)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(20)
+
+            // Step indicator bar
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Rectangle()
+                        .fill(AppTheme.bgPrimary.opacity(0.3))
+                        .frame(height: 3)
+                    Rectangle()
+                        .fill(AppTheme.accent)
+                        .frame(width: geo.size.width * (CGFloat(step) / 2.0), height: 3)
+                        .animation(.easeInOut(duration: 0.3), value: step)
+                }
+            }
+            .frame(height: 3)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    if step == 1 {
+                        AgentFormIdentity(
+                            name: .constant(agent.name),
+                            description: $description,
+                            slug: agent.name,
+                            nameEditable: false
+                        )
+                        AgentFormModel(model: $model)
+                    } else {
+                        AgentFormSystemPrompt(systemPrompt: $systemPrompt)
+                        AgentFormTriggers(triggers: $triggers, triggerList: triggerList)
+                    }
+                }
+                .padding(20)
+            }
+
+            Divider().background(AppTheme.borderGlass)
+
+            // Footer
+            HStack {
+                if step == 1 {
+                    Button("Cancel") { dismiss() }
+                        .foregroundColor(AppTheme.textSecondary)
+                        .buttonStyle(.plain)
+                } else {
+                    Button(action: { withAnimation { step = 1 } }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "chevron.left")
+                            Text("Back")
+                        }
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(AppTheme.textSecondary)
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                Spacer()
+
+                if step == 1 {
+                    Button(action: { withAnimation { step = 2 } }) {
+                        HStack(spacing: 6) {
+                            Text("Next")
+                            Image(systemName: "chevron.right")
+                        }
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 10)
+                        .background(AppTheme.accent)
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                    }
+                    .buttonStyle(.plain)
+                } else {
+                    Button(action: saveAndDismiss) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "checkmark.circle.fill")
+                            Text("Save Changes")
+                        }
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 10)
+                        .background(AppTheme.accent)
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(20)
+        }
+        .frame(width: 540, height: 620)
+        .background(AppTheme.bgSecondary)
+        .onAppear {
+            description = agent.description
+            model = agent.model
+            systemPrompt = agent.systemPrompt
+            triggers = agent.triggers.joined(separator: ", ")
+        }
+    }
+
+    private func saveAndDismiss() {
+        appState.saveAgent(agent, description: description, model: model, systemPrompt: systemPrompt, triggers: triggerList)
+        dismiss()
+    }
+}
+
+// MARK: - Reusable Agent Form Components
+
+struct AgentFormIdentity: View {
+    @Binding var name: String
+    @Binding var description: String
+    let slug: String
+    let nameEditable: Bool
+
+    var body: some View {
+        GlassCard {
+            VStack(alignment: .leading, spacing: 14) {
+                Label("Identity", systemImage: "person.text.rectangle")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(AppTheme.accent)
+
+                FormField(label: "Name") {
+                    if nameEditable {
+                        TextField("My Agent", text: $name)
+                            .textFieldStyle(.plain)
+                            .font(AppTheme.fontBody)
+                            .padding(10)
+                            .background(AppTheme.bgPrimary.opacity(0.5))
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                    } else {
+                        HStack {
+                            Text(name)
+                                .font(AppTheme.fontBody)
+                                .foregroundColor(AppTheme.textPrimary)
+                            Spacer()
+                            Text("read-only")
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundColor(AppTheme.textMuted)
+                        }
+                        .padding(10)
+                        .background(AppTheme.bgPrimary.opacity(0.3))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                    }
+                }
+
+                if !slug.isEmpty {
+                    HStack(spacing: 4) {
+                        Image(systemName: "doc.text")
+                            .font(.system(size: 10))
+                        Text("~/.desktop-agent/agents/\(slug).md")
+                            .font(.system(size: 11, design: .monospaced))
+                    }
+                    .foregroundColor(AppTheme.textMuted)
+                }
+
+                FormField(label: "Description") {
+                    TextField("What does this agent do?", text: $description)
+                        .textFieldStyle(.plain)
+                        .font(AppTheme.fontBody)
+                        .padding(10)
+                        .background(AppTheme.bgPrimary.opacity(0.5))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                }
+            }
+        }
+    }
+}
+
+struct AgentFormModel: View {
+    @Binding var model: String
+
+    var body: some View {
+        GlassCard {
+            VStack(alignment: .leading, spacing: 14) {
+                Label("Model", systemImage: "cpu")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(AppTheme.accent)
+
+                Picker("", selection: $model) {
+                    ForEach(agentModelOptions, id: \.self) { m in
+                        Text(m).tag(m)
+                    }
+                }
+                .pickerStyle(.menu)
+                .tint(AppTheme.accent)
+
+                if model == "claude-code" {
+                    HStack(spacing: 6) {
+                        Image(systemName: "terminal")
+                            .font(.system(size: 11))
+                        Text("Delegates to local Claude Code CLI for code tasks")
+                            .font(.system(size: 11))
+                    }
+                    .foregroundColor(AppTheme.textMuted)
+                }
+            }
+        }
+    }
+}
+
+struct AgentFormSystemPrompt: View {
+    @Binding var systemPrompt: String
+
+    var body: some View {
+        GlassCard {
+            VStack(alignment: .leading, spacing: 14) {
+                Label("System Prompt", systemImage: "text.bubble")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(AppTheme.accent)
+
+                TextEditor(text: $systemPrompt)
+                    .font(AppTheme.fontMono)
+                    .foregroundColor(AppTheme.textPrimary)
+                    .scrollContentBackground(.hidden)
+                    .padding(10)
+                    .frame(minHeight: 120, maxHeight: 180)
+                    .background(AppTheme.bgPrimary.opacity(0.5))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+
+                Text("Instructions that define how the agent behaves and responds.")
+                    .font(.system(size: 11))
+                    .foregroundColor(AppTheme.textMuted)
+            }
+        }
+    }
+}
+
+struct AgentFormTriggers: View {
+    @Binding var triggers: String
+    let triggerList: [String]
+
+    var body: some View {
+        GlassCard {
+            VStack(alignment: .leading, spacing: 14) {
+                Label("Trigger Keywords", systemImage: "tag")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(AppTheme.accent)
+
+                TextField("code, debug, implement, fix", text: $triggers)
+                    .textFieldStyle(.plain)
+                    .font(AppTheme.fontBody)
+                    .padding(10)
+                    .background(AppTheme.bgPrimary.opacity(0.5))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+
+                if !triggerList.isEmpty {
+                    FlowLayout(spacing: 6) {
+                        ForEach(triggerList, id: \.self) { trigger in
+                            Text(trigger)
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundColor(AppTheme.accent)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 4)
+                                .background(AppTheme.accent.opacity(0.12))
+                                .clipShape(Capsule())
+                                .overlay(
+                                    Capsule()
+                                        .stroke(AppTheme.accent.opacity(0.25), lineWidth: 0.5)
+                                )
+                        }
+                    }
+                }
+
+                Text("Messages containing these keywords will auto-route to this agent.")
+                    .font(.system(size: 11))
+                    .foregroundColor(AppTheme.textMuted)
+            }
+        }
+    }
+}
+
+// MARK: - Form Field
 
 struct FormField<Content: View>: View {
     let label: String

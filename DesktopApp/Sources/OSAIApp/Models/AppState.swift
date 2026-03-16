@@ -1,6 +1,7 @@
 import SwiftUI
 import Combine
 import UniformTypeIdentifiers
+import UserNotifications
 
 // MARK: - Toast
 
@@ -70,6 +71,7 @@ class AppState: ObservableObject {
     @AppStorage("sidebarCollapsed") var sidebarCollapsed: Bool = false
     @AppStorage("hasCompletedOnboarding") var hasCompletedOnboarding: Bool = false
     @AppStorage("globalHotkeyEnabled") var globalHotkeyEnabled: Bool = true
+    @AppStorage("notificationsEnabled") var notificationsEnabled: Bool = true
 
     @Published var selectedTab: SidebarItem = .home
     @Published var agents: [AgentInfo] = []
@@ -87,6 +89,7 @@ class AppState: ObservableObject {
     @Published var toastMessage: Toast?
     @Published var isProcessing: Bool = false
     @Published var shouldFocusInput: Bool = false
+    @Published var focusModeEnabled: Bool = false
     @Published var contextPressurePercent: Int = 0
     private(set) var runningProcess: Process?
 
@@ -94,6 +97,26 @@ class AppState: ObservableObject {
     private let configService = ConfigService()
     private var refreshTimer: Timer?
     private var toastDismissTask: Task<Void, Never>?
+
+    // MARK: - Notifications
+
+    func requestNotificationPermission() {
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, error in
+            if let error = error {
+                print("[OSAI] Notification permission error: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    func sendNotification(title: String, body: String) {
+        guard notificationsEnabled else { return }
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = String(body.prefix(100))
+        content.sound = .default
+        let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(request)
+    }
 
     func showToast(_ message: String, type: ToastType = .info) {
         toastDismissTask?.cancel()
@@ -106,6 +129,7 @@ class AppState: ObservableObject {
     }
 
     func loadAll() {
+        requestNotificationPermission()
         isLoading = true
         agents = service.loadAgents()
         tasks = service.loadTasks()
@@ -127,11 +151,18 @@ class AppState: ObservableObject {
     }
 
     func refreshStatus() {
+        let wasRunning = gatewayRunning
         let status = service.gatewayStatus()
         gatewayRunning = status.running
         gatewayPID = status.pid
         loadSpending()
         tasks = service.loadTasks()
+
+        // Notify if gateway stopped unexpectedly
+        if wasRunning && !gatewayRunning {
+            sendNotification(title: "OSAI", body: "Gateway stopped unexpectedly")
+            showToast("Gateway stopped unexpectedly", type: .error)
+        }
     }
 
     func loadSpending() {
@@ -244,6 +275,13 @@ class AppState: ObservableObject {
                 syncConversationToList()
                 if let conv = activeConversation {
                     service.saveConversation(conv)
+                }
+
+                // Send notification if app is in the background
+                if let app = NSApp, !app.isActive {
+                    let title = activeConversation?.agentName ?? "OSAI"
+                    let body = activeConversation?.messages.last(where: { $0.role == .assistant })?.content ?? ""
+                    sendNotification(title: title, body: body)
                 }
             } catch {
                 self.runningProcess = nil
@@ -475,6 +513,34 @@ class AppState: ObservableObject {
             refreshStatus()
             showToast(wasRunning ? "Gateway stopped" : "Gateway started", type: .success)
         }
+    }
+
+    func saveAgent(_ agent: AgentInfo, description: String, model: String, systemPrompt: String, triggers: [String]) {
+        let backend = model == "claude-code" ? "claude-code" : "api"
+
+        var content = "---\n"
+        content += "name: \(agent.name)\n"
+        content += "description: \(description)\n"
+        content += "model: \(model)\n"
+        if backend != "api" {
+            content += "backend: \(backend)\n"
+        }
+        if !triggers.isEmpty {
+            content += "triggers:\n"
+            for t in triggers {
+                content += "  - \(t)\n"
+            }
+        }
+        content += "---\n"
+        if !systemPrompt.isEmpty {
+            content += systemPrompt + "\n"
+        }
+
+        let path = NSHomeDirectory() + "/.desktop-agent/agents/\(agent.name).md"
+        try? content.write(toFile: path, atomically: true, encoding: .utf8)
+
+        agents = service.loadAgents()
+        showToast("Agent \"\(agent.name)\" updated", type: .success)
     }
 
     func deleteAgent(_ agent: AgentInfo) {

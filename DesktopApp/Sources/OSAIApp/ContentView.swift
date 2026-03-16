@@ -213,11 +213,206 @@ struct OnboardingFeatureRow: View {
     }
 }
 
+// MARK: - Command Palette
+
+struct PaletteCommand: Identifiable {
+    let id = UUID()
+    let icon: String
+    let label: String
+    let shortcut: String?
+    let action: () -> Void
+}
+
+struct CommandPaletteView: View {
+    @EnvironmentObject var appState: AppState
+    @Binding var isPresented: Bool
+    @Binding var selectedTab: SidebarItem
+    @State private var search = ""
+    @State private var selectedIndex = 0
+    @FocusState private var isSearchFocused: Bool
+
+    private var commands: [PaletteCommand] {
+        var cmds: [PaletteCommand] = [
+            PaletteCommand(icon: "plus.bubble", label: "New Chat", shortcut: "\u{2318}N") {
+                appState.startNewChat(); isPresented = false
+            },
+            PaletteCommand(icon: "bolt.fill", label: "Toggle Gateway", shortcut: nil) {
+                appState.toggleGateway(); isPresented = false
+            },
+            PaletteCommand(icon: "house.fill", label: "Dashboard", shortcut: "\u{2318}1") {
+                selectedTab = .home; isPresented = false
+            },
+            PaletteCommand(icon: "bubble.left.and.bubble.right.fill", label: "Chat", shortcut: "\u{2318}2") {
+                selectedTab = .chat; isPresented = false
+            },
+            PaletteCommand(icon: "person.3.fill", label: "Agents", shortcut: "\u{2318}3") {
+                selectedTab = .agents; isPresented = false
+            },
+            PaletteCommand(icon: "clock.fill", label: "Tasks", shortcut: "\u{2318}4") {
+                selectedTab = .tasks; isPresented = false
+            },
+            PaletteCommand(icon: "gearshape.fill", label: "Settings", shortcut: "\u{2318},") {
+                selectedTab = .settings; isPresented = false
+            },
+            PaletteCommand(icon: "square.and.arrow.up", label: "Export Chat", shortcut: nil) {
+                if let conv = appState.activeConversation {
+                    appState.exportAndSave(conv)
+                }
+                isPresented = false
+            },
+            PaletteCommand(icon: "moon.fill", label: "Toggle Dark Mode", shortcut: nil) {
+                appState.isDarkMode.toggle(); isPresented = false
+            },
+            PaletteCommand(icon: "eye.slash", label: "Toggle Focus Mode", shortcut: nil) {
+                appState.focusModeEnabled.toggle(); isPresented = false
+            },
+        ]
+
+        // Recent conversations (last 5)
+        let recent = appState.conversations.prefix(5)
+        for conv in recent {
+            cmds.append(PaletteCommand(icon: "text.bubble", label: "Open: \(conv.title)", shortcut: nil) {
+                appState.openConversation(conv)
+                isPresented = false
+            })
+        }
+
+        return cmds
+    }
+
+    private var filtered: [PaletteCommand] {
+        if search.isEmpty { return commands }
+        let query = search.lowercased()
+        return commands.filter { $0.label.lowercased().contains(query) }
+    }
+
+    var body: some View {
+        ZStack {
+            // Backdrop
+            Color.black.opacity(0.45)
+                .ignoresSafeArea()
+                .onTapGesture { isPresented = false }
+
+            VStack(spacing: 0) {
+                // Search field
+                HStack(spacing: 10) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundColor(AppTheme.textSecondary)
+                        .font(.system(size: 15))
+                    TextField("Type a command...", text: $search)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 15))
+                        .foregroundColor(AppTheme.textPrimary)
+                        .focused($isSearchFocused)
+                        .onSubmit { executeSelected() }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+
+                Divider()
+                    .background(AppTheme.borderGlass)
+
+                // Command list
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(spacing: 0) {
+                            ForEach(Array(filtered.enumerated()), id: \.element.id) { index, cmd in
+                                HStack(spacing: 12) {
+                                    Image(systemName: cmd.icon)
+                                        .font(.system(size: 13))
+                                        .foregroundColor(index == selectedIndex ? AppTheme.accent : AppTheme.textSecondary)
+                                        .frame(width: 22)
+
+                                    Text(cmd.label)
+                                        .font(.system(size: 13))
+                                        .foregroundColor(AppTheme.textPrimary)
+                                        .lineLimit(1)
+
+                                    Spacer()
+
+                                    if let shortcut = cmd.shortcut {
+                                        Text(shortcut)
+                                            .font(.system(size: 11, design: .rounded))
+                                            .foregroundColor(AppTheme.textSecondary.opacity(0.6))
+                                            .padding(.horizontal, 6)
+                                            .padding(.vertical, 2)
+                                            .background(AppTheme.bgSecondary.opacity(0.5))
+                                            .clipShape(RoundedRectangle(cornerRadius: 4))
+                                    }
+                                }
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 8)
+                                .background(index == selectedIndex ? AppTheme.accent.opacity(0.12) : Color.clear)
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    cmd.action()
+                                }
+                                .id(index)
+                            }
+                        }
+                        .padding(.vertical, 4)
+                    }
+                    .frame(maxHeight: 320)
+                    .onChange(of: selectedIndex) {
+                        withAnimation(.easeOut(duration: 0.1)) {
+                            proxy.scrollTo(selectedIndex, anchor: .center)
+                        }
+                    }
+                }
+            }
+            .frame(maxWidth: 500)
+            .background(
+                RoundedRectangle(cornerRadius: 14)
+                    .fill(.ultraThinMaterial)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14)
+                            .strokeBorder(AppTheme.borderGlass, lineWidth: 1)
+                    )
+                    .shadow(color: .black.opacity(0.4), radius: 30, x: 0, y: 10)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 14))
+            .padding(.horizontal, 40)
+            .padding(.bottom, 120)
+        }
+        .onAppear {
+            search = ""
+            selectedIndex = 0
+            isSearchFocused = true
+        }
+        .onChange(of: search) {
+            selectedIndex = 0
+        }
+        .onKeyPress(.upArrow) {
+            if selectedIndex > 0 { selectedIndex -= 1 }
+            return .handled
+        }
+        .onKeyPress(.downArrow) {
+            if selectedIndex < filtered.count - 1 { selectedIndex += 1 }
+            return .handled
+        }
+        .onKeyPress(.escape) {
+            isPresented = false
+            return .handled
+        }
+        .onKeyPress(.return) {
+            executeSelected()
+            return .handled
+        }
+    }
+
+    private func executeSelected() {
+        guard !filtered.isEmpty, selectedIndex < filtered.count else { return }
+        filtered[selectedIndex].action()
+    }
+}
+
 // MARK: - Content View
 
 struct ContentView: View {
     @EnvironmentObject var appState: AppState
     @StateObject private var hotkeyManager = HotkeyManager()
+    @State private var showCommandPalette = false
+    @State private var commandSearch = ""
 
     var body: some View {
         HStack(spacing: 0) {
@@ -257,6 +452,17 @@ struct ContentView: View {
             }
         }
         .animation(.easeOut(duration: 0.3), value: appState.hasCompletedOnboarding)
+        // Command palette overlay
+        .overlay {
+            if showCommandPalette {
+                CommandPaletteView(
+                    isPresented: $showCommandPalette,
+                    selectedTab: $appState.selectedTab
+                )
+                .transition(.opacity.combined(with: .scale(scale: 0.97)))
+            }
+        }
+        .animation(.easeOut(duration: 0.15), value: showCommandPalette)
         .overlay(alignment: .top) {
             if let toast = appState.toastMessage {
                 ToastView(toast: toast)
@@ -318,6 +524,9 @@ struct ContentView: View {
                     .hidden()
                 Button("") { appState.cancelProcessing() }
                     .keyboardShortcut(.escape, modifiers: [])
+                    .hidden()
+                Button("") { showCommandPalette.toggle() }
+                    .keyboardShortcut("k", modifiers: .command)
                     .hidden()
             }
         )
