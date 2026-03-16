@@ -438,29 +438,7 @@ struct ClickableOutputView: View {
                     }
 
                 case .image(let path):
-                    VStack(alignment: .leading, spacing: 4) {
-                        Button(action: { openPath(path) }) {
-                            HStack(spacing: 4) {
-                                Image(systemName: "photo")
-                                    .font(.system(size: 9))
-                                Text(abbreviatePath(path))
-                                    .font(.system(size: 10, design: .monospaced))
-                                    .underline()
-                            }
-                            .foregroundColor(AppTheme.accent)
-                        }
-                        .buttonStyle(.plain)
-
-                        if let nsImage = NSImage(contentsOfFile: path) {
-                            Image(nsImage: nsImage)
-                                .resizable()
-                                .aspectRatio(contentMode: .fit)
-                                .frame(maxHeight: 200)
-                                .clipShape(RoundedRectangle(cornerRadius: 6))
-                                .overlay(RoundedRectangle(cornerRadius: 6).stroke(AppTheme.borderGlass, lineWidth: 0.5))
-                                .onTapGesture { openPath(path) }
-                        }
-                    }
+                    ImagePreviewView(path: path)
                 }
             }
         }
@@ -522,7 +500,13 @@ struct ClickableOutputView: View {
 
     private func openPath(_ path: String) {
         let clean = path.trimmingCharacters(in: CharacterSet(charactersIn: ".,;:"))
-        NSWorkspace.shared.selectFile(clean, inFileViewerRootedAtPath: "")
+        let ext = (clean as NSString).pathExtension.lowercased()
+        let imageExts = ["png", "jpg", "jpeg", "gif", "webp", "tiff", "bmp", "heic"]
+        if imageExts.contains(ext) {
+            NSWorkspace.shared.open(URL(fileURLWithPath: clean))
+        } else {
+            NSWorkspace.shared.selectFile(clean, inFileViewerRootedAtPath: "")
+        }
     }
 
     private func abbreviatePath(_ path: String) -> String {
@@ -547,6 +531,97 @@ struct ClickableOutputView: View {
             if (path as NSString).pathExtension.isEmpty { return "folder" }
             return "doc"
         }
+    }
+}
+
+// MARK: - Image Preview
+
+struct ImagePreviewView: View {
+    let path: String
+    @State private var loadedImage: NSImage?
+    @State private var isLoading = true
+    @State private var isHovered = false
+
+    private var filename: String {
+        (path as NSString).lastPathComponent
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if isLoading {
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.small)
+                        .scaleEffect(0.7)
+                    Text(filename)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundColor(AppTheme.textMuted)
+                        .lineLimit(1)
+                }
+                .padding(8)
+                .background(AppTheme.bgPrimary.opacity(0.4))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+            } else if let nsImage = loadedImage {
+                VStack(alignment: .leading, spacing: 4) {
+                    Image(nsImage: nsImage)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(maxWidth: 300)
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8)
+                                .stroke(isHovered ? AppTheme.accent.opacity(0.4) : AppTheme.borderGlass, lineWidth: isHovered ? 1.5 : 0.5)
+                        )
+                        .shadow(color: .black.opacity(isHovered ? 0.15 : 0), radius: 4, y: 2)
+                        .onTapGesture { openInPreview() }
+                        .onHover { hovering in
+                            withAnimation(.easeInOut(duration: 0.15)) { isHovered = hovering }
+                            if hovering { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+                        }
+
+                    HStack(spacing: 4) {
+                        Image(systemName: "photo")
+                            .font(.system(size: 9))
+                            .foregroundColor(AppTheme.textMuted)
+                        Text(filename)
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundColor(AppTheme.textMuted)
+                            .lineLimit(1)
+                    }
+                }
+            } else {
+                // Failed to load
+                Button(action: { openInPreview() }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "photo")
+                            .font(.system(size: 9))
+                        Text(filename)
+                            .font(.system(size: 10, design: .monospaced))
+                            .underline()
+                    }
+                    .foregroundColor(AppTheme.accent)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .onAppear { loadImage() }
+    }
+
+    private func loadImage() {
+        isLoading = true
+        DispatchQueue.global(qos: .userInitiated).async {
+            let clean = path.trimmingCharacters(in: CharacterSet(charactersIn: ".,;:"))
+            let image = NSImage(contentsOfFile: clean)
+            DispatchQueue.main.async {
+                loadedImage = image
+                isLoading = false
+            }
+        }
+    }
+
+    private func openInPreview() {
+        let clean = path.trimmingCharacters(in: CharacterSet(charactersIn: ".,;:"))
+        NSWorkspace.shared.open(URL(fileURLWithPath: clean))
     }
 }
 
@@ -643,6 +718,9 @@ struct ResponseView: View {
 
         case .codeBlock(let code, let lang):
             CodeBlockView(code: code, language: lang)
+
+        case .table(let headers, let rows):
+            MarkdownTableView(headers: headers, rows: rows)
 
         case .divider:
             Rectangle().fill(AppTheme.borderGlass).frame(height: 1).padding(.vertical, 4)
@@ -749,6 +827,71 @@ struct StepProgressView: View {
         .background(AppTheme.bgCard.opacity(0.4))
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(AppTheme.borderGlass, lineWidth: 0.5))
+    }
+}
+
+// MARK: - Markdown Table
+
+struct MarkdownTableView: View {
+    let headers: [String]
+    let rows: [[String]]
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 0) {
+                // Header row
+                HStack(spacing: 0) {
+                    ForEach(Array(headers.enumerated()), id: \.offset) { idx, header in
+                        Text(header)
+                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                            .foregroundColor(AppTheme.textPrimary)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 7)
+                            .frame(minWidth: 80, alignment: .leading)
+                        if idx < headers.count - 1 {
+                            Rectangle()
+                                .fill(AppTheme.borderGlass)
+                                .frame(width: 0.5)
+                        }
+                    }
+                }
+                .background(AppTheme.bgCard.opacity(0.8))
+
+                // Header bottom border
+                Rectangle()
+                    .fill(AppTheme.accent.opacity(0.3))
+                    .frame(height: 1)
+
+                // Data rows
+                ForEach(Array(rows.enumerated()), id: \.offset) { rowIdx, row in
+                    HStack(spacing: 0) {
+                        ForEach(0..<headers.count, id: \.self) { colIdx in
+                            Text(colIdx < row.count ? row[colIdx] : "")
+                                .font(.system(size: 12, design: .monospaced))
+                                .foregroundColor(AppTheme.textSecondary)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .frame(minWidth: 80, alignment: .leading)
+                            if colIdx < headers.count - 1 {
+                                Rectangle()
+                                    .fill(AppTheme.borderGlass.opacity(0.5))
+                                    .frame(width: 0.5)
+                            }
+                        }
+                    }
+                    .background(rowIdx % 2 == 0 ? Color.clear : AppTheme.bgCard.opacity(0.3))
+
+                    if rowIdx < rows.count - 1 {
+                        Rectangle()
+                            .fill(AppTheme.borderGlass.opacity(0.3))
+                            .frame(height: 0.5)
+                    }
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(AppTheme.borderGlass, lineWidth: 0.5))
+        }
+        .textSelection(.enabled)
     }
 }
 
@@ -875,6 +1018,7 @@ enum ResponseSection {
     case bulletList([String])
     case numberedList([String])
     case codeBlock(String, String)
+    case table(headers: [String], rows: [[String]])
     case divider
 }
 
@@ -906,6 +1050,34 @@ struct ResponseParser {
                 }
                 sections.append(.codeBlock(code.joined(separator: "\n"), lang))
                 if foundClose { i += 1 }
+                continue
+            }
+
+            // Table
+            if isTableRow(trimmed) {
+                var tableLines: [String] = []
+                while i < lines.count {
+                    let tl = lines[i].trimmingCharacters(in: .whitespaces)
+                    if isTableRow(tl) {
+                        tableLines.append(tl)
+                        i += 1
+                    } else {
+                        break
+                    }
+                }
+                if tableLines.count >= 2 {
+                    let headerCells = parseTableRow(tableLines[0])
+                    // Skip separator row (|---|---|)
+                    let startRow = isTableSeparator(tableLines.count > 1 ? tableLines[1] : "") ? 2 : 1
+                    var dataRows: [[String]] = []
+                    for r in startRow..<tableLines.count {
+                        dataRows.append(parseTableRow(tableLines[r]))
+                    }
+                    sections.append(.table(headers: headerCells, rows: dataRows))
+                } else if tableLines.count == 1 {
+                    // Single table line, treat as paragraph
+                    sections.append(.paragraph(tableLines[0]))
+                }
                 continue
             }
 
@@ -993,7 +1165,7 @@ struct ResponseParser {
                 let pl = lines[i].trimmingCharacters(in: .whitespaces)
                 if pl.isEmpty || pl.hasPrefix("#") || pl.hasPrefix("```") || pl.hasPrefix("---") ||
                    pl.hasPrefix("- ") || pl.hasPrefix("* ") || pl.hasPrefix("• ") ||
-                   isStepLine(pl) || pl.contains("Plan:") || isSectionHeader(pl) {
+                   isStepLine(pl) || pl.contains("Plan:") || isSectionHeader(pl) || isTableRow(pl) {
                     break
                 }
                 para.append(pl)
@@ -1078,6 +1250,28 @@ struct ResponseParser {
 
     private static func isCompletionLine(_ line: String) -> Bool {
         line.hasPrefix("✅") || line.contains("Listo:") || line.contains("¡Listo")
+    }
+
+    private static func isTableRow(_ line: String) -> Bool {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        return trimmed.hasPrefix("|") && trimmed.filter({ $0 == "|" }).count >= 2
+    }
+
+    private static func isTableSeparator(_ line: String) -> Bool {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard trimmed.hasPrefix("|") else { return false }
+        let inner = trimmed.replacingOccurrences(of: "|", with: "")
+                          .replacingOccurrences(of: "-", with: "")
+                          .replacingOccurrences(of: ":", with: "")
+                          .trimmingCharacters(in: .whitespaces)
+        return inner.isEmpty
+    }
+
+    private static func parseTableRow(_ line: String) -> [String] {
+        var trimmed = line.trimmingCharacters(in: .whitespaces)
+        if trimmed.hasPrefix("|") { trimmed = String(trimmed.dropFirst()) }
+        if trimmed.hasSuffix("|") { trimmed = String(trimmed.dropLast()) }
+        return trimmed.components(separatedBy: "|").map { $0.trimmingCharacters(in: .whitespaces) }
     }
 
     static func stripEmojis(_ text: String) -> String {
