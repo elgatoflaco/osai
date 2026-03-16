@@ -1317,40 +1317,85 @@ struct SidebarDragHandle: View {
 
     private let minWidth: Double = 200
     private let maxWidth: Double = 400
-    private let defaultWidth: Double = 280
 
     var body: some View {
-        Rectangle()
-            .fill(isHovered || isDragging ? AppTheme.accent : AppTheme.borderGlass.opacity(0.5))
-            .frame(width: isHovered || isDragging ? 3 : 1)
-            .contentShape(Rectangle().size(width: 8, height: .infinity))
-            .frame(width: 8)
-            .onHover { hovering in
-                isHovered = hovering
-                if hovering {
-                    NSCursor.resizeLeftRight.push()
-                } else {
-                    NSCursor.pop()
+        HStack(spacing: 0) {
+            // Collapse button (chevron) — visible on hover
+            Button(action: {
+                appState.toggleSidebarCollapse()
+            }) {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundColor(isHovered ? AppTheme.accent : AppTheme.textMuted)
+                    .frame(width: 16, height: 28)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .opacity(isHovered ? 1 : 0)
+            .help("Collapse sidebar (Cmd+\\)")
+
+            // Drag handle line
+            Rectangle()
+                .fill(isHovered || isDragging ? AppTheme.accent : AppTheme.borderGlass.opacity(0.5))
+                .frame(width: isHovered || isDragging ? 3 : 1)
+        }
+        .frame(width: 8)
+        .contentShape(Rectangle())
+        .onHover { hovering in
+            isHovered = hovering
+            if hovering {
+                NSCursor.resizeLeftRight.push()
+            } else {
+                NSCursor.pop()
+            }
+        }
+        .gesture(
+            DragGesture(minimumDistance: 1)
+                .onChanged { value in
+                    if !isDragging {
+                        isDragging = true
+                        dragStartWidth = appState.sidebarWidth
+                    }
+                    let newWidth = dragStartWidth + value.translation.width
+                    appState.sidebarWidth = min(maxWidth, max(minWidth, newWidth))
                 }
+                .onEnded { _ in
+                    isDragging = false
+                }
+        )
+        .onTapGesture(count: 2) {
+            appState.cycleSidebarPreset()
+        }
+        .ignoresSafeArea()
+    }
+}
+
+// MARK: - Collapsed Sidebar Strip
+
+/// A thin strip shown when the sidebar is collapsed, with a button to expand.
+struct CollapsedSidebarStrip: View {
+    @EnvironmentObject var appState: AppState
+    @State private var isHovered = false
+
+    var body: some View {
+        VStack {
+            Spacer()
+            Button(action: {
+                appState.toggleSidebarCollapse()
+            }) {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(isHovered ? AppTheme.accent : AppTheme.textMuted)
+                    .frame(width: 20, height: 44)
+                    .contentShape(Rectangle())
             }
-            .gesture(
-                DragGesture(minimumDistance: 1)
-                    .onChanged { value in
-                        if !isDragging {
-                            isDragging = true
-                            dragStartWidth = appState.sidebarWidth
-                        }
-                        let newWidth = dragStartWidth + value.translation.width
-                        appState.sidebarWidth = min(maxWidth, max(minWidth, newWidth))
-                    }
-                    .onEnded { _ in
-                        isDragging = false
-                    }
-            )
-            .onTapGesture(count: 2) {
-                appState.sidebarWidth = defaultWidth
-            }
-            .ignoresSafeArea()
+            .buttonStyle(.plain)
+            .help("Expand sidebar (Cmd+\\)")
+            Spacer()
+        }
+        .frame(width: 20)
+        .background(AppTheme.bgSecondary.opacity(0.3))
+        .onHover { isHovered = $0 }
     }
 }
 
@@ -1420,14 +1465,19 @@ struct ContentView: View {
                     .animation(.easeOut(duration: 0.15), value: showCompactMenu)
                 } else {
                     HStack(spacing: 0) {
-                        // Sidebar: hidden when very narrow, collapsed when narrow, full otherwise
+                        // Sidebar: hidden when very narrow, collapsed strip or full sidebar
                         if !hideSidebar {
-                            Sidebar()
-                                .animation(.spring(response: 0.3, dampingFraction: 0.85), value: appState.sidebarCollapsed)
-                                .animation(.spring(response: 0.3, dampingFraction: 0.85), value: isNarrow)
+                            if appState.sidebarCollapsed {
+                                CollapsedSidebarStrip()
+                                    .transition(.move(edge: .leading).combined(with: .opacity))
+                            } else {
+                                Sidebar()
+                                    .transition(.move(edge: .leading).combined(with: .opacity))
+                                    .animation(.spring(response: 0.3, dampingFraction: 0.85), value: isNarrow)
 
-                            // Draggable divider between sidebar and content
-                            SidebarDragHandle()
+                                // Draggable divider between sidebar and content
+                                SidebarDragHandle()
+                            }
                         }
 
                         // Main content area
@@ -1495,6 +1545,7 @@ struct ContentView: View {
                             }
                         }
                     }
+                    .animation(.spring(response: 0.35, dampingFraction: 0.8), value: appState.sidebarCollapsed)
 
                     // Overlay sidebar for very narrow / compact windows
                     if hideSidebar && appState.showSidebarOverlay {
@@ -1661,6 +1712,9 @@ struct ContentView: View {
                     .hidden()
                 Button("") { showKeyboardShortcuts.toggle() }
                     .keyboardShortcut("/", modifiers: .command)
+                    .hidden()
+                Button("") { appState.toggleSidebarCollapse() }
+                    .keyboardShortcut("\\", modifiers: .command)
                     .hidden()
             }
         )

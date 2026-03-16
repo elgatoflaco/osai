@@ -2952,6 +2952,8 @@ struct CodeBlockView: View {
     @State private var copied = false
     @State private var isExpanded = true
     @AppStorage("syntaxTheme") private var syntaxThemeName: String = "Monokai"
+    @AppStorage("codeWordWrap") private var codeWordWrap: Bool = false
+    @AppStorage("showLineNumbers") private var showLineNumbers: Bool = true
 
     private var currentTheme: SyntaxTheme { SyntaxTheme.named(syntaxThemeName) }
     private var lines: [String] { code.components(separatedBy: "\n") }
@@ -2989,6 +2991,25 @@ struct CodeBlockView: View {
                     .foregroundColor(AppTheme.textMuted)
 
                 Spacer()
+
+                // Word wrap toggle
+                Button(action: {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        codeWordWrap.toggle()
+                    }
+                }) {
+                    Image(systemName: codeWordWrap ? "text.word.spacing" : "arrow.left.and.right")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(codeWordWrap ? AppTheme.accent : AppTheme.textMuted)
+                        .frame(width: 24, height: 24)
+                        .background(
+                            RoundedRectangle(cornerRadius: 5)
+                                .fill(codeWordWrap ? AppTheme.accent.opacity(0.12) : Color.white.opacity(0.05))
+                        )
+                }
+                .buttonStyle(.plain)
+                .help(codeWordWrap ? "Disable word wrap" : "Enable word wrap")
+                .padding(.trailing, 4)
 
                 // Copy button
                 Button(action: {
@@ -3040,33 +3061,7 @@ struct CodeBlockView: View {
                     .frame(height: 1)
 
                 // Code area with line numbers
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(alignment: .top, spacing: 0) {
-                        VStack(alignment: .trailing, spacing: 0) {
-                            ForEach(Array(lines.enumerated()), id: \.offset) { idx, _ in
-                                Text("\(idx + 1)")
-                                    .font(.system(size: 11, design: .monospaced))
-                                    .foregroundColor(Color(red: 0x44/255, green: 0x44/255, blue: 0x55/255))
-                                    .frame(height: 18, alignment: .trailing)
-                            }
-                        }
-                        .frame(width: lineNumberWidth, alignment: .trailing)
-                        .padding(.trailing, 8)
-
-                        Rectangle()
-                            .fill(Color.white.opacity(0.06))
-                            .frame(width: 1)
-                            .padding(.trailing, 10)
-
-                        Text(SyntaxHighlighter.highlight(code, language: language, theme: currentTheme))
-                            .textSelection(.enabled)
-                            .lineSpacing(0)
-                            .fixedSize(horizontal: true, vertical: false)
-                            .frame(minHeight: CGFloat(lines.count) * 18, alignment: .topLeading)
-                    }
-                    .padding(.vertical, 10)
-                    .padding(.trailing, 10)
-                }
+                codeContentView
             } else {
                 // Collapsed state: show hidden line count
                 HStack {
@@ -3087,6 +3082,66 @@ struct CodeBlockView: View {
                 .stroke(Color.white.opacity(0.08), lineWidth: 0.5)
         )
         .clipped()
+    }
+
+    // MARK: - Code Content (word wrap aware)
+
+    @ViewBuilder
+    private var codeContentView: some View {
+        if codeWordWrap {
+            // Word-wrapped mode: no horizontal scroll
+            HStack(alignment: .top, spacing: 0) {
+                if showLineNumbers {
+                    lineNumbersColumn
+                    lineNumberSeparator
+                }
+
+                Text(SyntaxHighlighter.highlight(code, language: language, theme: currentTheme))
+                    .textSelection(.enabled)
+                    .lineSpacing(0)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                    .padding(.trailing, 10)
+            }
+            .padding(.vertical, 10)
+        } else {
+            // Horizontal scroll mode (default)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(alignment: .top, spacing: 0) {
+                    if showLineNumbers {
+                        lineNumbersColumn
+                        lineNumberSeparator
+                    }
+
+                    Text(SyntaxHighlighter.highlight(code, language: language, theme: currentTheme))
+                        .textSelection(.enabled)
+                        .lineSpacing(0)
+                        .fixedSize(horizontal: true, vertical: false)
+                        .frame(minHeight: CGFloat(lines.count) * 18, alignment: .topLeading)
+                }
+                .padding(.vertical, 10)
+                .padding(.trailing, 10)
+            }
+        }
+    }
+
+    private var lineNumbersColumn: some View {
+        VStack(alignment: .trailing, spacing: 0) {
+            ForEach(Array(lines.enumerated()), id: \.offset) { idx, _ in
+                Text("\(idx + 1)")
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundColor(Color(red: 0x44/255, green: 0x44/255, blue: 0x55/255))
+                    .frame(height: 18, alignment: .trailing)
+            }
+        }
+        .frame(width: lineNumberWidth, alignment: .trailing)
+        .padding(.trailing, 8)
+    }
+
+    private var lineNumberSeparator: some View {
+        Rectangle()
+            .fill(Color.white.opacity(0.06))
+            .frame(width: 1)
+            .padding(.trailing, 10)
     }
 }
 

@@ -82,22 +82,32 @@ struct Toast: Identifiable, Equatable {
     }
 }
 
-enum ConversationSortOrder: String, CaseIterable, Identifiable {
-    case recent = "Recent"
-    case oldest = "Oldest first"
-    case mostMessages = "Most messages"
-    case mostTokens = "Most tokens"
-    case alphabetical = "Alphabetical"
+enum ConversationSortOption: String, CaseIterable, Identifiable {
+    case lastUpdated = "lastUpdated"
+    case created = "created"
+    case alphabetical = "alphabetical"
+    case messageCount = "messageCount"
+    case tokenUsage = "tokenUsage"
 
     var id: String { rawValue }
 
+    var displayName: String {
+        switch self {
+        case .lastUpdated: return "Last Updated"
+        case .created: return "Date Created"
+        case .alphabetical: return "Alphabetical"
+        case .messageCount: return "Message Count"
+        case .tokenUsage: return "Token Usage"
+        }
+    }
+
     var icon: String {
         switch self {
-        case .recent: return "clock"
-        case .oldest: return "clock.arrow.circlepath"
-        case .mostMessages: return "bubble.left.and.bubble.right"
-        case .mostTokens: return "number"
+        case .lastUpdated: return "clock"
+        case .created: return "calendar"
         case .alphabetical: return "textformat.abc"
+        case .messageCount: return "bubble.left.and.bubble.right"
+        case .tokenUsage: return "number"
         }
     }
 }
@@ -430,9 +440,32 @@ class AppState: ObservableObject {
     @AppStorage("quickActionsCollapsed") var quickActionsCollapsed: Bool = false
     @AppStorage("textToSpeechEnabled") var textToSpeechEnabled: Bool = true
     @AppStorage("sidebarWidth") var sidebarWidth: Double = 280
+    @AppStorage("sidebarWidthPreset") var sidebarWidthPreset: Int = 1 // 0=narrow(200), 1=default(280), 2=wide(380)
+
+    /// Width values for each sidebar preset index.
+    static let sidebarPresetWidths: [Double] = [200, 280, 380]
+
+    /// Cycle through sidebar width presets: Narrow -> Default -> Wide -> Narrow ...
+    func cycleSidebarPreset() {
+        let next = (sidebarWidthPreset + 1) % Self.sidebarPresetWidths.count
+        sidebarWidthPreset = next
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+            sidebarWidth = Self.sidebarPresetWidths[next]
+        }
+    }
+
+    /// Toggle the sidebar between collapsed and expanded states.
+    func toggleSidebarCollapse() {
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+            sidebarCollapsed.toggle()
+        }
+    }
+
     @AppStorage("chatFontSize") var chatFontSize: Double = 13.0
     @AppStorage("syntaxTheme") var syntaxTheme: String = "Monokai"
     @AppStorage("autoScrollEnabled") var autoScrollEnabled: Bool = true
+    @AppStorage("codeWordWrap") var codeWordWrap: Bool = false
+    @AppStorage("showLineNumbers") var showLineNumbers: Bool = true
 
     // MARK: - Dashboard Customization
 
@@ -785,7 +818,14 @@ class AppState: ObservableObject {
     @Published var streamingStartTime: Date?
     /// Timestamp when the user pressed send, used to compute response time to first token
     private var messageSendTime: Date?
-    @Published var conversationSortOrder: ConversationSortOrder = .recent
+    @AppStorage("conversationSortOption") var conversationSortOption: String = "lastUpdated"
+    @AppStorage("conversationSortAscending") var conversationSortAscending: Bool = false
+
+    /// Computed accessor for the typed sort option enum
+    var conversationSortOrder: ConversationSortOption {
+        get { ConversationSortOption(rawValue: conversationSortOption) ?? .lastUpdated }
+        set { conversationSortOption = newValue.rawValue }
+    }
     @Published var showArchived: Bool = false
     @Published var showRawMarkdown: Bool = false
     @Published var filterTag: String?
@@ -1212,17 +1252,21 @@ class AppState: ObservableObject {
     }
 
     private func sortConversations(_ convs: [Conversation]) -> [Conversation] {
+        let ascending = conversationSortAscending
         switch conversationSortOrder {
-        case .recent:
-            return convs.sorted { $0.lastUpdated > $1.lastUpdated }
-        case .oldest:
-            return convs.sorted { $0.lastUpdated < $1.lastUpdated }
-        case .mostMessages:
-            return convs.sorted { $0.messages.count > $1.messages.count }
-        case .mostTokens:
-            return convs.sorted { $0.totalTokens > $1.totalTokens }
+        case .lastUpdated:
+            return convs.sorted { ascending ? $0.lastUpdated < $1.lastUpdated : $0.lastUpdated > $1.lastUpdated }
+        case .created:
+            return convs.sorted { ascending ? $0.createdAt < $1.createdAt : $0.createdAt > $1.createdAt }
+        case .messageCount:
+            return convs.sorted { ascending ? $0.messages.count < $1.messages.count : $0.messages.count > $1.messages.count }
+        case .tokenUsage:
+            return convs.sorted { ascending ? $0.totalTokens < $1.totalTokens : $0.totalTokens > $1.totalTokens }
         case .alphabetical:
-            return convs.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+            return convs.sorted {
+                let result = $0.title.localizedCaseInsensitiveCompare($1.title)
+                return ascending ? result == .orderedAscending : result == .orderedDescending
+            }
         }
     }
 

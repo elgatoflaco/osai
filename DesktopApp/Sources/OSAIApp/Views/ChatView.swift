@@ -2326,12 +2326,32 @@ struct ChatView: View {
                 // Sort order selector
                 HStack(spacing: 4) {
                     Menu {
-                        ForEach(ConversationSortOrder.allCases) { order in
-                            Button(action: { appState.conversationSortOrder = order }) {
+                        // Sort option choices with checkmark on current selection
+                        ForEach(ConversationSortOption.allCases) { option in
+                            Button(action: { appState.conversationSortOrder = option }) {
+                                HStack {
+                                    Label {
+                                        Text(option.displayName)
+                                    } icon: {
+                                        Image(systemName: option.icon)
+                                    }
+                                    if appState.conversationSortOrder == option {
+                                        Spacer()
+                                        Image(systemName: "checkmark")
+                                    }
+                                }
+                            }
+                        }
+
+                        Divider()
+
+                        // Ascending / Descending toggle
+                        Button(action: { appState.conversationSortAscending.toggle() }) {
+                            HStack {
                                 Label {
-                                    Text(order.rawValue)
+                                    Text(appState.conversationSortAscending ? "Ascending" : "Descending")
                                 } icon: {
-                                    Image(systemName: order.icon)
+                                    Image(systemName: appState.conversationSortAscending ? "arrow.up" : "arrow.down")
                                 }
                             }
                         }
@@ -2339,8 +2359,10 @@ struct ChatView: View {
                         HStack(spacing: 3) {
                             Image(systemName: "arrow.up.arrow.down")
                                 .font(.system(size: 9))
-                            Text(appState.conversationSortOrder.rawValue)
+                            Text(appState.conversationSortOrder.displayName)
                                 .font(.system(size: 10))
+                            Image(systemName: appState.conversationSortAscending ? "chevron.up" : "chevron.down")
+                                .font(.system(size: 7))
                         }
                         .foregroundColor(AppTheme.textMuted)
                     }
