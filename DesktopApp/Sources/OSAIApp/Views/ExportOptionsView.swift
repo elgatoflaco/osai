@@ -31,6 +31,25 @@ struct ExportOptionsView: View {
         return String(content.prefix(500)) + "\n..."
     }
 
+    /// Estimates byte size of the export and returns a human-readable string.
+    private func estimatedSize(for fmt: AppState.ExportFormat) -> String {
+        let opts = AppState.ExportOptions(
+            format: fmt,
+            includeTimestamps: includeTimestamps,
+            includeToolActivities: includeToolActivities,
+            includeTokenStats: includeTokenStats
+        )
+        let content = appState.generateExport(for: conversation, options: opts)
+        let bytes = content.utf8.count
+        if bytes < 1024 {
+            return "\(bytes) B"
+        } else if bytes < 1024 * 1024 {
+            return String(format: "%.1f KB", Double(bytes) / 1024.0)
+        } else {
+            return String(format: "%.1f MB", Double(bytes) / (1024.0 * 1024.0))
+        }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             // Header
@@ -58,22 +77,28 @@ struct ExportOptionsView: View {
 
             ScrollView {
                 VStack(spacing: AppTheme.paddingMd) {
-                    // Format selector
+                    // Format cards
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Format")
                             .font(AppTheme.fontCaption)
                             .foregroundColor(AppTheme.textSecondary)
 
-                        Picker("Format", selection: $format) {
+                        LazyVGrid(columns: [
+                            GridItem(.flexible(), spacing: 10),
+                            GridItem(.flexible(), spacing: 10)
+                        ], spacing: 10) {
                             ForEach(AppState.ExportFormat.allCases) { fmt in
-                                HStack(spacing: 4) {
-                                    Image(systemName: fmt.icon)
-                                    Text(fmt.rawValue)
+                                FormatCard(
+                                    format: fmt,
+                                    isSelected: format == fmt,
+                                    estimatedSize: estimatedSize(for: fmt)
+                                ) {
+                                    withAnimation(.easeOut(duration: 0.15)) {
+                                        format = fmt
+                                    }
                                 }
-                                .tag(fmt)
                             }
                         }
-                        .pickerStyle(.segmented)
                     }
 
                     // Options toggles
@@ -119,7 +144,7 @@ struct ExportOptionsView: View {
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding(AppTheme.paddingSm)
                         }
-                        .frame(height: 180)
+                        .frame(height: 140)
                         .background(AppTheme.bgSecondary.opacity(0.5))
                         .clipShape(RoundedRectangle(cornerRadius: AppTheme.cornerRadiusSm))
                         .overlay(
@@ -158,7 +183,7 @@ struct ExportOptionsView: View {
             }
             .padding(AppTheme.paddingLg)
         }
-        .frame(width: 520, height: 580)
+        .frame(width: 520, height: 640)
         .background(.ultraThinMaterial)
         .background(AppTheme.bgPrimary)
     }
@@ -207,6 +232,8 @@ struct ExportOptionsView: View {
             panel.allowedContentTypes = [.plainText]
         case .json:
             panel.allowedContentTypes = [.json]
+        case .html:
+            panel.allowedContentTypes = [.html]
         }
         panel.canCreateDirectories = true
 
@@ -227,6 +254,80 @@ struct ExportOptionsView: View {
         if let window = NSApp.keyWindow,
            let contentView = window.contentView {
             picker.show(relativeTo: .zero, of: contentView, preferredEdge: .minY)
+        }
+    }
+}
+
+// MARK: - Format Card
+
+private struct FormatCard: View {
+    let format: AppState.ExportFormat
+    let isSelected: Bool
+    let estimatedSize: String
+    let onTap: () -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: onTap) {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Image(systemName: format.icon)
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundColor(isSelected ? AppTheme.accent : AppTheme.textSecondary)
+                        .frame(width: 28, height: 28)
+                        .background(
+                            RoundedRectangle(cornerRadius: 7)
+                                .fill(isSelected ? AppTheme.accent.opacity(0.15) : AppTheme.bgSecondary.opacity(0.5))
+                        )
+                    Spacer()
+                    if isSelected {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 14))
+                            .foregroundColor(AppTheme.accent)
+                    }
+                }
+
+                Text(format.rawValue)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(AppTheme.textPrimary)
+
+                Text(format.description)
+                    .font(.system(size: 11))
+                    .foregroundColor(AppTheme.textSecondary)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                HStack {
+                    Text(".\(format.fileExtension)")
+                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .foregroundColor(AppTheme.textMuted)
+                    Spacer()
+                    Text("~\(estimatedSize)")
+                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .foregroundColor(AppTheme.textMuted)
+                }
+                .padding(.top, 2)
+            }
+            .padding(12)
+            .background(.ultraThinMaterial)
+            .background(AppTheme.bgGlass)
+            .clipShape(RoundedRectangle(cornerRadius: AppTheme.cornerRadius))
+            .overlay(
+                RoundedRectangle(cornerRadius: AppTheme.cornerRadius)
+                    .stroke(
+                        isSelected ? AppTheme.accent.opacity(0.5) : (isHovered ? AppTheme.accent.opacity(0.25) : AppTheme.borderGlass),
+                        lineWidth: isSelected ? 1.5 : 1
+                    )
+            )
+            .shadow(color: .black.opacity(isHovered ? 0.3 : 0.15), radius: isHovered ? 12 : 8, x: 0, y: isHovered ? 6 : 4)
+            .scaleEffect(isHovered ? 1.02 : 1.0)
+            .animation(.easeOut(duration: 0.15), value: isHovered)
+            .animation(.easeOut(duration: 0.15), value: isSelected)
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            isHovered = hovering
         }
     }
 }

@@ -37,23 +37,7 @@ struct ChatView: View {
     @State private var searchFilters = AppState.SearchFilters()
     @State private var showSearchFilters: Bool = false
 
-    // MARK: - Date grouping
 
-    private enum DateGroup: String, CaseIterable {
-        case today = "Today"
-        case yesterday = "Yesterday"
-        case thisWeek = "This Week"
-        case earlier = "Earlier"
-    }
-
-    private func dateGroup(for date: Date) -> DateGroup {
-        let cal = Calendar.current
-        if cal.isDateInToday(date) { return .today }
-        if cal.isDateInYesterday(date) { return .yesterday }
-        let weekAgo = cal.date(byAdding: .day, value: -7, to: Date()) ?? Date()
-        if date >= weekAgo { return .thisWeek }
-        return .earlier
-    }
 
     private var filteredConversations: [Conversation] {
         var sorted = appState.sortedConversations
@@ -130,20 +114,8 @@ struct ChatView: View {
         return []
     }
 
-    private var pinnedConversations: [Conversation] {
-        filteredConversations.filter { $0.isPinned }
-    }
-
-    private var unpinnedConversations: [Conversation] {
-        filteredConversations.filter { !$0.isPinned }
-    }
-
-    private var groupedConversations: [(DateGroup, [Conversation])] {
-        let grouped = Dictionary(grouping: unpinnedConversations) { dateGroup(for: $0.createdAt) }
-        return DateGroup.allCases.compactMap { group in
-            guard let convs = grouped[group], !convs.isEmpty else { return nil }
-            return (group, convs)
-        }
+    private var sidebarGroups: [(String, [Conversation])] {
+        appState.groupedConversations(from: filteredConversations)
     }
 
     private var conversationMatches: [String] {
@@ -1992,58 +1964,7 @@ struct ChatView: View {
                 } else {
                     ScrollView(.vertical, showsIndicators: false) {
                         LazyVStack(spacing: 2, pinnedViews: .sectionHeaders) {
-                            if !pinnedConversations.isEmpty {
-                                Section {
-                                    ForEach(pinnedConversations) { conv in
-                                        HStack(spacing: 6) {
-                                            if isSelecting {
-                                                Image(systemName: selectedConversationIds.contains(conv.id) ? "checkmark.circle.fill" : "circle")
-                                                    .font(.system(size: 14))
-                                                    .foregroundColor(selectedConversationIds.contains(conv.id) ? AppTheme.accent : AppTheme.textMuted)
-                                                    .onTapGesture { toggleSelection(conv.id) }
-                                            }
-                                            conversationRowView(for: conv)
-                                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                                Button(role: .destructive) {
-                                                    deleteConfirmConversation = conv
-                                                } label: {
-                                                    Label("Delete", systemImage: "trash")
-                                                }
-                                                Button {
-                                                    appState.archiveConversation(id: conv.id)
-                                                } label: {
-                                                    Label("Archive", systemImage: "archivebox")
-                                                }
-                                                .tint(.gray)
-                                            }
-                                            .swipeActions(edge: .leading, allowsFullSwipe: true) {
-                                                Button {
-                                                    appState.togglePin(conv)
-                                                } label: {
-                                                    Label(conv.isPinned ? "Unpin" : "Pin", systemImage: conv.isPinned ? "pin.slash" : "pin")
-                                                }
-                                                .tint(.yellow)
-                                            }
-                                        }
-                                    }
-                                } header: {
-                                    HStack(spacing: 4) {
-                                        Image(systemName: "pin.fill")
-                                            .font(.system(size: 8))
-                                            .foregroundColor(AppTheme.accent)
-                                        Text("Pinned")
-                                            .font(.system(size: 10, weight: .semibold))
-                                            .foregroundColor(AppTheme.textMuted)
-                                            .textCase(.uppercase)
-                                        Spacer()
-                                    }
-                                    .padding(.horizontal, 12)
-                                    .padding(.top, 10)
-                                    .padding(.bottom, 4)
-                                    .background(AppTheme.bgSecondary.opacity(0.3))
-                                }
-                            }
-                            ForEach(groupedConversations, id: \.0) { group, convs in
+                            ForEach(sidebarGroups, id: \.0) { group, convs in
                                 Section {
                                     ForEach(convs) { conv in
                                         HStack(spacing: 6) {
@@ -2078,8 +1999,13 @@ struct ChatView: View {
                                         }
                                     }
                                 } header: {
-                                    HStack {
-                                        Text(group.rawValue)
+                                    HStack(spacing: 4) {
+                                        if group == "Pinned" {
+                                            Image(systemName: "pin.fill")
+                                                .font(.system(size: 8))
+                                                .foregroundColor(AppTheme.accent)
+                                        }
+                                        Text(group)
                                             .font(.system(size: 10, weight: .semibold))
                                             .foregroundColor(AppTheme.textMuted)
                                             .textCase(.uppercase)

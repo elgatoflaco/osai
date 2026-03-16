@@ -911,6 +911,51 @@ class AppState: ObservableObject {
         }
     }
 
+
+    // MARK: - Conversation Grouping
+
+    /// Groups conversations by time period, extracting pinned conversations into their own group.
+    /// Returns an array of (group name, conversations) tuples with empty groups omitted.
+    func groupedConversations(from conversations: [Conversation]) -> [(String, [Conversation])] {
+        let pinned = conversations.filter { $0.isPinned }
+        let unpinned = conversations.filter { !$0.isPinned }
+
+        let cal = Calendar.current
+        let now = Date()
+        let weekAgo = cal.date(byAdding: .day, value: -7, to: now) ?? now
+        let monthAgo = cal.date(byAdding: .day, value: -30, to: now) ?? now
+
+        var today: [Conversation] = []
+        var yesterday: [Conversation] = []
+        var thisWeek: [Conversation] = []
+        var thisMonth: [Conversation] = []
+        var older: [Conversation] = []
+
+        for conv in unpinned {
+            let date = conv.lastUpdated
+            if cal.isDateInToday(date) {
+                today.append(conv)
+            } else if cal.isDateInYesterday(date) {
+                yesterday.append(conv)
+            } else if date >= weekAgo {
+                thisWeek.append(conv)
+            } else if date >= monthAgo {
+                thisMonth.append(conv)
+            } else {
+                older.append(conv)
+            }
+        }
+
+        var result: [(String, [Conversation])] = []
+        if !pinned.isEmpty { result.append(("Pinned", pinned)) }
+        if !today.isEmpty { result.append(("Today", today)) }
+        if !yesterday.isEmpty { result.append(("Yesterday", yesterday)) }
+        if !thisWeek.isEmpty { result.append(("This Week", thisWeek)) }
+        if !thisMonth.isEmpty { result.append(("This Month", thisMonth)) }
+        if !older.isEmpty { result.append(("Older", older)) }
+        return result
+    }
+
     private(set) var runningProcess: Process?
 
     let service = OSAIService()
@@ -2109,6 +2154,7 @@ class AppState: ObservableObject {
     enum ExportFormat: String, CaseIterable, Identifiable {
         case markdown = "Markdown"
         case json = "JSON"
+        case html = "HTML"
         case plainText = "Plain Text"
 
         var id: String { rawValue }
@@ -2117,6 +2163,7 @@ class AppState: ObservableObject {
             switch self {
             case .markdown: return "md"
             case .json: return "json"
+            case .html: return "html"
             case .plainText: return "txt"
             }
         }
@@ -2125,7 +2172,17 @@ class AppState: ObservableObject {
             switch self {
             case .markdown: return "text.badge.star"
             case .json: return "curlybraces"
+            case .html: return "globe"
             case .plainText: return "doc.plaintext"
+            }
+        }
+
+        var description: String {
+            switch self {
+            case .markdown: return "Rich formatting with headers, code blocks, and structure"
+            case .json: return "Machine-readable structured data, ideal for imports"
+            case .html: return "Styled page with dark theme, bubbles, and code highlighting"
+            case .plainText: return "Simple text with User/Assistant prefixes, universal"
             }
         }
     }
@@ -2426,6 +2483,158 @@ class AppState: ObservableObject {
         return text
     }
 
+    func exportAsHTML(conversation conv: Conversation, options: ExportOptions = ExportOptions()) -> String {
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateStyle = .long
+        dateFormatter.timeStyle = .short
+
+        let timeFormatter = DateFormatter()
+        timeFormatter.dateFormat = "HH:mm:ss"
+
+        func escapeHTML(_ text: String) -> String {
+            text.replacingOccurrences(of: "&", with: "&amp;")
+                .replacingOccurrences(of: "<", with: "&lt;")
+                .replacingOccurrences(of: ">", with: "&gt;")
+                .replacingOccurrences(of: "\"", with: "&quot;")
+        }
+
+        /// Convert inline markdown (bold, inline code) and code blocks to HTML.
+        func markdownToHTML(_ text: String) -> String {
+            let escaped = escapeHTML(text)
+            var result = escaped
+
+            // Fenced code blocks: ```lang\n...\n```
+            let codeBlockPattern = #"```(\w*)\n([\s\S]*?)```"#
+            if let regex = try? NSRegularExpression(pattern: codeBlockPattern, options: []) {
+                let ns = result as NSString
+                var output = ""
+                var lastEnd = 0
+                for match in regex.matches(in: result, range: NSRange(location: 0, length: ns.length)) {
+                    let before = NSRange(location: lastEnd, length: match.range.location - lastEnd)
+                    output += ns.substring(with: before)
+                    let lang = ns.substring(with: match.range(at: 1))
+                    let code = ns.substring(with: match.range(at: 2))
+                    let langAttr = lang.isEmpty ? "" : " data-lang=\"\(lang)\""
+                    output += "<pre><code\(langAttr)>\(code)</code></pre>"
+                    lastEnd = match.range.location + match.range.length
+                }
+                if lastEnd < ns.length { output += ns.substring(from: lastEnd) }
+                result = output
+            }
+
+            // Inline code
+            if let regex = try? NSRegularExpression(pattern: #"`([^`]+)`"#, options: []) {
+                result = regex.stringByReplacingMatches(in: result, range: NSRange(location: 0, length: (result as NSString).length), withTemplate: "<code>$1</code>")
+            }
+            // Bold
+            if let regex = try? NSRegularExpression(pattern: #"\*\*(.+?)\*\*"#, options: []) {
+                result = regex.stringByReplacingMatches(in: result, range: NSRange(location: 0, length: (result as NSString).length), withTemplate: "<strong>$1</strong>")
+            }
+            // Line breaks (outside of pre blocks) — simple approach: convert double newlines to <p> boundaries
+            result = result.replacingOccurrences(of: "\n\n", with: "</p><p>")
+            result = result.replacingOccurrences(of: "\n", with: "<br>")
+            return "<p>" + result + "</p>"
+        }
+
+        var html = """
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>\(escapeHTML(conv.title))</title>
+        <style>
+        :root { --accent: #50c8c8; --bg: #0a0a0f; --bg2: #12121a; --card: #181822; --text: #e8e8ed; --text2: #8888a0; --border: rgba(80,200,200,0.15); }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; padding: 40px 20px; }
+        .container { max-width: 800px; margin: 0 auto; }
+        header { margin-bottom: 32px; padding-bottom: 20px; border-bottom: 1px solid var(--border); }
+        header h1 { font-size: 24px; font-weight: 700; color: var(--accent); margin-bottom: 8px; }
+        header .meta { font-size: 13px; color: var(--text2); }
+        header .meta span { margin-right: 16px; }
+        .message { margin-bottom: 20px; padding: 16px 20px; border-radius: 12px; border: 1px solid var(--border); }
+        .message.user { background: var(--bg2); border-left: 3px solid var(--accent); }
+        .message.assistant { background: var(--card); }
+        .message .role { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+        .message.user .role { color: var(--accent); }
+        .message.assistant .role { color: var(--text2); }
+        .message .timestamp { font-size: 10px; color: var(--text2); float: right; margin-top: 2px; }
+        .message .content { font-size: 14px; }
+        .message .content p { margin-bottom: 8px; }
+        .message .content p:last-child { margin-bottom: 0; }
+        .tools { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border); font-size: 12px; color: var(--text2); }
+        .tools summary { cursor: pointer; font-weight: 500; }
+        .tools ul { margin: 6px 0 0 18px; }
+        .tools li { margin-bottom: 2px; }
+        pre { background: #0d0d14; border: 1px solid var(--border); border-radius: 8px; padding: 12px 16px; overflow-x: auto; margin: 8px 0; }
+        code { font-family: 'SF Mono', Menlo, monospace; font-size: 13px; }
+        :not(pre) > code { background: rgba(80,200,200,0.1); padding: 2px 6px; border-radius: 4px; font-size: 12px; }
+        strong { font-weight: 600; }
+        footer { margin-top: 32px; padding-top: 16px; border-top: 1px solid var(--border); font-size: 11px; color: var(--text2); text-align: center; }
+        </style>
+        </head>
+        <body>
+        <div class="container">
+        <header>
+        <h1>\(escapeHTML(conv.title))</h1>
+        <div class="meta">
+        <span>\(escapeHTML(dateFormatter.string(from: conv.createdAt)))</span>
+        """
+
+        if let agent = conv.agentName {
+            html += "<span>Agent: \(escapeHTML(agent))</span>\n"
+        }
+        if options.includeTokenStats && conv.totalTokens > 0 {
+            html += "<span>\(conv.totalInputTokens) input / \(conv.totalOutputTokens) output tokens</span>\n"
+            html += String(format: "<span>Est. $%.4f</span>\n", conv.estimatedCost)
+        }
+
+        html += """
+        </div>
+        </header>
+        """
+
+        for msg in conv.messages {
+            guard msg.role == .user || msg.role == .assistant else { continue }
+            let roleClass = msg.role == .user ? "user" : "assistant"
+            let roleLabel = msg.role == .user ? "You" : "Assistant"
+            let content = msg.content.trimmingCharacters(in: .whitespacesAndNewlines)
+
+            html += "<div class=\"message \(roleClass)\">\n"
+            html += "<div class=\"role\">\(roleLabel)"
+            if options.includeTimestamps {
+                html += "<span class=\"timestamp\">\(escapeHTML(timeFormatter.string(from: msg.timestamp)))</span>"
+            }
+            html += "</div>\n"
+            html += "<div class=\"content\">\(markdownToHTML(content))</div>\n"
+
+            if options.includeToolActivities && !msg.activities.isEmpty {
+                let toolCalls = msg.activities.filter { $0.type == .toolCall }
+                if !toolCalls.isEmpty {
+                    html += "<div class=\"tools\"><details><summary>Tool activity (\(toolCalls.count) call\(toolCalls.count == 1 ? "" : "s"))</summary><ul>\n"
+                    for activity in toolCalls {
+                        let status = activity.success == true ? "ok" : (activity.success == false ? "failed" : "?")
+                        let duration = activity.durationMs.map { " (\($0)ms)" } ?? ""
+                        let detail = activity.detail.isEmpty ? "" : " &mdash; \(escapeHTML(activity.detail))"
+                        html += "<li><strong>\(escapeHTML(activity.label))</strong> [\(status)]\(duration)\(detail)</li>\n"
+                    }
+                    html += "</ul></details></div>\n"
+                }
+            }
+
+            html += "</div>\n"
+        }
+
+        html += """
+        <footer>Exported from OSAI</footer>
+        </div>
+        </body>
+        </html>
+        """
+
+        return html
+    }
+
     func exportAllAsMarkdown(options: ExportOptions = ExportOptions()) -> String {
         var md = "# All Conversations\n\n"
         md += "Exported: \(DateFormatter.localizedString(from: Date(), dateStyle: .long, timeStyle: .short))\n"
@@ -2446,6 +2655,8 @@ class AppState: ObservableObject {
             return exportAsMarkdown(conversation: conv, options: options)
         case .json:
             return exportAsJSON(conversation: conv, options: options)
+        case .html:
+            return exportAsHTML(conversation: conv, options: options)
         case .plainText:
             return exportAsPlainText(conversation: conv, options: options)
         }

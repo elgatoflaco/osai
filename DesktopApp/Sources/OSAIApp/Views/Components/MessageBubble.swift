@@ -396,6 +396,8 @@ struct MessageBubble: View {
     @State private var speakerPulse = false
     /// Per-message raw markdown override: nil follows global, true/false overrides
     @State private var localRawMode: Bool?
+    /// Pulse animation state for streaming border glow
+    @State private var streamingPulse = false
 
     /// Whether raw markdown is active for this message
     private var isRawMode: Bool {
@@ -1014,10 +1016,33 @@ struct MessageBubble: View {
                 .padding(.top, 4)
             }
         }
+        .overlay(
+            Group {
+                if message.isStreaming {
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(AppTheme.accent.opacity(streamingPulse ? 0.35 : 0.08), lineWidth: 1.5)
+                        .shadow(color: AppTheme.accent.opacity(streamingPulse ? 0.25 : 0.0), radius: 6)
+                        .animation(
+                            Animation.easeInOut(duration: 1.5).repeatForever(autoreverses: true),
+                            value: streamingPulse
+                        )
+                }
+            }
+        )
         .accessibilityElement(children: .contain)
         .accessibilityLabel(message.isStreaming ? "Assistant is responding" : "Assistant said")
         .onChange(of: appState.showRawMarkdown) { _ in
             localRawMode = nil
+        }
+        .onChange(of: message.isStreaming) { streaming in
+            if streaming {
+                streamingPulse = true
+            } else {
+                withAnimation(.easeOut(duration: 0.3)) { streamingPulse = false }
+            }
+        }
+        .onAppear {
+            if message.isStreaming { streamingPulse = true }
         }
     }
 
@@ -2307,6 +2332,7 @@ struct StreamingPlaceholder: View {
                 ProgressView().controlSize(.small)
                 Text("Working...").font(.system(size: 12)).foregroundColor(AppTheme.textMuted)
             }
+            .transition(.opacity.animation(.easeOut(duration: 0.25)))
         } else {
             VStack(alignment: .leading, spacing: 6) {
                 TypingIndicator()
@@ -2314,24 +2340,27 @@ struct StreamingPlaceholder: View {
                     .font(.system(size: 11))
                     .foregroundColor(AppTheme.textMuted)
             }
+            .transition(.opacity.animation(.easeOut(duration: 0.25)))
         }
     }
 }
 
 struct TypingIndicator: View {
-    @State private var phase: Int = 0
+    @State private var animating = false
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 5) {
             ForEach(0..<3, id: \.self) { i in
                 Circle()
                     .fill(AppTheme.accent)
-                    .frame(width: 7, height: 7)
-                    .scaleEffect(phase == i ? 1.3 : 0.6)
-                    .opacity(phase == i ? 1.0 : 0.3)
-                    .offset(y: phase == i ? -3 : 0)
+                    .frame(width: 8, height: 8)
+                    .scaleEffect(animating ? 1.0 : 0.5)
+                    .opacity(animating ? 1.0 : 0.3)
+                    .offset(y: animating ? -4 : 2)
                     .animation(
-                        .easeInOut(duration: 0.35).delay(Double(i) * 0.12),
-                        value: phase
+                        Animation.easeInOut(duration: 0.5)
+                            .repeatForever(autoreverses: true)
+                            .delay(Double(i) * 0.15),
+                        value: animating
                     )
             }
         }
@@ -2341,8 +2370,9 @@ struct TypingIndicator: View {
         .clipShape(RoundedRectangle(cornerRadius: 14))
         .overlay(RoundedRectangle(cornerRadius: 14).stroke(AppTheme.borderGlass, lineWidth: 0.5))
         .onAppear {
-            Timer.scheduledTimer(withTimeInterval: 0.45, repeats: true) { _ in
-                withAnimation { phase = (phase + 1) % 3 }
+            // Small delay so the staggered animation offsets take effect visually
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                animating = true
             }
         }
     }
