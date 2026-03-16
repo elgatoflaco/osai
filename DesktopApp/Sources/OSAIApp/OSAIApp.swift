@@ -48,6 +48,20 @@ struct OSAIApp: App {
                     }
                 }
                 .keyboardShortcut("f", modifiers: [.command, .shift])
+
+                Divider()
+
+                Button(appState.compactMode ? "Exit Compact Mode" : "Compact Mode") {
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        appState.toggleCompactMode()
+                    }
+                }
+                .keyboardShortcut("m", modifiers: [.command, .shift])
+
+                Button(appState.floatOnTop ? "Disable Float on Top" : "Float on Top") {
+                    appState.toggleFloatOnTop()
+                }
+                .keyboardShortcut("t", modifiers: [.command, .shift])
             }
 
             // Chat menu

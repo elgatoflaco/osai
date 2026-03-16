@@ -480,6 +480,81 @@ struct SettingsView: View {
                     }
                     .padding(.top, 2)
                 }
+
+                Divider().background(AppTheme.borderGlass)
+
+                // Window Management
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Window")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(AppTheme.textPrimary)
+
+                    // Compact mode toggle
+                    HStack {
+                        Text("Compact Mode")
+                            .font(AppTheme.fontBody)
+                            .foregroundColor(AppTheme.textPrimary)
+                        Spacer()
+                        Text("\u{2318}\u{21E7}M")
+                            .font(.system(size: 10, design: .rounded))
+                            .foregroundColor(AppTheme.textMuted)
+                            .padding(.trailing, 4)
+                        Toggle("Compact Mode", isOn: Binding(
+                            get: { appState.compactMode },
+                            set: { _ in
+                                withAnimation(.easeInOut(duration: 0.3)) {
+                                    appState.toggleCompactMode()
+                                }
+                            }
+                        ))
+                            .toggleStyle(.switch)
+                            .tint(AppTheme.accent)
+                            .labelsHidden()
+                    }
+
+                    // Float on top toggle
+                    HStack {
+                        HStack(spacing: 6) {
+                            Text("Float on Top")
+                                .font(AppTheme.fontBody)
+                                .foregroundColor(AppTheme.textPrimary)
+                            if appState.floatOnTop {
+                                Image(systemName: "pin.fill")
+                                    .font(.system(size: 9))
+                                    .foregroundColor(AppTheme.accent)
+                            }
+                        }
+                        Spacer()
+                        Text("\u{2318}\u{21E7}T")
+                            .font(.system(size: 10, design: .rounded))
+                            .foregroundColor(AppTheme.textMuted)
+                            .padding(.trailing, 4)
+                        Toggle("Float on Top", isOn: Binding(
+                            get: { appState.floatOnTop },
+                            set: { _ in appState.toggleFloatOnTop() }
+                        ))
+                            .toggleStyle(.switch)
+                            .tint(AppTheme.accent)
+                            .labelsHidden()
+                    }
+
+                    // Window opacity slider
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text("Window Opacity")
+                                .font(AppTheme.fontBody)
+                                .foregroundColor(AppTheme.textPrimary)
+                            Spacer()
+                            Text("\(Int(appState.windowOpacity * 100))%")
+                                .font(.system(size: 12, weight: .medium, design: .rounded))
+                                .foregroundColor(AppTheme.textSecondary)
+                        }
+                        Slider(value: $appState.windowOpacity, in: 0.8...1.0, step: 0.05)
+                            .tint(AppTheme.accent)
+                            .accessibilityLabel("Window Opacity")
+                            .accessibilityValue("\(Int(appState.windowOpacity * 100)) percent")
+                    }
+                }
             }
         }
     }

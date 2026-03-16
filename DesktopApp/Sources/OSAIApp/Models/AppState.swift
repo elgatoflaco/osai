@@ -138,8 +138,58 @@ class AppState: ObservableObject {
     @AppStorage("hasCompletedOnboarding") var hasCompletedOnboarding: Bool = false
     @AppStorage("globalHotkeyEnabled") var globalHotkeyEnabled: Bool = true
     @AppStorage("notificationsEnabled") var notificationsEnabled: Bool = true
+    @AppStorage("compactMode") var compactMode: Bool = false
+    @AppStorage("floatOnTop") var floatOnTop: Bool = false
+    @AppStorage("windowOpacity") var windowOpacity: Double = 1.0
 
     @Published var selectedAccentColor: String = UserDefaults.standard.string(forKey: "selectedAccentColor") ?? "teal"
+
+    // MARK: - Window State Persistence
+
+    /// Debounce timer for saving window frame
+    private var windowFrameSaveTask: Task<Void, Never>?
+
+    /// Save window frame to UserDefaults (debounced)
+    func saveWindowFrame(_ frame: CGRect) {
+        windowFrameSaveTask?.cancel()
+        windowFrameSaveTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(500))
+            guard !Task.isCancelled else { return }
+            let dict: [String: Double] = [
+                "x": frame.origin.x,
+                "y": frame.origin.y,
+                "w": frame.size.width,
+                "h": frame.size.height
+            ]
+            UserDefaults.standard.set(dict, forKey: "windowFrame")
+        }
+    }
+
+    /// Restore saved window frame, or nil if not saved
+    var savedWindowFrame: CGRect? {
+        guard let dict = UserDefaults.standard.dictionary(forKey: "windowFrame"),
+              let x = dict["x"] as? Double,
+              let y = dict["y"] as? Double,
+              let w = dict["w"] as? Double,
+              let h = dict["h"] as? Double else { return nil }
+        return CGRect(x: x, y: y, width: w, height: h)
+    }
+
+    /// Apply float-on-top and opacity to the main window
+    func applyWindowSettings() {
+        guard let window = NSApplication.shared.windows.first(where: { $0.isVisible && $0.className.contains("AppKitWindow") }) ?? NSApplication.shared.windows.first else { return }
+        window.level = floatOnTop ? .floating : .normal
+        window.alphaValue = CGFloat(windowOpacity)
+    }
+
+    func toggleFloatOnTop() {
+        floatOnTop.toggle()
+        applyWindowSettings()
+    }
+
+    func toggleCompactMode() {
+        compactMode.toggle()
+    }
 
     @Published var selectedTab: SidebarItem = .home
     @Published var agents: [AgentInfo] = []
@@ -885,6 +935,221 @@ class AppState: ObservableObject {
     }
 
     // MARK: - Export
+
+    enum ExportFormat: String, CaseIterable, Identifiable {
+        case markdown = "Markdown"
+        case json = "JSON"
+        case plainText = "Plain Text"
+
+        var id: String { rawValue }
+
+        var fileExtension: String {
+            switch self {
+            case .markdown: return "md"
+            case .json: return "json"
+            case .plainText: return "txt"
+            }
+        }
+
+        var icon: String {
+            switch self {
+            case .markdown: return "text.badge.star"
+            case .json: return "curlybraces"
+            case .plainText: return "doc.plaintext"
+            }
+        }
+    }
+
+    struct ExportOptions {
+        var format: ExportFormat = .markdown
+        var includeTimestamps: Bool = true
+        var includeToolActivities: Bool = true
+        var includeTokenStats: Bool = true
+    }
+
+    @Published var showExportSheet: Bool = false
+    @Published var exportConversationTarget: Conversation?
+
+    func presentExportSheet(for conv: Conversation) {
+        exportConversationTarget = conv
+        showExportSheet = true
+    }
+
+    func exportAsMarkdown(conversation conv: Conversation, options: ExportOptions = ExportOptions()) -> String {
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateStyle = .long
+        dateFormatter.timeStyle = .short
+
+        var md = "# \(conv.title)\n\n"
+        md += "**Date:** \(dateFormatter.string(from: conv.createdAt))"
+        if let agent = conv.agentName {
+            md += "  \n**Agent:** \(agent)"
+        }
+        if options.includeTokenStats && conv.totalTokens > 0 {
+            md += "  \n**Tokens:** \(conv.totalInputTokens) input / \(conv.totalOutputTokens) output"
+            md += String(format: "  \n**Estimated cost:** $%.4f", conv.estimatedCost)
+        }
+        md += "\n\n---\n"
+
+        let timeFormatter = DateFormatter()
+        timeFormatter.dateFormat = "HH:mm:ss"
+
+        for msg in conv.messages {
+            guard msg.role == .user || msg.role == .assistant else { continue }
+            let label = msg.role == .user ? "You" : "Assistant"
+
+            if options.includeTimestamps {
+                md += "\n### \(label) _(\(timeFormatter.string(from: msg.timestamp)))_\n\n"
+            } else {
+                md += "\n### \(label)\n\n"
+            }
+
+            md += msg.content.trimmingCharacters(in: .whitespacesAndNewlines)
+            md += "\n"
+
+            if options.includeToolActivities && !msg.activities.isEmpty {
+                let toolCalls = msg.activities.filter { $0.type == .toolCall }
+                if !toolCalls.isEmpty {
+                    md += "\n<details><summary>Tool activity (\(toolCalls.count) call\(toolCalls.count == 1 ? "" : "s"))</summary>\n\n"
+                    for activity in toolCalls {
+                        let status = activity.success == true ? "ok" : (activity.success == false ? "failed" : "?")
+                        let duration = activity.durationMs.map { " (\($0)ms)" } ?? ""
+                        md += "- **\(activity.label)** [\(status)]\(duration)"
+                        if !activity.detail.isEmpty {
+                            md += " -- \(activity.detail)"
+                        }
+                        md += "\n"
+                    }
+                    md += "\n</details>\n"
+                }
+            }
+
+            md += "\n---\n"
+        }
+
+        return md
+    }
+
+    func exportAsJSON(conversation conv: Conversation, options: ExportOptions = ExportOptions()) -> String {
+        var dict: [String: Any] = [
+            "id": conv.id,
+            "title": conv.title,
+            "createdAt": ISO8601DateFormatter().string(from: conv.createdAt)
+        ]
+        if let agent = conv.agentName { dict["agentName"] = agent }
+        if options.includeTokenStats {
+            dict["totalInputTokens"] = conv.totalInputTokens
+            dict["totalOutputTokens"] = conv.totalOutputTokens
+            dict["estimatedCost"] = conv.estimatedCost
+        }
+
+        let timeFormatter = ISO8601DateFormatter()
+        var messagesArray: [[String: Any]] = []
+        for msg in conv.messages {
+            guard msg.role == .user || msg.role == .assistant else { continue }
+            var m: [String: Any] = [
+                "role": msg.role.rawValue,
+                "content": msg.content.trimmingCharacters(in: .whitespacesAndNewlines)
+            ]
+            if options.includeTimestamps {
+                m["timestamp"] = timeFormatter.string(from: msg.timestamp)
+            }
+            if let agentName = msg.agentName { m["agentName"] = agentName }
+            if options.includeToolActivities && !msg.activities.isEmpty {
+                let acts: [[String: Any]] = msg.activities.compactMap { a in
+                    guard a.type == .toolCall else { return nil }
+                    var ad: [String: Any] = ["tool": a.label]
+                    if !a.detail.isEmpty { ad["detail"] = a.detail }
+                    if let s = a.success { ad["success"] = s }
+                    if let d = a.durationMs { ad["durationMs"] = d }
+                    return ad
+                }
+                if !acts.isEmpty { m["toolCalls"] = acts }
+            }
+            messagesArray.append(m)
+        }
+        dict["messages"] = messagesArray
+
+        guard let data = try? JSONSerialization.data(withJSONObject: dict, options: [.prettyPrinted, .sortedKeys]) else {
+            return "{}"
+        }
+        return String(data: data, encoding: .utf8) ?? "{}"
+    }
+
+    func exportAsPlainText(conversation conv: Conversation, options: ExportOptions = ExportOptions()) -> String {
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateStyle = .long
+        dateFormatter.timeStyle = .short
+
+        var text = "\(conv.title)\n"
+        text += String(repeating: "=", count: conv.title.count) + "\n"
+        text += "Date: \(dateFormatter.string(from: conv.createdAt))\n"
+        if let agent = conv.agentName {
+            text += "Agent: \(agent)\n"
+        }
+        if options.includeTokenStats && conv.totalTokens > 0 {
+            text += "Tokens: \(conv.totalInputTokens) input / \(conv.totalOutputTokens) output\n"
+            text += String(format: "Estimated cost: $%.4f\n", conv.estimatedCost)
+        }
+        text += "\n"
+
+        let timeFormatter = DateFormatter()
+        timeFormatter.dateFormat = "HH:mm:ss"
+
+        for msg in conv.messages {
+            guard msg.role == .user || msg.role == .assistant else { continue }
+            let label = msg.role == .user ? "You" : "Assistant"
+
+            if options.includeTimestamps {
+                text += "[\(timeFormatter.string(from: msg.timestamp))] \(label):\n"
+            } else {
+                text += "\(label):\n"
+            }
+
+            text += msg.content.trimmingCharacters(in: .whitespacesAndNewlines)
+            text += "\n\n"
+
+            if options.includeToolActivities && !msg.activities.isEmpty {
+                let toolCalls = msg.activities.filter { $0.type == .toolCall }
+                if !toolCalls.isEmpty {
+                    text += "  Tools used:\n"
+                    for activity in toolCalls {
+                        let status = activity.success == true ? "ok" : (activity.success == false ? "failed" : "?")
+                        let duration = activity.durationMs.map { " (\($0)ms)" } ?? ""
+                        text += "    - \(activity.label) [\(status)]\(duration)\n"
+                    }
+                    text += "\n"
+                }
+            }
+        }
+
+        return text
+    }
+
+    func exportAllAsMarkdown(options: ExportOptions = ExportOptions()) -> String {
+        var md = "# All Conversations\n\n"
+        md += "Exported: \(DateFormatter.localizedString(from: Date(), dateStyle: .long, timeStyle: .short))\n"
+        md += "Total: \(conversations.count) conversation\(conversations.count == 1 ? "" : "s")\n\n"
+
+        let sorted = conversations.sorted { $0.createdAt > $1.createdAt }
+        for (i, conv) in sorted.enumerated() {
+            if i > 0 { md += "\n\n---\n\n" }
+            md += exportAsMarkdown(conversation: conv, options: options)
+        }
+
+        return md
+    }
+
+    func generateExport(for conv: Conversation, options: ExportOptions) -> String {
+        switch options.format {
+        case .markdown:
+            return exportAsMarkdown(conversation: conv, options: options)
+        case .json:
+            return exportAsJSON(conversation: conv, options: options)
+        case .plainText:
+            return exportAsPlainText(conversation: conv, options: options)
+        }
+    }
 
     // MARK: - Full-text search across all conversations
 

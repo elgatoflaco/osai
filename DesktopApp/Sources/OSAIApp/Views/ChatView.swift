@@ -381,7 +381,7 @@ struct ChatView: View {
                                                 renamingText: renamingConversationId == conv.id ? $renamingText : .constant(""),
                                                 onSelect: { isSelecting ? toggleSelection(conv.id) : appState.openConversation(conv) },
                                                 onDelete: { deleteConfirmConversation = conv },
-                                                onExport: { appState.exportAndSave(conv) },
+                                                onExport: { appState.presentExportSheet(for: conv) },
                                                 onTogglePin: { appState.togglePin(conv) },
                                                 onRename: {
                                                     renamingText = conv.title
@@ -444,7 +444,7 @@ struct ChatView: View {
                                                 renamingText: renamingConversationId == conv.id ? $renamingText : .constant(""),
                                                 onSelect: { isSelecting ? toggleSelection(conv.id) : appState.openConversation(conv) },
                                                 onDelete: { deleteConfirmConversation = conv },
-                                                onExport: { appState.exportAndSave(conv) },
+                                                onExport: { appState.presentExportSheet(for: conv) },
                                                 onTogglePin: { appState.togglePin(conv) },
                                                 onRename: {
                                                     renamingText = conv.title
@@ -737,7 +737,7 @@ struct ChatView: View {
                     }
 
                     if let conv = appState.activeConversation, !conv.messages.isEmpty {
-                        Button(action: { appState.exportAndSave(conv) }) {
+                        Button(action: { appState.presentExportSheet(for: conv) }) {
                             Image(systemName: "square.and.arrow.up")
                                 .font(.system(size: 14))
                                 .foregroundColor(AppTheme.textSecondary)
@@ -1079,6 +1079,12 @@ struct ChatView: View {
             .keyboardShortcut("f", modifiers: .command)
             .hidden()
         )
+        .sheet(isPresented: $appState.showExportSheet) {
+            if let conv = appState.exportConversationTarget {
+                ExportOptionsView(conversation: conv)
+                    .environmentObject(appState)
+            }
+        }
     }
 
     private func toggleSelection(_ id: String) {

@@ -215,12 +215,107 @@ struct OnboardingFeatureRow: View {
 
 // MARK: - Command Palette
 
+enum PaletteCategory: String, CaseIterable {
+    case navigation = "Navigation"
+    case chat = "Chat"
+    case agents = "Agents"
+    case settings = "Settings"
+    case recent = "Recent"
+
+    var color: Color {
+        switch self {
+        case .navigation: return .blue
+        case .chat: return AppTheme.accent
+        case .agents: return .purple
+        case .settings: return .orange
+        case .recent: return AppTheme.textSecondary
+        }
+    }
+}
+
 struct PaletteCommand: Identifiable {
     let id = UUID()
     let icon: String
     let label: String
     let shortcut: String?
+    let category: PaletteCategory
     let action: () -> Void
+}
+
+/// Result of fuzzy matching: the matched command plus the indices of matched characters.
+struct FuzzyMatch: Identifiable {
+    var id: UUID { command.id }
+    let command: PaletteCommand
+    let matchedIndices: [String.Index]
+    let score: Int
+}
+
+/// Performs fuzzy matching: characters in `query` must appear in `text` in order but not
+/// necessarily consecutively. Returns matched character indices and a score, or nil if no match.
+private func fuzzyMatch(query: String, in text: String) -> (indices: [String.Index], score: Int)? {
+    let queryChars = Array(query.lowercased())
+    let textLower = text.lowercased()
+    guard !queryChars.isEmpty else { return ([], 0) }
+
+    var matchedIndices: [String.Index] = []
+    var queryIdx = 0
+    var score = 0
+    var lastMatchPos: Int? = nil
+    var textPos = 0
+
+    for idx in textLower.indices {
+        guard queryIdx < queryChars.count else { break }
+        if textLower[idx] == queryChars[queryIdx] {
+            matchedIndices.append(text.index(text.startIndex, offsetBy: text.distance(from: textLower.startIndex, to: idx)))
+            // Bonus for consecutive matches
+            if let last = lastMatchPos, textPos == last + 1 {
+                score += 5
+            }
+            // Bonus for matching at start of word
+            if textPos == 0 || (textPos > 0 && text[text.index(text.startIndex, offsetBy: textPos - 1)] == " ") {
+                score += 10
+            }
+            // Bonus for matching at start of text
+            if textPos == 0 {
+                score += 15
+            }
+            lastMatchPos = textPos
+            queryIdx += 1
+        }
+        textPos += 1
+    }
+
+    guard queryIdx == queryChars.count else { return nil }
+    // Base score: shorter labels rank higher when fully matched
+    score += max(0, 50 - text.count)
+    return (matchedIndices, score)
+}
+
+/// A Text view that highlights specific character indices with the accent color (for fuzzy match).
+struct FuzzyHighlightedText: View {
+    let text: String
+    let matchedIndices: Set<String.Index>
+    let baseColor: Color
+
+    var body: some View {
+        buildText()
+    }
+
+    private func buildText() -> Text {
+        var result = Text("")
+        for idx in text.indices {
+            let char = String(text[idx])
+            if matchedIndices.contains(idx) {
+                result = result + Text(char)
+                    .foregroundColor(AppTheme.accent)
+                    .fontWeight(.bold)
+            } else {
+                result = result + Text(char)
+                    .foregroundColor(baseColor)
+            }
+        }
+        return result
+    }
 }
 
 struct CommandPaletteView: View {
@@ -231,59 +326,103 @@ struct CommandPaletteView: View {
     @State private var selectedIndex = 0
     @FocusState private var isSearchFocused: Bool
 
-    private var commands: [PaletteCommand] {
-        var cmds: [PaletteCommand] = [
-            PaletteCommand(icon: "plus.bubble", label: "New Chat", shortcut: "\u{2318}N") {
-                appState.startNewChat(); isPresented = false
-            },
-            PaletteCommand(icon: "bolt.fill", label: "Toggle Gateway", shortcut: nil) {
-                appState.toggleGateway(); isPresented = false
-            },
-            PaletteCommand(icon: "house.fill", label: "Dashboard", shortcut: "\u{2318}1") {
-                selectedTab = .home; isPresented = false
-            },
-            PaletteCommand(icon: "bubble.left.and.bubble.right.fill", label: "Chat", shortcut: "\u{2318}2") {
-                selectedTab = .chat; isPresented = false
-            },
-            PaletteCommand(icon: "person.3.fill", label: "Agents", shortcut: "\u{2318}3") {
-                selectedTab = .agents; isPresented = false
-            },
-            PaletteCommand(icon: "clock.fill", label: "Tasks", shortcut: "\u{2318}4") {
-                selectedTab = .tasks; isPresented = false
-            },
-            PaletteCommand(icon: "gearshape.fill", label: "Settings", shortcut: "\u{2318},") {
-                selectedTab = .settings; isPresented = false
-            },
-            PaletteCommand(icon: "square.and.arrow.up", label: "Export Chat", shortcut: nil) {
-                if let conv = appState.activeConversation {
-                    appState.exportAndSave(conv)
-                }
-                isPresented = false
-            },
-            PaletteCommand(icon: "moon.fill", label: "Toggle Dark Mode", shortcut: nil) {
-                appState.isDarkMode.toggle(); isPresented = false
-            },
-            PaletteCommand(icon: "eye.slash", label: "Toggle Focus Mode", shortcut: nil) {
-                appState.focusModeEnabled.toggle(); isPresented = false
-            },
-        ]
+    private var allCommands: [PaletteCommand] {
+        var cmds: [PaletteCommand] = []
 
-        // Recent conversations (last 5)
-        let recent = appState.conversations.prefix(5)
-        for conv in recent {
-            cmds.append(PaletteCommand(icon: "text.bubble", label: "Open: \(conv.title)", shortcut: nil) {
-                appState.openConversation(conv)
+        // -- Navigation --
+        cmds.append(PaletteCommand(icon: "house.fill", label: "Go to Dashboard", shortcut: "\u{2318}1", category: .navigation) {
+            selectedTab = .home; isPresented = false
+        })
+        cmds.append(PaletteCommand(icon: "bubble.left.and.bubble.right.fill", label: "Go to Chat", shortcut: "\u{2318}2", category: .navigation) {
+            selectedTab = .chat; isPresented = false
+        })
+        cmds.append(PaletteCommand(icon: "person.3.fill", label: "Go to Agents", shortcut: "\u{2318}3", category: .navigation) {
+            selectedTab = .agents; isPresented = false
+        })
+        cmds.append(PaletteCommand(icon: "clock.fill", label: "Go to Tasks", shortcut: "\u{2318}4", category: .navigation) {
+            selectedTab = .tasks; isPresented = false
+        })
+        cmds.append(PaletteCommand(icon: "gearshape.fill", label: "Go to Settings", shortcut: "\u{2318},", category: .navigation) {
+            selectedTab = .settings; isPresented = false
+        })
+
+        // -- Chat --
+        cmds.append(PaletteCommand(icon: "plus.bubble", label: "New Conversation", shortcut: "\u{2318}N", category: .chat) {
+            appState.startNewChat(); isPresented = false
+        })
+        cmds.append(PaletteCommand(icon: "xmark.circle", label: "Clear Chat", shortcut: "\u{2318}W", category: .chat) {
+            appState.closeCurrentConversation(); isPresented = false
+        })
+        cmds.append(PaletteCommand(icon: "square.and.arrow.up", label: "Export Conversation", shortcut: nil, category: .chat) {
+            if let conv = appState.activeConversation { appState.exportAndSave(conv) }
+            isPresented = false
+        })
+        cmds.append(PaletteCommand(icon: "magnifyingglass", label: "Search Messages", shortcut: "\u{2318}F", category: .chat) {
+            selectedTab = .chat; appState.shouldFocusInput = true; isPresented = false
+        })
+
+        // -- Agents --
+        cmds.append(PaletteCommand(icon: "person.3.fill", label: "List Agents", shortcut: nil, category: .agents) {
+            selectedTab = .agents; isPresented = false
+        })
+        for agent in appState.agents {
+            cmds.append(PaletteCommand(icon: agent.backendIcon, label: "Chat with \(agent.name)", shortcut: nil, category: .agents) {
+                let conv = Conversation(
+                    id: UUID().uuidString,
+                    title: agent.name,
+                    messages: [],
+                    createdAt: Date(),
+                    agentName: agent.name
+                )
+                appState.conversations.insert(conv, at: 0)
+                appState.activeConversation = conv
+                appState.selectedTab = .chat
                 isPresented = false
+            })
+        }
+
+        // -- Settings --
+        cmds.append(PaletteCommand(icon: "moon.fill", label: "Toggle Dark Mode", shortcut: nil, category: .settings) {
+            appState.isDarkMode.toggle(); isPresented = false
+        })
+        cmds.append(PaletteCommand(icon: "paintpalette.fill", label: "Change Accent Color", shortcut: nil, category: .settings) {
+            selectedTab = .settings; isPresented = false
+        })
+        cmds.append(PaletteCommand(icon: "bolt.fill", label: "Toggle Gateway", shortcut: nil, category: .settings) {
+            appState.toggleGateway(); isPresented = false
+        })
+        cmds.append(PaletteCommand(icon: "eye.slash", label: "Toggle Focus Mode", shortcut: nil, category: .settings) {
+            appState.focusModeEnabled.toggle(); isPresented = false
+        })
+
+        // -- Recent (max 3) --
+        for conv in appState.conversations.prefix(3) {
+            cmds.append(PaletteCommand(icon: "text.bubble", label: conv.title, shortcut: nil, category: .recent) {
+                appState.openConversation(conv); isPresented = false
             })
         }
 
         return cmds
     }
 
-    private var filtered: [PaletteCommand] {
-        if search.isEmpty { return commands }
-        let query = search.lowercased()
-        return commands.filter { $0.label.lowercased().contains(query) }
+    private var filtered: [FuzzyMatch] {
+        let commands = allCommands
+        if search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return commands.map { FuzzyMatch(command: $0, matchedIndices: [], score: 0) }
+        }
+        let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        var matches: [FuzzyMatch] = []
+        for cmd in commands {
+            if let result = fuzzyMatch(query: query, in: cmd.label) {
+                matches.append(FuzzyMatch(command: cmd, matchedIndices: result.indices, score: result.score))
+            }
+        }
+        return matches.sorted { $0.score > $1.score }
+    }
+
+    /// The visible results, capped at 8.
+    private var visibleResults: [FuzzyMatch] {
+        Array(filtered.prefix(8))
     }
 
     var body: some View {
@@ -296,15 +435,32 @@ struct CommandPaletteView: View {
             VStack(spacing: 0) {
                 // Search field
                 HStack(spacing: 10) {
-                    Image(systemName: "magnifyingglass")
-                        .foregroundColor(AppTheme.textSecondary)
-                        .font(.system(size: 15))
-                    TextField("Type a command...", text: $search)
+                    Image(systemName: "command")
+                        .foregroundColor(AppTheme.accent)
+                        .font(.system(size: 14, weight: .semibold))
+                    TextField("Search commands...", text: $search)
                         .textFieldStyle(.plain)
                         .font(.system(size: 15))
                         .foregroundColor(AppTheme.textPrimary)
                         .focused($isSearchFocused)
                         .onSubmit { executeSelected() }
+
+                    if !search.isEmpty {
+                        Button(action: { search = "" }) {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundColor(AppTheme.textMuted)
+                                .font(.system(size: 13))
+                        }
+                        .buttonStyle(.plain)
+                    }
+
+                    Text("esc")
+                        .font(.system(size: 10, weight: .medium, design: .rounded))
+                        .foregroundColor(AppTheme.textMuted)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 2)
+                        .background(AppTheme.bgSecondary.opacity(0.6))
+                        .clipShape(RoundedRectangle(cornerRadius: 3))
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
@@ -313,66 +469,135 @@ struct CommandPaletteView: View {
                     .background(AppTheme.borderGlass)
 
                 // Command list
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        LazyVStack(spacing: 0) {
-                            ForEach(Array(filtered.enumerated()), id: \.element.id) { index, cmd in
-                                HStack(spacing: 12) {
-                                    Image(systemName: cmd.icon)
-                                        .font(.system(size: 13))
-                                        .foregroundColor(index == selectedIndex ? AppTheme.accent : AppTheme.textSecondary)
-                                        .frame(width: 22)
+                if visibleResults.isEmpty {
+                    VStack(spacing: 8) {
+                        Image(systemName: "magnifyingglass")
+                            .font(.system(size: 24))
+                            .foregroundColor(AppTheme.textMuted)
+                        Text("No matching commands")
+                            .font(.system(size: 13))
+                            .foregroundColor(AppTheme.textSecondary)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 28)
+                } else {
+                    ScrollViewReader { proxy in
+                        ScrollView {
+                            LazyVStack(spacing: 0) {
+                                ForEach(Array(visibleResults.enumerated()), id: \.element.id) { index, match in
+                                    let cmd = match.command
+                                    let isSelected = index == selectedIndex
 
-                                    Text(cmd.label)
-                                        .font(.system(size: 13))
-                                        .foregroundColor(AppTheme.textPrimary)
-                                        .lineLimit(1)
+                                    HStack(spacing: 10) {
+                                        // Icon
+                                        Image(systemName: cmd.icon)
+                                            .font(.system(size: 13))
+                                            .foregroundColor(isSelected ? AppTheme.accent : AppTheme.textSecondary)
+                                            .frame(width: 24, height: 24)
+                                            .background(
+                                                RoundedRectangle(cornerRadius: 6)
+                                                    .fill(isSelected ? AppTheme.accent.opacity(0.15) : AppTheme.bgSecondary.opacity(0.4))
+                                            )
 
-                                    Spacer()
+                                        // Label with highlighted matched chars
+                                        if match.matchedIndices.isEmpty {
+                                            Text(cmd.label)
+                                                .font(.system(size: 13))
+                                                .foregroundColor(AppTheme.textPrimary)
+                                                .lineLimit(1)
+                                        } else {
+                                            FuzzyHighlightedText(
+                                                text: cmd.label,
+                                                matchedIndices: Set(match.matchedIndices),
+                                                baseColor: AppTheme.textPrimary
+                                            )
+                                            .font(.system(size: 13))
+                                            .lineLimit(1)
+                                        }
 
-                                    if let shortcut = cmd.shortcut {
-                                        Text(shortcut)
-                                            .font(.system(size: 11, design: .rounded))
-                                            .foregroundColor(AppTheme.textSecondary.opacity(0.6))
+                                        Spacer()
+
+                                        // Category badge
+                                        Text(cmd.category.rawValue)
+                                            .font(.system(size: 9, weight: .semibold, design: .rounded))
+                                            .foregroundColor(cmd.category.color.opacity(0.9))
                                             .padding(.horizontal, 6)
                                             .padding(.vertical, 2)
-                                            .background(AppTheme.bgSecondary.opacity(0.5))
+                                            .background(cmd.category.color.opacity(0.12))
                                             .clipShape(RoundedRectangle(cornerRadius: 4))
+
+                                        // Keyboard shortcut
+                                        if let shortcut = cmd.shortcut {
+                                            Text(shortcut)
+                                                .font(.system(size: 10, weight: .medium, design: .rounded))
+                                                .foregroundColor(AppTheme.textMuted)
+                                                .padding(.horizontal, 6)
+                                                .padding(.vertical, 2)
+                                                .background(AppTheme.bgSecondary.opacity(0.5))
+                                                .clipShape(RoundedRectangle(cornerRadius: 4))
+                                        }
                                     }
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 7)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 8)
+                                            .fill(isSelected ? AppTheme.accent.opacity(0.1) : Color.clear)
+                                            .padding(.horizontal, 4)
+                                    )
+                                    .contentShape(Rectangle())
+                                    .onTapGesture { cmd.action() }
+                                    .id(index)
                                 }
-                                .padding(.horizontal, 16)
-                                .padding(.vertical, 8)
-                                .background(index == selectedIndex ? AppTheme.accent.opacity(0.12) : Color.clear)
-                                .contentShape(Rectangle())
-                                .onTapGesture {
-                                    cmd.action()
-                                }
-                                .id(index)
                             }
+                            .padding(.vertical, 4)
                         }
-                        .padding(.vertical, 4)
-                    }
-                    .frame(maxHeight: 320)
-                    .onChange(of: selectedIndex) {
-                        withAnimation(.easeOut(duration: 0.1)) {
-                            proxy.scrollTo(selectedIndex, anchor: .center)
+                        .frame(maxHeight: 340)
+                        .onChange(of: selectedIndex) {
+                            withAnimation(.easeOut(duration: 0.1)) {
+                                proxy.scrollTo(selectedIndex, anchor: .center)
+                            }
                         }
                     }
                 }
+
+                // Footer hint
+                HStack(spacing: 12) {
+                    HStack(spacing: 3) {
+                        Image(systemName: "arrowtriangle.up.fill")
+                            .font(.system(size: 7))
+                        Image(systemName: "arrowtriangle.down.fill")
+                            .font(.system(size: 7))
+                        Text("navigate")
+                            .font(.system(size: 10))
+                    }
+                    HStack(spacing: 3) {
+                        Image(systemName: "return")
+                            .font(.system(size: 8))
+                        Text("select")
+                            .font(.system(size: 10))
+                    }
+                    Spacer()
+                    Text("\(filtered.count) commands")
+                        .font(.system(size: 10))
+                }
+                .foregroundColor(AppTheme.textMuted)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .background(AppTheme.bgSecondary.opacity(0.3))
             }
-            .frame(maxWidth: 500)
+            .frame(maxWidth: 520)
             .background(
-                RoundedRectangle(cornerRadius: 14)
+                RoundedRectangle(cornerRadius: 16)
                     .fill(.ultraThinMaterial)
                     .overlay(
-                        RoundedRectangle(cornerRadius: 14)
+                        RoundedRectangle(cornerRadius: 16)
                             .strokeBorder(AppTheme.borderGlass, lineWidth: 1)
                     )
-                    .shadow(color: .black.opacity(0.4), radius: 30, x: 0, y: 10)
+                    .shadow(color: .black.opacity(0.5), radius: 40, x: 0, y: 12)
             )
-            .clipShape(RoundedRectangle(cornerRadius: 14))
+            .clipShape(RoundedRectangle(cornerRadius: 16))
             .padding(.horizontal, 40)
-            .padding(.bottom, 120)
+            .padding(.bottom, 100)
         }
         .onAppear {
             search = ""
@@ -387,7 +612,7 @@ struct CommandPaletteView: View {
             return .handled
         }
         .onKeyPress(.downArrow) {
-            if selectedIndex < filtered.count - 1 { selectedIndex += 1 }
+            if selectedIndex < visibleResults.count - 1 { selectedIndex += 1 }
             return .handled
         }
         .onKeyPress(.escape) {
@@ -401,8 +626,176 @@ struct CommandPaletteView: View {
     }
 
     private func executeSelected() {
-        guard !filtered.isEmpty, selectedIndex < filtered.count else { return }
-        filtered[selectedIndex].action()
+        guard !visibleResults.isEmpty, selectedIndex < visibleResults.count else { return }
+        visibleResults[selectedIndex].command.action()
+    }
+}
+
+// MARK: - Window Accessor
+
+/// NSViewRepresentable that provides access to the hosting NSWindow for frame tracking and settings.
+struct WindowAccessor: NSViewRepresentable {
+    let appState: AppState
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        DispatchQueue.main.async {
+            guard let window = view.window else { return }
+            context.coordinator.observeWindow(window, appState: appState)
+
+            // Restore saved frame
+            if let savedFrame = appState.savedWindowFrame {
+                let screens = NSScreen.screens
+                let onScreen = screens.contains { $0.visibleFrame.intersects(savedFrame) }
+                if onScreen {
+                    window.setFrame(savedFrame, display: true)
+                }
+            }
+
+            // Apply float-on-top and opacity
+            window.level = appState.floatOnTop ? .floating : .normal
+            window.alphaValue = CGFloat(appState.windowOpacity)
+        }
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {}
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    class Coordinator: NSObject {
+        private var moveObserver: Any?
+        private var resizeObserver: Any?
+
+        func observeWindow(_ window: NSWindow, appState: AppState) {
+            moveObserver = NotificationCenter.default.addObserver(
+                forName: NSWindow.didMoveNotification, object: window, queue: .main
+            ) { _ in
+                Task { @MainActor in appState.saveWindowFrame(window.frame) }
+            }
+            resizeObserver = NotificationCenter.default.addObserver(
+                forName: NSWindow.didResizeNotification, object: window, queue: .main
+            ) { _ in
+                Task { @MainActor in appState.saveWindowFrame(window.frame) }
+            }
+        }
+
+        deinit {
+            if let o = moveObserver { NotificationCenter.default.removeObserver(o) }
+            if let o = resizeObserver { NotificationCenter.default.removeObserver(o) }
+        }
+    }
+}
+
+// MARK: - Compact Mode Header
+
+struct CompactModeHeader: View {
+    @EnvironmentObject var appState: AppState
+    @Binding var showCompactMenu: Bool
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Button(action: { showCompactMenu.toggle() }) {
+                Image(systemName: "line.3.horizontal")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundColor(AppTheme.textSecondary)
+                    .frame(width: 30, height: 30)
+                    .background(.ultraThinMaterial)
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(AppTheme.borderGlass, lineWidth: 1)
+                    )
+            }
+            .buttonStyle(.plain)
+            .help("Navigation menu")
+
+            GhostIcon(size: 20, isProcessing: appState.isProcessing)
+
+            Text("osai")
+                .font(.system(size: 14, weight: .bold, design: .rounded))
+                .foregroundColor(AppTheme.textPrimary)
+
+            if appState.floatOnTop {
+                Image(systemName: "pin.fill")
+                    .font(.system(size: 10))
+                    .foregroundColor(AppTheme.accent)
+                    .help("Floating on top")
+            }
+
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(AppTheme.bgSecondary.opacity(0.8))
+    }
+}
+
+// MARK: - Compact Navigation Menu
+
+struct CompactNavigationMenu: View {
+    @EnvironmentObject var appState: AppState
+    @Binding var isPresented: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(SidebarItem.allCases) { item in
+                Button(action: {
+                    appState.selectedTab = item
+                    isPresented = false
+                }) {
+                    HStack(spacing: 10) {
+                        Image(systemName: item.icon)
+                            .font(.system(size: 13))
+                            .foregroundColor(appState.selectedTab == item ? AppTheme.accent : AppTheme.textSecondary)
+                            .frame(width: 20)
+
+                        Text(item.rawValue)
+                            .font(.system(size: 13, weight: appState.selectedTab == item ? .semibold : .regular))
+                            .foregroundColor(appState.selectedTab == item ? AppTheme.textPrimary : AppTheme.textSecondary)
+
+                        Spacer()
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(appState.selectedTab == item ? AppTheme.accent.opacity(0.1) : Color.clear)
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                }
+                .buttonStyle(.plain)
+            }
+
+            Divider().background(AppTheme.borderGlass).padding(.vertical, 4)
+
+            Button(action: {
+                appState.toggleCompactMode()
+                isPresented = false
+            }) {
+                HStack(spacing: 10) {
+                    Image(systemName: "arrow.up.left.and.arrow.down.right")
+                        .font(.system(size: 13))
+                        .foregroundColor(AppTheme.textSecondary)
+                        .frame(width: 20)
+                    Text("Exit Compact Mode")
+                        .font(.system(size: 13))
+                        .foregroundColor(AppTheme.textSecondary)
+                    Spacer()
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(8)
+        .frame(width: 200)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(.ultraThinMaterial)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10)
+                        .strokeBorder(AppTheme.borderGlass, lineWidth: 1)
+                )
+                .shadow(color: .black.opacity(0.3), radius: 12, x: 0, y: 4)
+        )
     }
 }
 
@@ -413,105 +806,170 @@ struct ContentView: View {
     @StateObject private var hotkeyManager = HotkeyManager()
     @State private var showCommandPalette = false
     @State private var commandSearch = ""
+    @State private var showCompactMenu = false
 
     var body: some View {
         GeometryReader { geo in
             let windowWidth = geo.size.width
             let isNarrow = windowWidth < 800
             let isVeryNarrow = windowWidth < 600
+            let hideSidebar = isVeryNarrow || appState.compactMode
 
             ZStack(alignment: .leading) {
-                HStack(spacing: 0) {
-                    // Sidebar: hidden when very narrow, collapsed when narrow, full otherwise
-                    if !isVeryNarrow {
-                        Sidebar()
-                            .animation(.spring(response: 0.3, dampingFraction: 0.85), value: appState.sidebarCollapsed)
-                            .animation(.spring(response: 0.3, dampingFraction: 0.85), value: isNarrow)
+                if appState.compactMode {
+                    // Compact mode: no sidebar, minimal header + content
+                    VStack(spacing: 0) {
+                        CompactModeHeader(showCompactMenu: $showCompactMenu)
+                            .environmentObject(appState)
 
-                        // Subtle divider between sidebar and content
-                        Rectangle()
-                            .fill(AppTheme.borderGlass.opacity(0.5))
-                            .frame(width: 1)
-                            .ignoresSafeArea()
-                    }
+                        ZStack {
+                            AppTheme.bgPrimary
+                                .ignoresSafeArea()
 
-                    // Main content area
-                    ZStack {
-                        AppTheme.bgPrimary
-                            .ignoresSafeArea()
-
-                        Group {
-                            switch appState.selectedTab {
-                            case .home:
-                                DashboardView()
-                            case .chat:
-                                ChatView()
-                            case .agents:
-                                AgentsView()
-                            case .tasks:
-                                TasksView()
-                            case .settings:
-                                SettingsView()
-                            }
-                        }
-                        .id(appState.selectedTab)
-                        .transition(.opacity.combined(with: .move(edge: .trailing)))
-                    }
-                    .frame(minWidth: 350, maxWidth: .infinity, maxHeight: .infinity)
-                    .clipped()
-                    .animation(.easeInOut(duration: 0.2), value: appState.selectedTab)
-                    .overlay(alignment: .topLeading) {
-                        // Sidebar toggle when sidebar is hidden
-                        if isVeryNarrow {
-                            Button(action: {
-                                withAnimation(.easeOut(duration: 0.25)) {
-                                    appState.showSidebarOverlay.toggle()
+                            Group {
+                                switch appState.selectedTab {
+                                case .home:
+                                    DashboardView()
+                                case .chat:
+                                    ChatView()
+                                case .agents:
+                                    AgentsView()
+                                case .tasks:
+                                    TasksView()
+                                case .settings:
+                                    SettingsView()
                                 }
-                            }) {
-                                Image(systemName: "sidebar.left")
-                                    .font(.system(size: 14, weight: .medium))
-                                    .foregroundColor(AppTheme.textSecondary)
-                                    .frame(width: 32, height: 32)
-                                    .background(.ultraThinMaterial)
-                                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: 8)
-                                            .stroke(AppTheme.borderGlass, lineWidth: 1)
-                                    )
                             }
-                            .buttonStyle(.plain)
-                            .padding(.top, 8)
-                            .padding(.leading, 8)
-                            .help("Show sidebar")
+                            .id(appState.selectedTab)
+                            .transition(.opacity.combined(with: .move(edge: .trailing)))
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .clipped()
+                        .animation(.easeInOut(duration: 0.2), value: appState.selectedTab)
+                    }
+                    .overlay(alignment: .topLeading) {
+                        if showCompactMenu {
+                            Color.black.opacity(0.01)
+                                .ignoresSafeArea()
+                                .onTapGesture { showCompactMenu = false }
+
+                            CompactNavigationMenu(isPresented: $showCompactMenu)
+                                .environmentObject(appState)
+                                .padding(.top, 44)
+                                .padding(.leading, 8)
+                                .transition(.opacity.combined(with: .scale(scale: 0.95, anchor: .topLeading)))
+                                .zIndex(20)
                         }
                     }
-                }
-
-                // Overlay sidebar for very narrow windows
-                if isVeryNarrow && appState.showSidebarOverlay {
-                    // Dimming backdrop
-                    Color.black.opacity(0.4)
-                        .ignoresSafeArea()
-                        .onTapGesture {
-                            withAnimation(.easeOut(duration: 0.2)) {
-                                appState.showSidebarOverlay = false
-                            }
-                        }
-                        .zIndex(10)
-
-                    // Sidebar overlay
+                    .animation(.easeOut(duration: 0.15), value: showCompactMenu)
+                } else {
                     HStack(spacing: 0) {
-                        Sidebar()
-                        Rectangle()
-                            .fill(AppTheme.borderGlass.opacity(0.5))
-                            .frame(width: 1)
+                        // Sidebar: hidden when very narrow, collapsed when narrow, full otherwise
+                        if !hideSidebar {
+                            Sidebar()
+                                .animation(.spring(response: 0.3, dampingFraction: 0.85), value: appState.sidebarCollapsed)
+                                .animation(.spring(response: 0.3, dampingFraction: 0.85), value: isNarrow)
+
+                            // Subtle divider between sidebar and content
+                            Rectangle()
+                                .fill(AppTheme.borderGlass.opacity(0.5))
+                                .frame(width: 1)
+                                .ignoresSafeArea()
+                        }
+
+                        // Main content area
+                        ZStack {
+                            AppTheme.bgPrimary
+                                .ignoresSafeArea()
+
+                            Group {
+                                switch appState.selectedTab {
+                                case .home:
+                                    DashboardView()
+                                case .chat:
+                                    ChatView()
+                                case .agents:
+                                    AgentsView()
+                                case .tasks:
+                                    TasksView()
+                                case .settings:
+                                    SettingsView()
+                                }
+                            }
+                            .id(appState.selectedTab)
+                            .transition(.opacity.combined(with: .move(edge: .trailing)))
+                        }
+                        .frame(minWidth: 350, maxWidth: .infinity, maxHeight: .infinity)
+                        .clipped()
+                        .animation(.easeInOut(duration: 0.2), value: appState.selectedTab)
+                        .overlay(alignment: .topLeading) {
+                            // Sidebar toggle when sidebar is hidden
+                            if hideSidebar {
+                                Button(action: {
+                                    withAnimation(.easeOut(duration: 0.25)) {
+                                        appState.showSidebarOverlay.toggle()
+                                    }
+                                }) {
+                                    Image(systemName: "sidebar.left")
+                                        .font(.system(size: 14, weight: .medium))
+                                        .foregroundColor(AppTheme.textSecondary)
+                                        .frame(width: 32, height: 32)
+                                        .background(.ultraThinMaterial)
+                                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 8)
+                                                .stroke(AppTheme.borderGlass, lineWidth: 1)
+                                        )
+                                }
+                                .buttonStyle(.plain)
+                                .padding(.top, 8)
+                                .padding(.leading, 8)
+                                .help("Show sidebar")
+                            }
+                        }
+                        // Float-on-top pin indicator (non-compact mode)
+                        .overlay(alignment: .topTrailing) {
+                            if appState.floatOnTop {
+                                Image(systemName: "pin.fill")
+                                    .font(.system(size: 10))
+                                    .foregroundColor(AppTheme.accent)
+                                    .padding(6)
+                                    .background(.ultraThinMaterial)
+                                    .clipShape(Circle())
+                                    .padding(.top, 8)
+                                    .padding(.trailing, 8)
+                                    .help("Window floating on top")
+                            }
+                        }
                     }
-                    .shadow(color: .black.opacity(0.3), radius: 20, x: 5, y: 0)
-                    .transition(.move(edge: .leading))
-                    .zIndex(11)
+
+                    // Overlay sidebar for very narrow / compact windows
+                    if hideSidebar && appState.showSidebarOverlay {
+                        // Dimming backdrop
+                        Color.black.opacity(0.4)
+                            .ignoresSafeArea()
+                            .onTapGesture {
+                                withAnimation(.easeOut(duration: 0.2)) {
+                                    appState.showSidebarOverlay = false
+                                }
+                            }
+                            .zIndex(10)
+
+                        // Sidebar overlay
+                        HStack(spacing: 0) {
+                            Sidebar()
+                            Rectangle()
+                                .fill(AppTheme.borderGlass.opacity(0.5))
+                                .frame(width: 1)
+                        }
+                        .shadow(color: .black.opacity(0.3), radius: 20, x: 5, y: 0)
+                        .transition(.move(edge: .leading))
+                        .zIndex(11)
+                    }
                 }
             }
             .animation(.easeOut(duration: 0.25), value: appState.showSidebarOverlay)
+            .animation(.easeInOut(duration: 0.3), value: appState.compactMode)
             .onChange(of: isNarrow) { _, narrow in
                 // Auto-collapse sidebar when window becomes narrow
                 if narrow && !appState.sidebarCollapsed {
@@ -522,7 +980,7 @@ struct ContentView: View {
             }
             .onChange(of: isVeryNarrow) { _, veryNarrow in
                 // Update state for ChatView to react to
-                appState.sidebarHidden = veryNarrow
+                appState.sidebarHidden = veryNarrow || appState.compactMode
                 if veryNarrow {
                     appState.showSidebarOverlay = false
                 }
@@ -532,9 +990,11 @@ struct ContentView: View {
                 if windowWidth < 800 {
                     appState.sidebarCollapsed = true
                 }
-                appState.sidebarHidden = windowWidth < 600
+                appState.sidebarHidden = windowWidth < 600 || appState.compactMode
             }
         }
+        // Window accessor for frame persistence and window-level settings
+        .background(WindowAccessor(appState: appState))
         // Onboarding overlay
         .overlay {
             if !appState.hasCompletedOnboarding {
@@ -582,6 +1042,13 @@ struct ContentView: View {
             } else {
                 hotkeyManager.uninstall()
             }
+        }
+        // React to float-on-top and opacity changes
+        .onChange(of: appState.floatOnTop) {
+            appState.applyWindowSettings()
+        }
+        .onChange(of: appState.windowOpacity) {
+            appState.applyWindowSettings()
         }
         // Hidden buttons for keyboard shortcuts
         .background(
