@@ -362,6 +362,7 @@ enum DashboardSection: String, Codable, CaseIterable, Identifiable {
     case systemStatus
     case activity
     case modelUsage
+    case tips
 
     var id: String { rawValue }
 
@@ -381,6 +382,7 @@ enum DashboardSection: String, Codable, CaseIterable, Identifiable {
         case .systemStatus: return "System Status"
         case .activity: return "Your Activity"
         case .modelUsage: return "Model Usage"
+        case .tips: return "Tips & Tricks"
         }
     }
 
@@ -400,11 +402,59 @@ enum DashboardSection: String, Codable, CaseIterable, Identifiable {
         case .systemStatus: return "cpu"
         case .activity: return "flame"
         case .modelUsage: return "chart.pie"
+        case .tips: return "sparkles"
         }
     }
 
     static let defaultOrder: [DashboardSection] = [
-        .quickStart, .activity, .gateway, .stats, .spending, .recentConversations, .tokenStats, .modelUsage, .analytics, .chatInsights, .performance, .recentActivity, .systemHealth, .systemStatus
+        .quickStart, .tips, .activity, .gateway, .stats, .spending, .recentConversations, .tokenStats, .modelUsage, .analytics, .chatInsights, .performance, .recentActivity, .systemHealth, .systemStatus
+    ]
+}
+
+// MARK: - Tip Item
+
+struct TipItem: Identifiable {
+    let id: String
+    let icon: String
+    let title: String
+    let description: String
+    let actionLabel: String?
+    let actionHandler: (() -> Void)?
+
+    init(id: String, icon: String, title: String, description: String, actionLabel: String? = nil, actionHandler: (() -> Void)? = nil) {
+        self.id = id
+        self.icon = icon
+        self.title = title
+        self.description = description
+        self.actionLabel = actionLabel
+        self.actionHandler = actionHandler
+    }
+
+    static let allTips: [TipItem] = [
+        TipItem(id: "cmd_k", icon: "command", title: "Command Palette", description: "Press Cmd+K to open the command palette for quick access to any action.", actionLabel: "Try it"),
+        TipItem(id: "pin_messages", icon: "pin.fill", title: "Pin Important Messages", description: "Pin key messages in a conversation so you can find them quickly later."),
+        TipItem(id: "workspaces", icon: "rectangle.stack.fill", title: "Create Workspaces", description: "Organize your projects into workspaces to keep conversations and agents separate."),
+        TipItem(id: "compact_mode", icon: "rectangle.compress.vertical", title: "Try Compact Mode", description: "Switch to compact mode in Settings to fit more content on screen.", actionLabel: "Open Settings"),
+        TipItem(id: "agent_routing", icon: "arrow.triangle.branch", title: "Smart Agent Routing", description: "OSAI automatically routes your messages to the best agent based on intent."),
+        TipItem(id: "keyboard_nav", icon: "keyboard", title: "Keyboard Navigation", description: "Use Cmd+1-9 to switch between tabs quickly. Cmd+N starts a new chat."),
+        TipItem(id: "export_chat", icon: "square.and.arrow.up", title: "Export Conversations", description: "Export any conversation as Markdown, JSON, or plain text from the chat menu."),
+        TipItem(id: "custom_agents", icon: "person.crop.circle.badge.plus", title: "Create Custom Agents", description: "Build your own agents with custom system prompts tailored to your workflow."),
+        TipItem(id: "token_stats", icon: "number.circle", title: "Track Token Usage", description: "Monitor your token consumption and costs in the dashboard analytics section."),
+        TipItem(id: "templates", icon: "doc.on.doc", title: "Use Templates", description: "Start conversations from templates for common tasks like code review or brainstorming."),
+        TipItem(id: "dark_theme", icon: "moon.fill", title: "Dark Theme Options", description: "Customize your theme colors and accent in Settings for a personalized look.", actionLabel: "Open Settings"),
+        TipItem(id: "drag_sections", icon: "arrow.up.arrow.down", title: "Reorder Dashboard", description: "Click the customize button to drag and reorder dashboard sections to your preference."),
+        TipItem(id: "gateway_bg", icon: "power", title: "Background Gateway", description: "The gateway can run in the background and auto-start on login for always-on access."),
+        TipItem(id: "search_history", icon: "magnifyingglass", title: "Search History", description: "Use the search bar in the sidebar to quickly find past conversations by keyword."),
+        TipItem(id: "multi_model", icon: "cpu", title: "Switch Models", description: "Change AI models per conversation to balance speed, cost, and capability."),
+        TipItem(id: "context_menu", icon: "ellipsis.circle", title: "Right-Click Context Menus", description: "Right-click on messages, conversations, and agents for quick actions."),
+        TipItem(id: "input_history", icon: "clock.arrow.circlepath", title: "Input History", description: "Press the up arrow in the chat input to cycle through your previous messages."),
+        TipItem(id: "collapse_sections", icon: "chevron.up", title: "Collapse Sections", description: "Click any dashboard section header to collapse it and save space."),
+        TipItem(id: "notification_prefs", icon: "bell.badge", title: "Notification Preferences", description: "Customize which events trigger notifications in Settings.", actionLabel: "Open Settings"),
+        TipItem(id: "spending_guard", icon: "dollarsign.circle", title: "Spending Guards", description: "Set monthly spending limits to keep API costs under control."),
+        TipItem(id: "sort_convos", icon: "arrow.up.arrow.down.circle", title: "Sort Conversations", description: "Sort your conversation list by date, name, message count, or token usage."),
+        TipItem(id: "agent_specialties", icon: "star.fill", title: "Agent Specialties", description: "Each agent excels at different tasks. Try the Product agent for features and Writer for content."),
+        TipItem(id: "cmd_shift_n", icon: "plus.rectangle", title: "Quick New Window", description: "Press Cmd+Shift+N to open a new conversation window side-by-side."),
+        TipItem(id: "markdown_support", icon: "text.badge.checkmark", title: "Markdown Support", description: "Messages support full Markdown including code blocks, tables, and lists."),
     ]
 }
 
@@ -667,7 +717,7 @@ class AppState: ObservableObject {
         "currentStreak", "longestStreak", "lastActiveDate",
         "totalConversationsCreated", "totalMessagesCount", "dailyActivityHeatmap",
         "showSidebarCalendar", "conversationSortOption", "conversationSortAscending",
-        "lastBackupDate"
+        "lastBackupDate", "restoreSessionOnLaunch"
     ]
 
     /// Collects all @AppStorage values into a JSON-serialized Data blob.
@@ -985,6 +1035,31 @@ class AppState: ObservableObject {
                 UserDefaults.standard.set(data, forKey: "collapsedDashboardSections")
             }
         }
+    }
+
+    /// Set of dismissed tip IDs, persisted to UserDefaults.
+    @Published var dismissedTipIds: Set<String> = {
+        if let array = UserDefaults.standard.stringArray(forKey: "dismissedTipIds") {
+            return Set(array)
+        }
+        return []
+    }() {
+        didSet {
+            UserDefaults.standard.set(Array(dismissedTipIds), forKey: "dismissedTipIds")
+        }
+    }
+
+    /// Returns tips that haven't been dismissed.
+    var activeTips: [TipItem] {
+        TipItem.allTips.filter { !dismissedTipIds.contains($0.id) }
+    }
+
+    func dismissTip(_ id: String) {
+        dismissedTipIds.insert(id)
+    }
+
+    func restoreAllTips() {
+        dismissedTipIds.removeAll()
     }
 
     func isSectionVisible(_ section: DashboardSection) -> Bool {
@@ -1342,6 +1417,97 @@ class AppState: ObservableObject {
     func updatePromptTemplate(_ template: PromptTemplate) {
         if let index = promptTemplates.firstIndex(where: { $0.id == template.id }) {
             promptTemplates[index] = template
+        }
+    }
+
+    // MARK: - Session State Restore
+
+    @AppStorage("restoreSessionOnLaunch") var restoreSessionOnLaunch: Bool = true
+
+    /// Codable snapshot of the app's UI state, persisted to UserDefaults.
+    struct SessionState: Codable {
+        var activeTab: String                // SidebarItem rawValue
+        var activeConversationId: String?    // Conversation.id if one is open
+        var sidebarWidth: Double
+        var sidebarCollapsed: Bool
+        var showNotificationPanel: Bool
+        var showConversationInfo: Bool
+        var showArchived: Bool
+        var showExportSheet: Bool
+        var showKeyboardShortcuts: Bool
+        var windowFrameX: Double?
+        var windowFrameY: Double?
+        var windowFrameW: Double?
+        var windowFrameH: Double?
+        var savedAt: Date
+    }
+
+    /// Persist the current session state to UserDefaults.
+    func saveSessionState() {
+        let windowFrame = savedWindowFrame ?? {
+            if let w = NSApplication.shared.windows.first(where: { $0.isVisible }) {
+                return w.frame
+            }
+            return nil
+        }()
+
+        let state = SessionState(
+            activeTab: selectedTab.rawValue,
+            activeConversationId: activeConversation?.id,
+            sidebarWidth: sidebarWidth,
+            sidebarCollapsed: sidebarCollapsed,
+            showNotificationPanel: showNotificationPanel,
+            showConversationInfo: showConversationInfo,
+            showArchived: showArchived,
+            showExportSheet: showExportSheet,
+            showKeyboardShortcuts: showKeyboardShortcuts,
+            windowFrameX: windowFrame.map { $0.origin.x },
+            windowFrameY: windowFrame.map { $0.origin.y },
+            windowFrameW: windowFrame.map { $0.size.width },
+            windowFrameH: windowFrame.map { $0.size.height },
+            savedAt: Date()
+        )
+
+        if let data = try? JSONEncoder().encode(state) {
+            UserDefaults.standard.set(data, forKey: "sessionState")
+        }
+    }
+
+    /// Restore session state from UserDefaults on launch.
+    func restoreSessionState() {
+        guard restoreSessionOnLaunch,
+              let data = UserDefaults.standard.data(forKey: "sessionState"),
+              let state = try? JSONDecoder().decode(SessionState.self, from: data) else { return }
+
+        // Restore active tab
+        if let tab = SidebarItem(rawValue: state.activeTab) {
+            selectedTab = tab
+        }
+
+        // Restore active conversation
+        if let convId = state.activeConversationId,
+           let conv = conversations.first(where: { $0.id == convId }) {
+            activeConversation = conv
+        }
+
+        // Restore sidebar
+        sidebarWidth = state.sidebarWidth
+        sidebarCollapsed = state.sidebarCollapsed
+
+        // Restore panels
+        showNotificationPanel = state.showNotificationPanel
+        showConversationInfo = state.showConversationInfo
+        showArchived = state.showArchived
+        showExportSheet = state.showExportSheet
+        showKeyboardShortcuts = state.showKeyboardShortcuts
+
+        // Restore window frame
+        if let x = state.windowFrameX, let y = state.windowFrameY,
+           let w = state.windowFrameW, let h = state.windowFrameH {
+            let frame = CGRect(x: x, y: y, width: w, height: h)
+            if let window = NSApplication.shared.windows.first(where: { $0.isVisible }) {
+                window.setFrame(frame, display: true, animate: false)
+            }
         }
     }
 

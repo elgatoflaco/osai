@@ -195,6 +195,13 @@ struct DashboardView: View {
                     .environmentObject(appState)
             }
             .frame(maxWidth: 800)
+
+        case .tips:
+            CollapsibleSection(section: .tips) {
+                TipsAndTricksContent()
+                    .environmentObject(appState)
+            }
+            .frame(maxWidth: 800)
         }
     }
 
@@ -3456,5 +3463,338 @@ struct ModelDonutChart: View {
                 startAngle = endAngle
             }
         }
+    }
+}
+
+// MARK: - Tips & Tricks Widget
+
+struct TipsAndTricksContent: View {
+    @EnvironmentObject var appState: AppState
+    @State private var currentTipIndex: Int = 0
+    @State private var showAllTips: Bool = false
+    @State private var autoRotateTimer: Timer?
+
+    private var tips: [TipItem] {
+        appState.activeTips
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if tips.isEmpty {
+                emptyState
+            } else if showAllTips {
+                allTipsListView
+            } else {
+                singleTipView
+            }
+        }
+        .onAppear { startAutoRotate() }
+        .onDisappear { stopAutoRotate() }
+        .onChange(of: tips.count) { _ in
+            if currentTipIndex >= tips.count {
+                currentTipIndex = max(0, tips.count - 1)
+            }
+        }
+    }
+
+    // MARK: - Single Tip View
+
+    private var singleTipView: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if !tips.isEmpty {
+                let tip = tips[currentTipIndex % max(tips.count, 1)]
+
+                HStack(alignment: .top, spacing: 14) {
+                    // Tip icon
+                    ZStack {
+                        Circle()
+                            .fill(AppTheme.accent.opacity(0.15))
+                            .frame(width: 40, height: 40)
+                        Image(systemName: tip.icon)
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundColor(AppTheme.accent)
+                    }
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(tip.title)
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundColor(AppTheme.textPrimary)
+
+                        Text(tip.description)
+                            .font(.system(size: 12))
+                            .foregroundColor(AppTheme.textSecondary)
+                            .lineLimit(3)
+                            .fixedSize(horizontal: false, vertical: true)
+
+                        if let actionLabel = tip.actionLabel {
+                            Button(action: {
+                                tip.actionHandler?()
+                            }) {
+                                Text(actionLabel)
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundColor(AppTheme.accent)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 4)
+                                    .background(AppTheme.accent.opacity(0.1))
+                                    .clipShape(Capsule())
+                            }
+                            .buttonStyle(.plain)
+                            .padding(.top, 4)
+                        }
+                    }
+
+                    Spacer()
+
+                    // Dismiss button
+                    Button(action: {
+                        withAnimation(.easeInOut(duration: 0.3)) {
+                            appState.dismissTip(tip.id)
+                        }
+                    }) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundColor(AppTheme.textMuted)
+                            .padding(4)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Dismiss this tip")
+                }
+                .id(tip.id)
+                .transition(.asymmetric(
+                    insertion: .opacity,
+                    removal: .opacity
+                ))
+                .animation(.easeInOut(duration: 0.4), value: currentTipIndex)
+            }
+
+            // Navigation bar
+            HStack(spacing: 8) {
+                // Previous
+                Button(action: { navigatePrevious() }) {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(AppTheme.textSecondary)
+                        .padding(6)
+                        .background(AppTheme.bgCard.opacity(0.5))
+                        .clipShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .help("Previous tip")
+
+                // Progress dots
+                HStack(spacing: 4) {
+                    ForEach(0..<min(tips.count, 10), id: \.self) { index in
+                        Circle()
+                            .fill(index == (currentTipIndex % max(tips.count, 1))
+                                  ? AppTheme.accent
+                                  : AppTheme.textMuted.opacity(0.3))
+                            .frame(width: 5, height: 5)
+                    }
+                    if tips.count > 10 {
+                        Text("+\(tips.count - 10)")
+                            .font(.system(size: 9))
+                            .foregroundColor(AppTheme.textMuted)
+                    }
+                }
+
+                // Next
+                Button(action: { navigateNext() }) {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(AppTheme.textSecondary)
+                        .padding(6)
+                        .background(AppTheme.bgCard.opacity(0.5))
+                        .clipShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .help("Next tip")
+
+                Spacer()
+
+                // Tip count
+                Text("\(currentTipIndex % max(tips.count, 1) + 1) of \(tips.count)")
+                    .font(.system(size: 10))
+                    .foregroundColor(AppTheme.textMuted)
+
+                // Show all tips button
+                Button(action: {
+                    withAnimation(.easeInOut(duration: 0.25)) {
+                        showAllTips = true
+                        stopAutoRotate()
+                    }
+                }) {
+                    Text("Show all tips")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(AppTheme.accent)
+                }
+                .buttonStyle(.plain)
+                .help("Show all tips in a list")
+            }
+        }
+    }
+
+    // MARK: - All Tips List View
+
+    private var allTipsListView: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("All Tips (\(tips.count))")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(AppTheme.textPrimary)
+
+                Spacer()
+
+                if !appState.dismissedTipIds.isEmpty {
+                    Button(action: {
+                        withAnimation(.easeInOut(duration: 0.3)) {
+                            appState.restoreAllTips()
+                        }
+                    }) {
+                        Text("Restore dismissed")
+                            .font(.system(size: 11))
+                            .foregroundColor(AppTheme.textSecondary)
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                Button(action: {
+                    withAnimation(.easeInOut(duration: 0.25)) {
+                        showAllTips = false
+                        startAutoRotate()
+                    }
+                }) {
+                    Text("Collapse")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(AppTheme.accent)
+                }
+                .buttonStyle(.plain)
+            }
+
+            ScrollView(.vertical, showsIndicators: true) {
+                VStack(spacing: 6) {
+                    ForEach(tips) { tip in
+                        HStack(spacing: 10) {
+                            Image(systemName: tip.icon)
+                                .font(.system(size: 12))
+                                .foregroundColor(AppTheme.accent)
+                                .frame(width: 24)
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(tip.title)
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .foregroundColor(AppTheme.textPrimary)
+
+                                Text(tip.description)
+                                    .font(.system(size: 11))
+                                    .foregroundColor(AppTheme.textSecondary)
+                                    .lineLimit(2)
+                            }
+
+                            Spacer()
+
+                            if let actionLabel = tip.actionLabel {
+                                Button(action: { tip.actionHandler?() }) {
+                                    Text(actionLabel)
+                                        .font(.system(size: 10, weight: .medium))
+                                        .foregroundColor(AppTheme.accent)
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 3)
+                                        .background(AppTheme.accent.opacity(0.1))
+                                        .clipShape(Capsule())
+                                }
+                                .buttonStyle(.plain)
+                            }
+
+                            Button(action: {
+                                withAnimation(.easeInOut(duration: 0.3)) {
+                                    appState.dismissTip(tip.id)
+                                }
+                            }) {
+                                Image(systemName: "xmark")
+                                    .font(.system(size: 9, weight: .semibold))
+                                    .foregroundColor(AppTheme.textMuted)
+                                    .padding(3)
+                            }
+                            .buttonStyle(.plain)
+                            .help("Dismiss this tip")
+                        }
+                        .padding(.vertical, 6)
+                        .padding(.horizontal, 8)
+                        .background(AppTheme.bgCard.opacity(0.3))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                    }
+                }
+            }
+            .frame(maxHeight: 300)
+        }
+    }
+
+    // MARK: - Empty State
+
+    private var emptyState: some View {
+        VStack(spacing: 8) {
+            Text("All tips dismissed")
+                .font(.system(size: 13))
+                .foregroundColor(AppTheme.textSecondary)
+
+            Button(action: {
+                withAnimation(.easeInOut(duration: 0.3)) {
+                    appState.restoreAllTips()
+                }
+            }) {
+                Text("Restore all tips")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(AppTheme.accent)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 5)
+                    .background(AppTheme.accent.opacity(0.1))
+                    .clipShape(Capsule())
+            }
+            .buttonStyle(.plain)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 12)
+    }
+
+    // MARK: - Navigation
+
+    private func navigateNext() {
+        guard !tips.isEmpty else { return }
+        withAnimation(.easeInOut(duration: 0.4)) {
+            currentTipIndex = (currentTipIndex + 1) % tips.count
+        }
+        restartAutoRotate()
+    }
+
+    private func navigatePrevious() {
+        guard !tips.isEmpty else { return }
+        withAnimation(.easeInOut(duration: 0.4)) {
+            currentTipIndex = (currentTipIndex - 1 + tips.count) % tips.count
+        }
+        restartAutoRotate()
+    }
+
+    // MARK: - Auto-Rotate Timer
+
+    private func startAutoRotate() {
+        stopAutoRotate()
+        autoRotateTimer = Timer.scheduledTimer(withTimeInterval: 30.0, repeats: true) { _ in
+            DispatchQueue.main.async {
+                guard !tips.isEmpty else { return }
+                withAnimation(.easeInOut(duration: 0.4)) {
+                    currentTipIndex = (currentTipIndex + 1) % tips.count
+                }
+            }
+        }
+    }
+
+    private func stopAutoRotate() {
+        autoRotateTimer?.invalidate()
+        autoRotateTimer = nil
+    }
+
+    private func restartAutoRotate() {
+        stopAutoRotate()
+        startAutoRotate()
     }
 }
