@@ -2,7 +2,7 @@
 # osai installer — https://github.com/elgatoflaco/osai
 set -e
 
-echo "🤖 Instalando osai..."
+echo "🤖 Instalando OSAI..."
 
 # Check macOS
 if [[ "$(uname)" != "Darwin" ]]; then
@@ -10,47 +10,37 @@ if [[ "$(uname)" != "Darwin" ]]; then
     exit 1
 fi
 
-# Check Swift
-if ! command -v swift &>/dev/null; then
-    echo "❌ Swift no encontrado. Instala Xcode Command Line Tools:"
-    echo "   xcode-select --install"
+# Check architecture
+ARCH=$(uname -m)
+if [[ "$ARCH" != "arm64" ]]; then
+    echo "⚠️  Binarios solo disponibles para Apple Silicon (arm64)."
+    echo "   Para Intel, compila desde source: git clone https://github.com/elgatoflaco/osai && cd osai && swift build -c release"
     exit 1
 fi
 
-INSTALL_DIR="${HOME}/.osai-src"
+TMP_DIR=$(mktemp -d)
+trap "rm -rf $TMP_DIR" EXIT
 
-# Clone or update
-if [ -d "$INSTALL_DIR" ]; then
-    echo "📦 Actualizando repo..."
-    cd "$INSTALL_DIR" && git pull --quiet
-else
-    echo "📦 Clonando repo..."
-    git clone --quiet https://github.com/elgatoflaco/osai.git "$INSTALL_DIR"
-    cd "$INSTALL_DIR"
-fi
+# Download latest release
+echo "📦 Descargando última versión..."
+RELEASE_URL="https://github.com/elgatoflaco/osai/releases/latest/download/osai-latest.zip"
+curl -fsSL "$RELEASE_URL" -o "$TMP_DIR/osai-latest.zip"
 
-# Build
-echo "🔨 Compilando (puede tardar 1-2 min)..."
-swift build -c release 2>&1 | tail -3
+echo "📦 Descomprimiendo..."
+cd "$TMP_DIR"
+unzip -q osai-latest.zip
 
-BINARY=".build/release/DesktopAgent"
-if [ ! -f "$BINARY" ]; then
-    echo "❌ Build falló"
-    exit 1
-fi
-
-# Install
-echo "📦 Instalando en /usr/local/bin/osai..."
-sudo cp "$BINARY" /usr/local/bin/osai
+# Install CLI
+echo "📦 Instalando CLI..."
+sudo cp osai-dist/osai /usr/local/bin/osai
 sudo chmod +x /usr/local/bin/osai
-codesign --force --sign - /usr/local/bin/osai 2>/dev/null || true
 
-# Install zsh completions
-if [ -d /usr/local/share/zsh/site-functions ]; then
-    sudo cp "$INSTALL_DIR/completions/_osai" /usr/local/share/zsh/site-functions/_osai 2>/dev/null || true
-fi
+# Install Desktop App
+echo "📦 Instalando OSAI.app..."
+rm -rf /Applications/OSAI.app
+cp -R osai-dist/OSAI.app /Applications/OSAI.app
 
-# Create config dir
+# Create config
 mkdir -p "${HOME}/.desktop-agent"
 
 if [ ! -f "${HOME}/.desktop-agent/config.json" ]; then
@@ -65,9 +55,12 @@ EOF
 fi
 
 echo ""
-echo "✅ osai instalado!"
+echo "✅ OSAI instalado!"
 echo ""
-echo "Siguiente paso — configura tu API key:"
+echo "   • App: Abre OSAI desde /Applications (o Cmd+Space → OSAI)"
+echo "   • CLI: Escribe 'osai' en terminal"
+echo ""
+echo "Configura tu API key:"
 echo "  1. Crea cuenta en https://openrouter.ai (tiene \$1 gratis)"
 echo "  2. Genera una API key"
 echo "  3. Ejecuta:"
@@ -75,4 +68,4 @@ echo ""
 echo "     osai"
 echo "     /config set-key openrouter TU-API-KEY"
 echo ""
-echo "¡Listo! Prueba: osai \"toma un screenshot y dime qué ves\""
+echo "¡Listo! Prueba: osai \"qué hora es?\""
