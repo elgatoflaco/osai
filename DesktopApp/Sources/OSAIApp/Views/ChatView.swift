@@ -58,6 +58,8 @@ struct ChatView: View {
     @State private var editingWorkspaceName: String = ""
     @State private var archiveSearchText: String = ""
     @State private var showDeleteAllArchivedAlert: Bool = false
+    @State private var showMergePreview: Bool = false
+    @State private var mergePreviewTargetId: String? = nil
     @State private var showNotificationPanel: Bool = false
     @State private var notifications: [NotificationItem] = NotificationItem.sampleNotifications()
     @State private var readNotificationIds: Set<String> = []
@@ -1449,6 +1451,24 @@ struct ChatView: View {
                 ConversationStatsSheet(stats: appState.computeStats(for: conv), conversationTitle: conv.title, messages: conv.messages)
             }
         }
+        .sheet(isPresented: $showMergePreview) {
+            if let sourceId = appState.mergeTargetId,
+               let targetId = mergePreviewTargetId,
+               let source = appState.conversations.first(where: { $0.id == sourceId }),
+               let target = appState.conversations.first(where: { $0.id == targetId }) {
+                MergePreviewSheet(
+                    source: source,
+                    target: target,
+                    onCancel: {
+                        showMergePreview = false
+                    },
+                    onConfirm: {
+                        showMergePreview = false
+                        appState.mergeConversations(sourceId: sourceId, targetId: targetId)
+                    }
+                )
+            }
+        }
     }
 
     // MARK: - Conversation Row Builder
@@ -1462,9 +1482,10 @@ struct ChatView: View {
             renamingText: renamingConversationId == conv.id ? $renamingText : .constant(""),
             onSelect: {
                 if let sourceId = appState.mergeTargetId {
-                    // In merge mode: clicking a conversation merges the source into this one
+                    // In merge mode: show preview before merging
                     if conv.id != sourceId {
-                        appState.mergeConversations(sourceId: sourceId, targetId: conv.id)
+                        mergePreviewTargetId = conv.id
+                        showMergePreview = true
                     }
                 } else if appState.isMultiSelectMode {
                     let flags = NSEvent.modifierFlags
@@ -5568,5 +5589,187 @@ struct NotificationItem: Identifiable {
             NotificationItem(id: "n3", title: "Export ready", body: "Your conversation export is ready to download", icon: "square.and.arrow.down.fill", iconColor: AppTheme.accent, timestamp: now.addingTimeInterval(-1800)),
             NotificationItem(id: "n4", title: "Context limit warning", body: "Conversation approaching token limit", icon: "exclamationmark.triangle.fill", iconColor: AppTheme.warning, timestamp: now.addingTimeInterval(-5400)),
         ]
+    }
+}
+
+// MARK: - Merge Preview Sheet
+
+struct MergePreviewSheet: View {
+    let source: Conversation
+    let target: Conversation
+    let onCancel: () -> Void
+    let onConfirm: () -> Void
+
+    private var combinedCount: Int {
+        source.messages.count + target.messages.count
+    }
+
+    private var interleavedPreview: [(msg: ChatMessage, origin: String)] {
+        var combined: [(msg: ChatMessage, origin: String)] = []
+        for m in source.messages.prefix(3) {
+            combined.append((msg: m, origin: "source"))
+        }
+        for m in target.messages.prefix(3) {
+            combined.append((msg: m, origin: "target"))
+        }
+        combined.sort { $0.msg.timestamp < $1.msg.timestamp }
+        return Array(combined.prefix(6))
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header
+            HStack {
+                Image(systemName: "arrow.triangle.merge")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundColor(AppTheme.accent)
+                Text("Merge Preview")
+                    .font(AppTheme.fontHeadline)
+                    .foregroundColor(AppTheme.textPrimary)
+                Spacer()
+            }
+            .padding(.horizontal, AppTheme.paddingLg)
+            .padding(.top, AppTheme.paddingLg)
+            .padding(.bottom, AppTheme.paddingMd)
+
+            // Source & Target cards
+            HStack(spacing: 12) {
+                mergeCard(
+                    label: "Source",
+                    title: source.title,
+                    messageCount: source.messages.count,
+                    color: AppTheme.accent
+                )
+                Image(systemName: "arrow.right")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundColor(AppTheme.textMuted)
+                mergeCard(
+                    label: "Target",
+                    title: target.title,
+                    messageCount: target.messages.count,
+                    color: AppTheme.success
+                )
+            }
+            .padding(.horizontal, AppTheme.paddingLg)
+
+            // Combined total
+            HStack {
+                Image(systemName: "plus.circle.fill")
+                    .foregroundColor(AppTheme.accent)
+                Text("Combined total: \(combinedCount) messages")
+                    .font(AppTheme.fontCaption)
+                    .foregroundColor(AppTheme.textSecondary)
+                Spacer()
+            }
+            .padding(.horizontal, AppTheme.paddingLg)
+            .padding(.top, AppTheme.paddingSm)
+
+            Divider()
+                .padding(.vertical, AppTheme.paddingMd)
+                .padding(.horizontal, AppTheme.paddingLg)
+
+            // Interleaved preview
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Message order preview")
+                    .font(AppTheme.fontCaption)
+                    .foregroundColor(AppTheme.textMuted)
+
+                if interleavedPreview.isEmpty {
+                    Text("Both conversations are empty.")
+                        .font(AppTheme.fontBody)
+                        .foregroundColor(AppTheme.textSecondary)
+                        .padding(.vertical, AppTheme.paddingSm)
+                } else {
+                    ForEach(Array(interleavedPreview.enumerated()), id: \.offset) { _, item in
+                        HStack(spacing: 8) {
+                            Circle()
+                                .fill(item.origin == "source" ? AppTheme.accent : AppTheme.success)
+                                .frame(width: 6, height: 6)
+                            Image(systemName: item.msg.role == .user ? "person.fill" : "cpu")
+                                .font(.system(size: 10))
+                                .foregroundColor(AppTheme.textMuted)
+                                .frame(width: 14)
+                            Text(String(item.msg.content.prefix(60)))
+                                .font(.system(size: 11))
+                                .foregroundColor(AppTheme.textSecondary)
+                                .lineLimit(1)
+                            Spacer()
+                        }
+                        .padding(.vertical, 2)
+                    }
+                    if combinedCount > 6 {
+                        Text("... and \(combinedCount - interleavedPreview.count) more messages")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(AppTheme.textMuted)
+                            .padding(.top, 2)
+                    }
+                }
+            }
+            .padding(.horizontal, AppTheme.paddingLg)
+
+            Spacer()
+
+            // Action buttons
+            HStack(spacing: 12) {
+                Button(action: onCancel) {
+                    Text("Cancel")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(AppTheme.textSecondary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .background(
+                            RoundedRectangle(cornerRadius: AppTheme.cornerRadiusSm)
+                                .fill(AppTheme.bgCard)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: AppTheme.cornerRadiusSm)
+                                .stroke(AppTheme.borderGlass, lineWidth: 1)
+                        )
+                }
+                .buttonStyle(.plain)
+
+                Button(action: onConfirm) {
+                    Text("Merge")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .background(
+                            RoundedRectangle(cornerRadius: AppTheme.cornerRadiusSm)
+                                .fill(AppTheme.accent)
+                        )
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, AppTheme.paddingLg)
+            .padding(.bottom, AppTheme.paddingLg)
+            .padding(.top, AppTheme.paddingMd)
+        }
+        .frame(width: 480, height: 460)
+        .background(.ultraThinMaterial)
+        .background(AppTheme.bgGlass)
+    }
+
+    private func mergeCard(label: String, title: String, messageCount: Int, color: Color) -> some View {
+        GlassCard(padding: AppTheme.paddingSm, hoverEnabled: false) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(label.uppercased())
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundColor(color)
+                    .tracking(1)
+                Text(title)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(AppTheme.textPrimary)
+                    .lineLimit(2)
+                HStack(spacing: 4) {
+                    Image(systemName: "bubble.left.and.bubble.right")
+                        .font(.system(size: 10))
+                    Text("\(messageCount) messages")
+                        .font(.system(size: 11))
+                }
+                .foregroundColor(AppTheme.textSecondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 }

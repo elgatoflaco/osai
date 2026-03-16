@@ -10,6 +10,16 @@ struct Sidebar: View {
     @State private var dropTargetIsAbove: Bool = true
     @State private var showConversationList: Bool = true
 
+    /// Formats a token count compactly (e.g. 1.2K, 3.4M).
+    private func formatTokenCount(_ count: Int) -> String {
+        if count >= 1_000_000 {
+            return String(format: "%.1fM", Double(count) / 1_000_000.0)
+        } else if count >= 1_000 {
+            return String(format: "%.1fK", Double(count) / 1_000.0)
+        }
+        return "\(count)"
+    }
+
     /// Returns the badge count for a given sidebar item.
     private func badgeCount(for item: SidebarItem) -> Int {
         switch item {
@@ -113,6 +123,26 @@ struct Sidebar: View {
             }
 
             Spacer()
+
+            // Stats summary
+            if !appState.sidebarCollapsed {
+                Rectangle()
+                    .fill(AppTheme.borderGlass)
+                    .frame(height: 1)
+                    .padding(.horizontal, 16)
+
+                HStack(spacing: 12) {
+                    Label("\(appState.conversations.count)", systemImage: "bubble.left.and.bubble.right")
+                    Label("\(appState.conversations.reduce(0) { $0 + $1.messages.count })", systemImage: "text.bubble")
+                    Label(formatTokenCount(appState.conversations.reduce(0) { $0 + $1.totalTokens }), systemImage: "gauge.low")
+                }
+                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                .foregroundColor(AppTheme.textMuted)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 6)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("Stats: \(appState.conversations.count) conversations, \(appState.conversations.reduce(0) { $0 + $1.messages.count }) messages")
+            }
 
             // Processing status bar
             if appState.isProcessing {
