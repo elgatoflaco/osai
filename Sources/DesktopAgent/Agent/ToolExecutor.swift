@@ -101,10 +101,7 @@ final class ToolExecutor {
             if isSourceWrite {
                 return (ToolResult(success: false, output: "⛔ Cannot modify osai source code via shell. Use the `claude_code` tool to delegate programming tasks to Claude Code.", screenshot: nil), nil)
             }
-            // Block wacli commands — the gateway handles WhatsApp messaging
-            if command.contains("wacli") {
-                return (ToolResult(success: false, output: "⛔ Do not use wacli directly. Your text responses are automatically sent to the user via the gateway. Just reply with text — the gateway delivers it.", screenshot: nil), nil)
-            }
+            // wacli is allowed — it's the WhatsApp CLI tool for sending/reading messages
             // Block email via shell — must use send_email tool
             let emailPatterns = ["gmail +send", "gmail send", "gmail.*send", "sendmail", "mail -s", "gws.*mail.*send"]
             let lowerCmd = command.lowercased()
