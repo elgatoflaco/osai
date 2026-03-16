@@ -462,13 +462,34 @@ struct ChatView: View {
                                     editingTitle = nil
                                 }
                             } else {
-                                Text(conv.title)
-                                    .font(.system(size: 15, weight: .semibold))
-                                    .foregroundColor(AppTheme.textPrimary)
-                                    .lineLimit(1)
-                                    .onTapGesture(count: 2) {
-                                        editingTitle = conv.title
+                                HStack(spacing: 4) {
+                                    Text(conv.title)
+                                        .font(.system(size: 15, weight: .semibold))
+                                        .foregroundColor(AppTheme.textPrimary)
+                                        .lineLimit(1)
+                                    if !conv.titleManuallySet {
+                                        Image(systemName: "sparkles")
+                                            .font(.system(size: 10))
+                                            .foregroundColor(AppTheme.accent.opacity(0.5))
+                                            .help("Auto-generated title")
                                     }
+                                }
+                                .onTapGesture(count: 2) {
+                                    editingTitle = conv.title
+                                }
+                                .contextMenu {
+                                    Button(action: {
+                                        appState.regenerateTitle(for: conv, force: true)
+                                    }) {
+                                        Label("Regenerate Title", systemImage: "sparkles")
+                                    }
+                                    .disabled(conv.messages.isEmpty)
+                                    Button(action: {
+                                        editingTitle = conv.title
+                                    }) {
+                                        Label("Rename", systemImage: "pencil")
+                                    }
+                                }
                             }
                             HStack(spacing: 6) {
                                 if let agent = conv.agentName {
@@ -1448,6 +1469,9 @@ struct ChatView: View {
                 if appState.activeConversation?.id != conv.id {
                     appState.openConversation(conv)
                 }
+            },
+            onRegenerateTitle: {
+                appState.regenerateTitle(for: conv, force: true)
             },
             workspaces: appState.workspaces,
             conversationWorkspaceIds: appState.workspacesForConversation(conv.id).map { $0.id },
@@ -3885,6 +3909,7 @@ struct ConversationRow: View {
     var isMergeTarget: Bool = false
     var onSetColor: ((String?) -> Void)? = nil
     var onSaveSnapshot: (() -> Void)? = nil
+    var onRegenerateTitle: (() -> Void)? = nil
     var workspaces: [Workspace] = []
     var conversationWorkspaceIds: [String] = []
     var onAddToWorkspace: ((String) -> Void)? = nil
@@ -3961,11 +3986,19 @@ struct ConversationRow: View {
                                 }
                             }
                         } else {
-                            Text(conv.title)
-                                .font(.system(size: 12, weight: isActive ? .semibold : .regular))
-                                .foregroundColor(isActive ? AppTheme.textPrimary : AppTheme.textSecondary)
-                                .lineLimit(1)
-                                .onTapGesture(count: 2) { onRename?() }
+                            HStack(spacing: 3) {
+                                Text(conv.title)
+                                    .font(.system(size: 12, weight: isActive ? .semibold : .regular))
+                                    .foregroundColor(isActive ? AppTheme.textPrimary : AppTheme.textSecondary)
+                                    .lineLimit(1)
+                                if !conv.titleManuallySet {
+                                    Image(systemName: "sparkles")
+                                        .font(.system(size: 8))
+                                        .foregroundColor(AppTheme.accent.opacity(0.4))
+                                        .help("Auto-generated title")
+                                }
+                            }
+                            .onTapGesture(count: 2) { onRename?() }
                         }
                     }
 
@@ -4057,6 +4090,10 @@ struct ConversationRow: View {
             Button(action: { onRename?() }) {
                 Label("Rename", systemImage: "pencil")
             }
+            Button(action: { onRegenerateTitle?() }) {
+                Label("Regenerate Title", systemImage: "sparkles")
+            }
+            .disabled(conv.messages.isEmpty)
             Button(action: { onTogglePin?() }) {
                 Label(conv.isPinned ? "Unpin" : "Pin", systemImage: conv.isPinned ? "pin.slash" : "pin")
             }

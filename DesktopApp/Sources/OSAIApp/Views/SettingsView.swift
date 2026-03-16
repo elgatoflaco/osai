@@ -663,9 +663,132 @@ struct SettingsView: View {
         }
     }
 
+    // MARK: - Theme Presets Gallery
+
+    private var themePresetsSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Theme Presets")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(AppTheme.textPrimary)
+                Spacer()
+                if appState.currentThemePresetName == nil {
+                    Text("Custom")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(AppTheme.textMuted)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(AppTheme.bgPrimary.opacity(0.4))
+                        .clipShape(Capsule())
+                }
+            }
+
+            LazyVGrid(columns: [
+                GridItem(.flexible(), spacing: 10),
+                GridItem(.flexible(), spacing: 10),
+                GridItem(.flexible(), spacing: 10)
+            ], spacing: 10) {
+                ForEach(ThemePreset.themePresets) { preset in
+                    themePresetCard(preset)
+                }
+            }
+        }
+    }
+
+    private func themePresetCard(_ preset: ThemePreset) -> some View {
+        let isActive = appState.currentThemePresetName == preset.name
+        let previewTheme = SyntaxTheme.named(preset.syntaxTheme)
+
+        return Button(action: {
+            withAnimation(.easeInOut(duration: 0.25)) {
+                appState.applyThemePreset(preset)
+            }
+        }) {
+            VStack(spacing: 6) {
+                // Mini mockup area
+                VStack(spacing: 0) {
+                    // Title bar mockup
+                    HStack(spacing: 3) {
+                        Circle().fill(Color.red.opacity(0.7)).frame(width: 4, height: 4)
+                        Circle().fill(Color.yellow.opacity(0.7)).frame(width: 4, height: 4)
+                        Circle().fill(Color.green.opacity(0.7)).frame(width: 4, height: 4)
+                        Spacer()
+                    }
+                    .padding(.horizontal, 5)
+                    .padding(.top, 4)
+                    .padding(.bottom, 3)
+
+                    // Simulated chat lines
+                    VStack(alignment: .leading, spacing: preset.density == "compact" ? 2 : preset.density == "spacious" ? 5 : 3) {
+                        HStack(spacing: 3) {
+                            Circle().fill(preset.accentColor.opacity(0.6))
+                                .frame(width: 5, height: 5)
+                            RoundedRectangle(cornerRadius: 1.5)
+                                .fill(AppTheme.textSecondary.opacity(0.3))
+                                .frame(width: 36, height: 3)
+                            Spacer()
+                        }
+                        HStack(spacing: 3) {
+                            Circle().fill(AppTheme.textMuted.opacity(0.4))
+                                .frame(width: 5, height: 5)
+                            RoundedRectangle(cornerRadius: 1.5)
+                                .fill(preset.accentColor.opacity(0.25))
+                                .frame(width: 28, height: 3)
+                            Spacer()
+                        }
+                        // Code block mockup
+                        HStack(spacing: 2) {
+                            RoundedRectangle(cornerRadius: 1)
+                                .fill(previewTheme.keyword.opacity(0.7))
+                                .frame(width: 12, height: 3)
+                            RoundedRectangle(cornerRadius: 1)
+                                .fill(previewTheme.string.opacity(0.7))
+                                .frame(width: 18, height: 3)
+                            Spacer()
+                        }
+                        .padding(3)
+                        .background(previewTheme.background.opacity(0.6))
+                        .clipShape(RoundedRectangle(cornerRadius: 2))
+                    }
+                    .padding(.horizontal, 5)
+                    .padding(.bottom, 5)
+                }
+                .background(AppTheme.bgPrimary.opacity(0.5))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+
+                // Label
+                HStack(spacing: 3) {
+                    Image(systemName: preset.icon)
+                        .font(.system(size: 8))
+                        .foregroundColor(isActive ? preset.accentColor : AppTheme.textMuted)
+                    Text(preset.name)
+                        .font(.system(size: 10, weight: isActive ? .semibold : .regular))
+                        .foregroundColor(isActive ? preset.accentColor : AppTheme.textSecondary)
+                }
+            }
+            .padding(6)
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(isActive ? preset.accentColor.opacity(0.08) : Color.clear)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(isActive ? preset.accentColor : Color.white.opacity(0.06), lineWidth: isActive ? 1.5 : 0.5)
+            )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(preset.name) theme preset")
+        .accessibilityAddTraits(isActive ? .isSelected : [])
+    }
+
     private var appearanceSection: some View {
         SettingsSection(title: "Appearance", icon: "paintbrush") {
             VStack(spacing: 14) {
+                // Theme Presets
+                themePresetsSection
+
+                Divider().background(AppTheme.borderGlass)
+
                 // Dark Mode toggle
                 HStack {
                     Text("Dark Mode")

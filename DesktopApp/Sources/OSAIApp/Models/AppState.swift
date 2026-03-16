@@ -552,6 +552,45 @@ struct Workspace: Codable, Identifiable, Equatable {
     }
 }
 
+// MARK: - Theme Presets
+
+struct ThemePreset: Identifiable, Equatable {
+    let id: String
+    let name: String
+    let icon: String
+    let accentColorId: String
+    let syntaxTheme: String
+    let density: String
+    let timestampMode: String
+
+    /// Returns the Color for this preset's accent.
+    var accentColor: Color {
+        accentColorPresets.first(where: { $0.id == accentColorId })?.color ?? AppTheme.accent
+    }
+
+    /// All built-in theme presets.
+    static let themePresets: [ThemePreset] = [
+        ThemePreset(id: "midnight", name: "Midnight", icon: "moon.stars.fill",
+                    accentColorId: "blue", syntaxTheme: "Monokai",
+                    density: "comfortable", timestampMode: "hover"),
+        ThemePreset(id: "cyberpunk", name: "Cyberpunk", icon: "bolt.fill",
+                    accentColorId: "green", syntaxTheme: "Dracula",
+                    density: "compact", timestampMode: "hover"),
+        ThemePreset(id: "ocean", name: "Ocean", icon: "water.waves",
+                    accentColorId: "teal", syntaxTheme: "GitHub Dark",
+                    density: "comfortable", timestampMode: "hover"),
+        ThemePreset(id: "sunset", name: "Sunset", icon: "sunset.fill",
+                    accentColorId: "orange", syntaxTheme: "Solarized Dark",
+                    density: "spacious", timestampMode: "hover"),
+        ThemePreset(id: "minimal", name: "Minimal", icon: "minus.circle",
+                    accentColorId: "red", syntaxTheme: "GitHub Dark",
+                    density: "compact", timestampMode: "hidden"),
+        ThemePreset(id: "hacker", name: "Hacker", icon: "terminal.fill",
+                    accentColorId: "green", syntaxTheme: "Monokai",
+                    density: "compact", timestampMode: "always"),
+    ]
+}
+
 class AppState: ObservableObject {
     // MARK: - Conversation Color Labels
     static let conversationColors: [(name: String, color: Color)] = [
@@ -2425,6 +2464,30 @@ class AppState: ObservableObject {
         AppTheme.setAccentColor(presetId)
     }
 
+    // MARK: - Theme Presets
+
+    /// Applies a theme preset by setting all relevant @AppStorage values at once.
+    func applyThemePreset(_ preset: ThemePreset) {
+        changeAccentColor(preset.accentColorId)
+        syntaxTheme = preset.syntaxTheme
+        displayDensity = preset.density
+        timestampDisplay = preset.timestampMode
+    }
+
+    /// Returns the name of the currently active theme preset, or nil if settings
+    /// don't match any preset (i.e. "Custom").
+    var currentThemePresetName: String? {
+        for preset in ThemePreset.themePresets {
+            if selectedAccentColor == preset.accentColorId
+                && syntaxTheme == preset.syntaxTheme
+                && displayDensity == preset.density
+                && timestampDisplay == preset.timestampMode {
+                return preset.name
+            }
+        }
+        return nil
+    }
+
     func loadAll() {
         // Apply saved accent color on launch
         AppTheme.setAccentColor(selectedAccentColor)
@@ -3530,12 +3593,51 @@ class AppState: ObservableObject {
         suggestedReplies = generateQuickReplies(for: content)
     }
 
+    /// Common words to ignore when extracting topic keywords.
+    private static let titleStopWords: Set<String> = [
+        "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
+        "have", "has", "had", "do", "does", "did", "will", "would", "could",
+        "should", "may", "might", "can", "to", "of", "in", "for", "on", "with",
+        "at", "by", "from", "it", "this", "that", "i", "you", "we", "they",
+        "my", "your", "and", "or", "but", "not", "no", "if", "so", "me",
+        "what", "how", "about", "just", "like", "please", "need", "want",
+        "some", "any", "all", "each", "every", "there", "here", "up", "out",
+        "am", "im", "ive", "its", "very", "really", "also", "then", "than"
+    ]
+
+    /// Verbs that signal an action-oriented title ("Verb + object" pattern).
+    private static let actionVerbs: Set<String> = [
+        "fix", "build", "create", "explain", "help", "make", "write", "add",
+        "remove", "delete", "update", "change", "convert", "generate", "show",
+        "find", "search", "list", "compare", "analyze", "design", "test",
+        "deploy", "configure", "setup", "install", "optimize", "improve",
+        "translate", "summarize", "review", "check", "validate", "migrate",
+        "implement", "refactor", "debug", "parse", "format", "sort", "filter",
+        "merge", "split", "rename", "move", "copy", "download", "upload"
+    ]
+
+    /// Known programming languages for code block detection.
+    private static let codeLanguages: [String: String] = [
+        "swift": "Swift", "python": "Python", "py": "Python",
+        "javascript": "JavaScript", "js": "JavaScript", "typescript": "TypeScript",
+        "ts": "TypeScript", "rust": "Rust", "go": "Go", "java": "Java",
+        "kotlin": "Kotlin", "ruby": "Ruby", "rb": "Ruby", "c": "C",
+        "cpp": "C++", "c++": "C++", "csharp": "C#", "cs": "C#",
+        "html": "HTML", "css": "CSS", "sql": "SQL", "bash": "Bash",
+        "sh": "Shell", "shell": "Shell", "php": "PHP", "r": "R",
+        "scala": "Scala", "dart": "Dart", "lua": "Lua", "perl": "Perl",
+        "haskell": "Haskell", "elixir": "Elixir", "zig": "Zig",
+        "objc": "Objective-C", "objective-c": "Objective-C",
+        "json": "JSON", "yaml": "YAML", "yml": "YAML", "xml": "XML",
+        "toml": "TOML", "graphql": "GraphQL", "proto": "Protobuf"
+    ]
+
     /// Generate a clean, readable title from the user's first message.
     private func smartTitle(from text: String) -> String {
         return generateSmartTitle(from: text)
     }
 
-    /// Generate a meaningful title (max 40 chars) from the first user message.
+    /// Generate a meaningful title (max 50 chars) from the first user message.
     func generateSmartTitle(from text: String) -> String {
         // Clean up: collapse newlines, strip file attachments, and trim
         let cleaned = text
@@ -3568,25 +3670,46 @@ class AppState: ObservableObject {
             return truncateTitle("\(label): \(rest)")
         }
 
-        // Code request detection
+        let lower = cleaned.lowercased()
+
+        // Code block detection with language awareness
+        if lower.contains("```") {
+            let langAction = detectCodeLanguageAndAction(from: text, cleaned: cleaned)
+            return truncateTitle("Code: \(langAction)")
+        }
+
+        // Code request detection with language hints
         let codeKeywords = ["write a function", "write a script", "write code", "create a function",
                             "implement", "refactor", "debug", "fix the bug", "code review",
                             "write a class", "create a class", "write a method"]
-        let lower = cleaned.lowercased()
         for keyword in codeKeywords {
-            if lower.hasPrefix(keyword) || lower.contains("```") {
-                let content = cleaned.replacingOccurrences(of: "```[\\s\\S]*?```", with: "", options: .regularExpression)
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                return truncateTitle("Code: \(content)")
+            if lower.hasPrefix(keyword) {
+                let langAction = detectCodeLanguageAndAction(from: text, cleaned: cleaned)
+                return truncateTitle("Code: \(langAction)")
             }
         }
 
-        // Question: use the question text
+        // Question: use the question text directly as the title
         if cleaned.contains("?") {
             if let qEnd = cleaned.firstIndex(of: "?") {
                 let question = String(cleaned[cleaned.startIndex...qEnd])
                 return truncateTitle(question)
             }
+        }
+
+        // Action verb pattern: "Fix the login button" -> "Fix Login Button"
+        let words = cleaned.components(separatedBy: " ")
+        if let firstWord = words.first,
+           Self.actionVerbs.contains(firstWord.lowercased()) {
+            let verb = firstWord.capitalized
+            let objectWords = words.dropFirst()
+                .filter { !Self.titleStopWords.contains($0.lowercased()) }
+                .prefix(5)
+                .map { $0.capitalized }
+            if !objectWords.isEmpty {
+                return truncateTitle("\(verb) \(objectWords.joined(separator: " "))")
+            }
+            return truncateTitle("\(verb) \(words.dropFirst().prefix(4).joined(separator: " "))")
         }
 
         // First sentence (split on . ! or ?)
@@ -3596,16 +3719,93 @@ class AppState: ObservableObject {
             return truncateTitle(sentence)
         }
 
+        // Topic extraction: pick key words, skip stop words
+        let topicWords = words
+            .filter { $0.count > 2 && !Self.titleStopWords.contains($0.lowercased()) }
+            .prefix(5)
+        if topicWords.count >= 2 {
+            return truncateTitle(topicWords.map { $0.capitalized }.joined(separator: " "))
+        }
+
         // Fallback: first N words
         return truncateTitle(cleaned)
     }
 
-    /// Truncate a title to max 40 characters at a word boundary, adding "..." if needed.
+    /// Generate a smart title from the full message history, using the first user message
+    /// with optional refinement from the assistant's response.
+    func generateSmartTitle(from messages: [ChatMessage]) -> String {
+        guard let firstUserMsg = messages.first(where: { $0.role == .user }) else {
+            return "New Chat"
+        }
+
+        let baseTitle = generateSmartTitle(from: firstUserMsg.content)
+
+        // If the base title is generic, try to refine using the assistant's first reply
+        if baseTitle == "New Chat" || baseTitle.count < 5 {
+            if let assistantMsg = messages.first(where: { $0.role == .assistant && !$0.content.isEmpty }) {
+                let assistantWords = assistantMsg.content
+                    .components(separatedBy: .whitespacesAndNewlines)
+                    .filter { $0.count > 2 && !Self.titleStopWords.contains($0.lowercased()) }
+                    .prefix(5)
+                if assistantWords.count >= 2 {
+                    return truncateTitle(assistantWords.map { $0.capitalized }.joined(separator: " "))
+                }
+            }
+        }
+
+        return baseTitle
+    }
+
+    /// Detect programming language and action from code-containing messages.
+    private func detectCodeLanguageAndAction(from original: String, cleaned: String) -> String {
+        // Try to find language from code fences like ```python
+        let fencePattern = "```(\\w+)"
+        if let match = original.range(of: fencePattern, options: .regularExpression) {
+            let langHint = String(original[match]).replacingOccurrences(of: "```", with: "").lowercased()
+            if let langName = Self.codeLanguages[langHint] {
+                // Extract the action from the non-code portion
+                let textOnly = cleaned
+                    .replacingOccurrences(of: "```[\\s\\S]*?```", with: "", options: .regularExpression)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                if textOnly.isEmpty {
+                    return langName
+                }
+                let actionWords = textOnly.components(separatedBy: " ")
+                    .filter { !Self.titleStopWords.contains($0.lowercased()) }
+                    .prefix(3)
+                    .joined(separator: " ")
+                return actionWords.isEmpty ? langName : "\(langName) \(actionWords)"
+            }
+        }
+
+        // Check for language names mentioned in the text
+        let lower = cleaned.lowercased()
+        for (key, name) in Self.codeLanguages {
+            if key.count > 2, lower.contains(key) {
+                let textOnly = cleaned
+                    .replacingOccurrences(of: "```[\\s\\S]*?```", with: "", options: .regularExpression)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                let actionWords = textOnly.components(separatedBy: " ")
+                    .filter { $0.lowercased() != key && !Self.titleStopWords.contains($0.lowercased()) }
+                    .prefix(3)
+                    .joined(separator: " ")
+                return actionWords.isEmpty ? name : "\(name) \(actionWords)"
+            }
+        }
+
+        // Fallback: just use cleaned text minus code blocks
+        let textOnly = cleaned
+            .replacingOccurrences(of: "```[\\s\\S]*?```", with: "", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return textOnly.isEmpty ? "snippet" : textOnly
+    }
+
+    /// Truncate a title to max 50 characters at a word boundary, adding ellipsis if needed.
     private func truncateTitle(_ text: String) -> String {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.count > 40 else { return trimmed }
+        guard trimmed.count > 50 else { return trimmed }
 
-        let prefix = String(trimmed.prefix(40))
+        let prefix = String(trimmed.prefix(47))
         if let lastSpace = prefix.lastIndex(of: " ") {
             return String(prefix[prefix.startIndex..<lastSpace]) + "..."
         }
@@ -3621,16 +3821,34 @@ class AppState: ObservableObject {
         let assistantMessages = conv.messages.filter { $0.role == .assistant && !$0.isStreaming }
         guard assistantMessages.count == 1 else { return }
 
-        // Get first user message
-        guard let firstUserMsg = conv.messages.first(where: { $0.role == .user }) else { return }
-
-        let newTitle = generateSmartTitle(from: firstUserMsg.content)
+        let newTitle = generateSmartTitle(from: conv.messages)
         guard newTitle != conv.title else { return }
 
         if let idx = conversations.firstIndex(where: { $0.id == conv.id }) {
             conversations[idx].title = newTitle
         }
         activeConversation?.title = newTitle
+    }
+
+    /// Re-run smart title generation for a conversation, overriding any previous auto-title.
+    /// Does not override manually-set titles unless `force` is true.
+    func regenerateTitle(for conv: Conversation, force: Bool = false) {
+        guard force || !conv.titleManuallySet else { return }
+
+        let newTitle = generateSmartTitle(from: conv.messages)
+        guard !newTitle.isEmpty, newTitle != "New Chat" || conv.messages.isEmpty else { return }
+
+        if let idx = conversations.firstIndex(where: { $0.id == conv.id }) {
+            conversations[idx].title = newTitle
+            conversations[idx].titleManuallySet = false
+        }
+        if activeConversation?.id == conv.id {
+            activeConversation?.title = newTitle
+            activeConversation?.titleManuallySet = false
+        }
+        if let updated = conversations.first(where: { $0.id == conv.id }) {
+            service.saveConversation(updated)
+        }
     }
 
     /// Generate 2-3 title suggestions based on conversation content.

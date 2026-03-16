@@ -2805,6 +2805,131 @@ struct RawMarkdownView: View {
     }
 }
 
+// MARK: - Footnote Support
+
+/// Represents a parsed footnote definition from markdown text.
+struct FootnoteDefinition: Identifiable {
+    let id: String        // The footnote key, e.g. "1", "note"
+    let displayIndex: Int // 1-based display number
+    let text: String      // The footnote body text
+}
+
+/// Parses footnote definitions from the full message text.
+/// Matches lines like: [^1]: Some footnote text
+private func parseFootnoteDefinitions(from text: String) -> [FootnoteDefinition] {
+    let pattern = #"^\[\^([^\]]+)\]:\s*(.+)$"#
+    guard let regex = try? NSRegularExpression(pattern: pattern, options: [.anchorsMatchLines]) else { return [] }
+    let nsText = text as NSString
+    let range = NSRange(location: 0, length: nsText.length)
+    var defs: [FootnoteDefinition] = []
+    var seen = Set<String>()
+    for match in regex.matches(in: text, range: range) {
+        guard match.numberOfRanges >= 3 else { continue }
+        let key = nsText.substring(with: match.range(at: 1))
+        let body = nsText.substring(with: match.range(at: 2)).trimmingCharacters(in: .whitespaces)
+        if !seen.contains(key) {
+            seen.insert(key)
+            defs.append(FootnoteDefinition(id: key, displayIndex: defs.count + 1, text: body))
+        }
+    }
+    return defs
+}
+
+/// Removes footnote definition lines from text so they don't render inline.
+private func stripFootnoteDefinitions(from text: String) -> String {
+    let pattern = #"^\[\^[^\]]+\]:\s*.+$"#
+    guard let regex = try? NSRegularExpression(pattern: pattern, options: [.anchorsMatchLines]) else { return text }
+    let nsText = text as NSString
+    let range = NSRange(location: 0, length: nsText.length)
+    return regex.stringByReplacingMatches(in: text, range: range, withTemplate: "")
+}
+
+/// Collects footnote reference keys [^key] in the order they appear in text.
+/// Returns an ordered mapping from key -> display index.
+private func footnoteReferenceOrder(from text: String) -> [String: Int] {
+    let pattern = #"\[\^([^\]]+)\](?!:)"# // Match [^key] but not [^key]: (definitions)
+    guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else { return [:] }
+    let nsText = text as NSString
+    let range = NSRange(location: 0, length: nsText.length)
+    var order: [String: Int] = [:]
+    var idx = 1
+    for match in regex.matches(in: text, range: range) {
+        guard match.numberOfRanges >= 2 else { continue }
+        let key = nsText.substring(with: match.range(at: 1))
+        if order[key] == nil {
+            order[key] = idx
+            idx += 1
+        }
+    }
+    return order
+}
+
+/// View that renders the footnotes section at the bottom of a message.
+struct FootnoteSectionView: View {
+    let definitions: [FootnoteDefinition]
+    @Binding var highlightedFootnoteId: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Horizontal rule
+            Rectangle()
+                .fill(AppTheme.borderGlass)
+                .frame(height: 1)
+                .padding(.vertical, 8)
+
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(definitions) { def in
+                    HStack(alignment: .top, spacing: 6) {
+                        // Clickable footnote number
+                        Text("\(def.displayIndex).")
+                            .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                            .foregroundColor(AppTheme.accent)
+                            .onTapGesture {
+                                withAnimation(.easeInOut(duration: 0.3)) {
+                                    highlightedFootnoteId = "ref-\(def.id)"
+                                }
+                                // Clear highlight after a moment
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                                    withAnimation(.easeOut(duration: 0.3)) {
+                                        if highlightedFootnoteId == "ref-\(def.id)" {
+                                            highlightedFootnoteId = nil
+                                        }
+                                    }
+                                }
+                            }
+                            .onHover { inside in
+                                if inside { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+                            }
+
+                        // Footnote text
+                        if let attributed = try? AttributedString(
+                            markdown: def.text,
+                            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+                        ) {
+                            Text(attributed)
+                                .font(.system(size: 12))
+                                .foregroundColor(AppTheme.textSecondary)
+                                .lineSpacing(3)
+                        } else {
+                            Text(def.text)
+                                .font(.system(size: 12))
+                                .foregroundColor(AppTheme.textSecondary)
+                                .lineSpacing(3)
+                        }
+                    }
+                    .padding(.vertical, 2)
+                    .padding(.horizontal, 4)
+                    .background(
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(highlightedFootnoteId == "def-\(def.id)" ? AppTheme.accent.opacity(0.15) : Color.clear)
+                    )
+                    .id("footnote-def-\(def.id)")
+                }
+            }
+        }
+    }
+}
+
 // MARK: - Response View
 
 struct ResponseView: View {
@@ -2812,15 +2937,27 @@ struct ResponseView: View {
     let isStreaming: Bool
     var zenMode: Bool = false
     @State private var cursorVisible = true
+    @State private var highlightedFootnoteId: String?
 
     var body: some View {
-        let sections = ResponseParser.parse(text)
+        let footnoteDefs = parseFootnoteDefinitions(from: text)
+        let refOrder = footnoteReferenceOrder(from: text)
+        // Re-number definitions by reference order, falling back to parse order
+        let orderedDefs = footnoteDefs.map { def in
+            FootnoteDefinition(
+                id: def.id,
+                displayIndex: refOrder[def.id] ?? def.displayIndex,
+                text: def.text
+            )
+        }.sorted { $0.displayIndex < $1.displayIndex }
+        let strippedText = footnoteDefs.isEmpty ? text : stripFootnoteDefinitions(from: text)
+        let sections = ResponseParser.parse(strippedText)
         VStack(alignment: .leading, spacing: zenMode ? 14 : 10) {
             ForEach(Array(sections.enumerated()), id: \.offset) { idx, section in
                 if isStreaming && idx == sections.count - 1 {
                     // Last section with blinking cursor appended
                     HStack(alignment: .lastTextBaseline, spacing: 0) {
-                        sectionView(section)
+                        sectionView(section, refOrder: refOrder)
                         if cursorVisible {
                             Text("\u{258C}")
                                 .font(.system(size: 14))
@@ -2828,8 +2965,16 @@ struct ResponseView: View {
                         }
                     }
                 } else {
-                    sectionView(section)
+                    sectionView(section, refOrder: refOrder)
                 }
+            }
+
+            // Render footnote definitions section at the bottom
+            if !orderedDefs.isEmpty {
+                FootnoteSectionView(
+                    definitions: orderedDefs,
+                    highlightedFootnoteId: $highlightedFootnoteId
+                )
             }
         }
         .onAppear { startCursorTimer() }
@@ -2847,10 +2992,10 @@ struct ResponseView: View {
     }
 
     @ViewBuilder
-    private func sectionView(_ section: ResponseSection) -> some View {
+    private func sectionView(_ section: ResponseSection, refOrder: [String: Int] = [:]) -> some View {
         switch section {
         case .paragraph(let text):
-            RichTextView(text: text)
+            RichTextView(text: text, footnoteRefOrder: refOrder, highlightedFootnoteId: $highlightedFootnoteId)
 
         case .heading(let text, let level):
             Text(text)
@@ -4911,21 +5056,37 @@ struct ResponseParser {
 
 struct RichTextView: View {
     let text: String
+    var footnoteRefOrder: [String: Int] = [:]
+    @Binding var highlightedFootnoteId: String?
     @Environment(\.zenMode) private var zenMode
+
+    /// Convenience initializer without footnote support (backwards compatible)
+    init(text: String) {
+        self.text = text
+        self.footnoteRefOrder = [:]
+        self._highlightedFootnoteId = .constant(nil)
+    }
+
+    /// Initializer with footnote support
+    init(text: String, footnoteRefOrder: [String: Int], highlightedFootnoteId: Binding<String?>) {
+        self.text = text
+        self.footnoteRefOrder = footnoteRefOrder
+        self._highlightedFootnoteId = highlightedFootnoteId
+    }
 
     var body: some View {
         let parts = splitByPaths(text)
         // Use a FlowLayout-like approach: if there are paths, render mixed
         if parts.count == 1, case .plain(let str) = parts[0] {
-            // Simple text — render with inline code highlighting
-            inlineMarkdownText(str)
+            // Simple text — render with inline code highlighting and footnotes
+            footnoteAwareText(str)
         } else {
             // Has paths — render inline
             VStack(alignment: .leading, spacing: 2) {
                 ForEach(Array(parts.enumerated()), id: \.offset) { _, part in
                     switch part {
                     case .plain(let str):
-                        inlineMarkdownText(str)
+                        footnoteAwareText(str)
                     case .path(let path):
                         Button(action: {
                             let clean = path.trimmingCharacters(in: CharacterSet(charactersIn: ".,;:"))
@@ -4952,6 +5113,89 @@ struct RichTextView: View {
     private var bodyFontSize: CGFloat { zenMode ? 15 : 14 }
     private var codeInlineFontSize: CGFloat { zenMode ? 13.5 : 12.5 }
     private var lineSpacingValue: CGFloat { zenMode ? 5.5 : 4 }
+
+    /// Splits text on footnote references [^key] and renders them as superscript numbers.
+    /// Falls through to inlineMarkdownText for non-footnote segments.
+    @ViewBuilder
+    private func footnoteAwareText(_ str: String) -> some View {
+        if footnoteRefOrder.isEmpty || !str.contains("[^") {
+            inlineMarkdownText(str)
+        } else {
+            let segments = splitFootnoteReferences(str)
+            if segments.count == 1, case .text(let t) = segments[0] {
+                inlineMarkdownText(t)
+            } else {
+                // Build a single AttributedString with footnote superscripts inline
+                let combined = segments.reduce(AttributedString()) { result, segment in
+                    var combined = result
+                    switch segment {
+                    case .text(let t):
+                        let attributed = Self.buildAttributedText(t, bodySize: bodyFontSize, codeSize: codeInlineFontSize)
+                        combined.append(attributed)
+                    case .footnoteRef(let key):
+                        let displayNum = footnoteRefOrder[key] ?? 0
+                        if displayNum > 0 {
+                            var sup = AttributedString("\u{200A}\(displayNum)")
+                            sup.font = .system(size: 9, weight: .bold, design: .monospaced)
+                            sup.foregroundColor = AppTheme.accent
+                            sup.baselineOffset = 6
+                            combined.append(sup)
+                        } else {
+                            var raw = AttributedString("[^\(key)]")
+                            raw.font = .system(size: bodyFontSize)
+                            raw.foregroundColor = AppTheme.textSecondary
+                            combined.append(raw)
+                        }
+                    }
+                    return combined
+                }
+                Text(combined)
+                    .lineSpacing(lineSpacingValue)
+                    .textSelection(.enabled)
+                    .environment(\.openURL, OpenURLAction { url in
+                        NSWorkspace.shared.open(url)
+                        return .handled
+                    })
+            }
+        }
+    }
+
+    /// Segment type for footnote-aware text splitting
+    private enum FootnoteSegment {
+        case text(String)
+        case footnoteRef(String) // The key, e.g. "1", "note"
+    }
+
+    /// Splits text into alternating plain text and footnote reference segments.
+    private func splitFootnoteReferences(_ text: String) -> [FootnoteSegment] {
+        let pattern = #"\[\^([^\]]+)\](?!:)"# // Match [^key] but not [^key]: (definitions)
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else {
+            return [.text(text)]
+        }
+        let nsText = text as NSString
+        let range = NSRange(location: 0, length: nsText.length)
+        let matches = regex.matches(in: text, range: range)
+        if matches.isEmpty { return [.text(text)] }
+
+        var segments: [FootnoteSegment] = []
+        var lastEnd = 0
+        for match in matches {
+            if match.range.location > lastEnd {
+                let before = nsText.substring(with: NSRange(location: lastEnd, length: match.range.location - lastEnd))
+                if !before.isEmpty { segments.append(.text(before)) }
+            }
+            if match.numberOfRanges >= 2 {
+                let key = nsText.substring(with: match.range(at: 1))
+                segments.append(.footnoteRef(key))
+            }
+            lastEnd = match.range.location + match.range.length
+        }
+        if lastEnd < nsText.length {
+            let remaining = nsText.substring(from: lastEnd)
+            if !remaining.isEmpty { segments.append(.text(remaining)) }
+        }
+        return segments
+    }
 
     /// Renders text with AttributedString markdown, inline code highlighting, and inline math.
     @ViewBuilder
