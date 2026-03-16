@@ -7,6 +7,11 @@ enum MessageRole: String, Codable {
     case tool
 }
 
+enum MessageReaction: String, Codable {
+    case thumbsUp
+    case thumbsDown
+}
+
 /// Represents an activity happening during processing (MCP loading, tool call, etc.)
 struct ActivityItem: Identifiable, Equatable {
     let id: String
@@ -48,10 +53,11 @@ struct ChatMessage: Identifiable, Equatable {
     var toolName: String?
     var toolResult: String?
     var agentName: String?
+    var reaction: MessageReaction?
 
     static func == (lhs: ChatMessage, rhs: ChatMessage) -> Bool {
         lhs.id == rhs.id && lhs.content == rhs.content && lhs.isStreaming == rhs.isStreaming &&
-        lhs.activities == rhs.activities && lhs.agentName == rhs.agentName
+        lhs.activities == rhs.activities && lhs.agentName == rhs.agentName && lhs.reaction == rhs.reaction
     }
 }
 

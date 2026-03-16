@@ -206,9 +206,11 @@ struct MessageBubble: View {
     var isLastAssistantMessage: Bool = false
     var onCancel: (() -> Void)?
     var onRetry: (() -> Void)?
+    var onReaction: ((MessageReaction?) -> Void)?
     @State private var appeared = false
     @State private var copied = false
     @State private var isHovered = false
+    @State private var reactionBounce: MessageReaction?
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -353,6 +355,12 @@ struct MessageBubble: View {
                         .font(.system(size: 9))
                         .foregroundColor(AppTheme.textMuted)
 
+                    // Reaction buttons: show on hover or if a reaction is already set
+                    if !message.isStreaming && !message.content.isEmpty && (isHovered || message.reaction != nil) {
+                        reactionButtons
+                            .transition(.opacity)
+                    }
+
                     Spacer()
 
                     if message.isStreaming, let onCancel = onCancel {
@@ -375,6 +383,33 @@ struct MessageBubble: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(message.isStreaming ? "Assistant is responding" : "Assistant said")
+    }
+
+    private var reactionButtons: some View {
+        HStack(spacing: 2) {
+            reactionButton(for: .thumbsUp, icon: "hand.thumbsup", filledIcon: "hand.thumbsup.fill")
+            reactionButton(for: .thumbsDown, icon: "hand.thumbsdown", filledIcon: "hand.thumbsdown.fill")
+        }
+    }
+
+    private func reactionButton(for reaction: MessageReaction, icon: String, filledIcon: String) -> some View {
+        let isSelected = message.reaction == reaction
+        return Button(action: {
+            let newReaction: MessageReaction? = isSelected ? nil : reaction
+            reactionBounce = reaction
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.5)) {}
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { reactionBounce = nil }
+            onReaction?(newReaction)
+        }) {
+            Image(systemName: isSelected ? filledIcon : icon)
+                .font(.system(size: 11))
+                .foregroundColor(isSelected ? AppTheme.accent : AppTheme.textMuted.opacity(0.6))
+                .frame(width: 22, height: 22)
+                .scaleEffect(reactionBounce == reaction ? 1.3 : 1.0)
+                .animation(.spring(response: 0.3, dampingFraction: 0.5), value: reactionBounce)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(reaction == .thumbsUp ? "Thumbs up" : "Thumbs down")
     }
 
     private func timeString(_ date: Date) -> String {
@@ -1192,6 +1227,203 @@ struct MarkdownTableView: View {
     }
 }
 
+// MARK: - Syntax Highlighting
+
+private struct SyntaxHighlighter {
+    private static let swiftKeywords: Set<String> = [
+        "func", "let", "var", "if", "else", "for", "while", "return", "import",
+        "class", "struct", "enum", "protocol", "extension", "guard", "switch",
+        "case", "break", "continue", "defer", "do", "catch", "throw", "throws",
+        "try", "as", "is", "in", "where", "self", "Self", "super", "init",
+        "deinit", "typealias", "associatedtype", "static", "override", "private",
+        "public", "internal", "fileprivate", "open", "mutating", "nonmutating",
+        "weak", "unowned", "lazy", "final", "required", "convenience", "optional",
+        "some", "any", "async", "await", "actor", "nil", "true", "false",
+        "inout", "operator", "precedencegroup", "subscript", "willSet", "didSet",
+        "get", "set"
+    ]
+
+    private static let pythonKeywords: Set<String> = [
+        "def", "class", "if", "elif", "else", "for", "while", "return", "import",
+        "from", "as", "try", "except", "finally", "raise", "with", "yield",
+        "lambda", "pass", "break", "continue", "and", "or", "not", "in", "is",
+        "True", "False", "None", "self", "async", "await", "global", "nonlocal",
+        "del", "assert"
+    ]
+
+    private static let jsKeywords: Set<String> = [
+        "function", "const", "let", "var", "if", "else", "for", "while", "return",
+        "import", "export", "default", "from", "class", "extends", "new", "this",
+        "super", "typeof", "instanceof", "try", "catch", "finally", "throw",
+        "async", "await", "yield", "switch", "case", "break", "continue",
+        "do", "of", "in", "delete", "void", "null", "undefined", "true", "false",
+        "NaN", "Infinity", "interface", "type", "enum", "implements", "abstract",
+        "static", "readonly", "public", "private", "protected"
+    ]
+
+    private static let genericKeywords: Set<String> = [
+        "func", "function", "def", "let", "var", "const", "if", "else", "elif",
+        "for", "while", "return", "import", "from", "class", "struct", "enum",
+        "switch", "case", "break", "continue", "try", "catch", "except",
+        "finally", "throw", "raise", "new", "this", "self", "super", "nil",
+        "null", "None", "true", "false", "True", "False", "async", "await",
+        "yield", "static", "public", "private", "protected", "override",
+        "export", "default", "do", "in", "is", "as", "with", "lambda",
+        "pass", "type", "interface", "protocol", "extension", "guard",
+        "where", "select", "insert", "update", "delete", "create", "drop",
+        "table", "index", "join", "on", "group", "order",
+        "by", "having", "limit", "offset", "and", "or", "not"
+    ]
+
+    static func keywords(for language: String) -> Set<String> {
+        switch language.lowercased() {
+        case "swift": return swiftKeywords
+        case "python", "py": return pythonKeywords
+        case "javascript", "js", "typescript", "ts", "jsx", "tsx": return jsKeywords
+        default: return genericKeywords
+        }
+    }
+
+    static let keywordColor = Color(red: 0xFF/255, green: 0xAF/255, blue: 0x40/255)
+    static let stringColor = Color(red: 0x4E/255, green: 0xC9/255, blue: 0x78/255)
+    static let commentColor = Color(red: 0x6A/255, green: 0x6A/255, blue: 0x80/255)
+    static let numberColor = Color(red: 0xC0/255, green: 0x7E/255, blue: 0xF0/255)
+    static let typeColor = Color(red: 0x50/255, green: 0xC8/255, blue: 0xC8/255)
+
+    static func highlight(_ code: String, language: String) -> AttributedString {
+        var result = AttributedString(code)
+        let fullNS = code as NSString
+        let fullRange = NSRange(location: 0, length: fullNS.length)
+        let kw = keywords(for: language)
+
+        result.font = .system(size: 12, design: .monospaced)
+        result.foregroundColor = Color(red: 0xD4/255, green: 0xD4/255, blue: 0xDA/255)
+
+        var protectedRanges: [NSRange] = []
+
+        // Block comments /* ... */
+        if let regex = try? NSRegularExpression(pattern: #"/\*[\s\S]*?\*/"#, options: [.dotMatchesLineSeparators]) {
+            for match in regex.matches(in: code, range: fullRange) {
+                if let swiftRange = Range(match.range, in: code) {
+                    applyColor(to: &result, in: code, swiftRange: swiftRange, color: commentColor)
+                    protectedRanges.append(match.range)
+                }
+            }
+        }
+
+        // Single-line comments
+        let commentPatterns: [String]
+        switch language.lowercased() {
+        case "python", "py", "bash", "sh", "zsh", "shell", "ruby", "rb", "yaml", "yml":
+            commentPatterns = [#"//.*$"#, #"#.*$"#]
+        default:
+            commentPatterns = [#"//.*$"#]
+        }
+        for pattern in commentPatterns {
+            if let regex = try? NSRegularExpression(pattern: pattern, options: [.anchorsMatchLines]) {
+                for match in regex.matches(in: code, range: fullRange) {
+                    if isProtected(match.range, by: protectedRanges) { continue }
+                    if let swiftRange = Range(match.range, in: code) {
+                        applyColor(to: &result, in: code, swiftRange: swiftRange, color: commentColor)
+                        protectedRanges.append(match.range)
+                    }
+                }
+            }
+        }
+
+        // Strings
+        for strPattern in [#""(?:[^"\\]|\\.)*""#, #"'(?:[^'\\]|\\.)*'"#] {
+            if let regex = try? NSRegularExpression(pattern: strPattern, options: []) {
+                for match in regex.matches(in: code, range: fullRange) {
+                    if isProtected(match.range, by: protectedRanges) { continue }
+                    if let swiftRange = Range(match.range, in: code) {
+                        applyColor(to: &result, in: code, swiftRange: swiftRange, color: stringColor)
+                        protectedRanges.append(match.range)
+                    }
+                }
+            }
+        }
+
+        // Numbers
+        if let regex = try? NSRegularExpression(pattern: #"\b(?:0x[0-9a-fA-F]+|0b[01]+|0o[0-7]+|\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\b"#, options: []) {
+            for match in regex.matches(in: code, range: fullRange) {
+                if isProtected(match.range, by: protectedRanges) { continue }
+                if let swiftRange = Range(match.range, in: code) {
+                    applyColor(to: &result, in: code, swiftRange: swiftRange, color: numberColor)
+                }
+            }
+        }
+
+        // Keywords
+        if !kw.isEmpty {
+            let escaped = kw.map { NSRegularExpression.escapedPattern(for: $0) }
+            let pattern = "(?<![\\w@])(" + escaped.joined(separator: "|") + ")(?!\\w)"
+            if let regex = try? NSRegularExpression(pattern: pattern, options: []) {
+                for match in regex.matches(in: code, range: fullRange) {
+                    if isProtected(match.range, by: protectedRanges) { continue }
+                    if let swiftRange = Range(match.range, in: code) {
+                        applyColor(to: &result, in: code, swiftRange: swiftRange, color: keywordColor)
+                    }
+                }
+            }
+        }
+
+        // Types (PascalCase identifiers)
+        if let regex = try? NSRegularExpression(pattern: #"\b[A-Z][a-zA-Z0-9]+\b"#, options: []) {
+            for match in regex.matches(in: code, range: fullRange) {
+                if isProtected(match.range, by: protectedRanges) { continue }
+                if let swiftRange = Range(match.range, in: code) {
+                    let word = String(code[swiftRange])
+                    if !kw.contains(word) {
+                        applyColor(to: &result, in: code, swiftRange: swiftRange, color: typeColor)
+                    }
+                }
+            }
+        }
+
+        return result
+    }
+
+    private static func applyColor(to result: inout AttributedString, in code: String, swiftRange: Range<String.Index>, color: Color) {
+        let startOffset = code.distance(from: code.startIndex, to: swiftRange.lowerBound)
+        let endOffset = code.distance(from: code.startIndex, to: swiftRange.upperBound)
+        let attrStart = result.index(result.startIndex, offsetByCharacters: startOffset)
+        let attrEnd = result.index(result.startIndex, offsetByCharacters: endOffset)
+        result[attrStart..<attrEnd].foregroundColor = color
+    }
+
+    private static func isProtected(_ range: NSRange, by protected: [NSRange]) -> Bool {
+        for p in protected {
+            if NSIntersectionRange(range, p).length > 0 { return true }
+        }
+        return false
+    }
+
+    static func languageColor(for language: String) -> Color {
+        switch language.lowercased() {
+        case "swift": return Color(red: 0xFF/255, green: 0x6B/255, blue: 0x35/255)
+        case "python", "py": return Color(red: 0x30/255, green: 0x76/255, blue: 0xAB/255)
+        case "javascript", "js": return Color(red: 0xF7/255, green: 0xDF/255, blue: 0x1E/255)
+        case "typescript", "ts": return Color(red: 0x31/255, green: 0x78/255, blue: 0xC6/255)
+        case "jsx", "tsx": return Color(red: 0x61/255, green: 0xDA/255, blue: 0xFB/255)
+        case "rust", "rs": return Color(red: 0xDE/255, green: 0x56/255, blue: 0x16/255)
+        case "go", "golang": return Color(red: 0x00/255, green: 0xAD/255, blue: 0xD8/255)
+        case "ruby", "rb": return Color(red: 0xCC/255, green: 0x34/255, blue: 0x2D/255)
+        case "bash", "sh", "zsh", "shell": return Color(red: 0x4E/255, green: 0xAA/255, blue: 0x25/255)
+        case "html": return Color(red: 0xE3/255, green: 0x4C/255, blue: 0x26/255)
+        case "css", "scss", "sass": return Color(red: 0x26/255, green: 0x65/255, blue: 0xF5/255)
+        case "json": return Color(red: 0xA8/255, green: 0xA8/255, blue: 0xA8/255)
+        case "yaml", "yml": return Color(red: 0xCB/255, green: 0x17/255, blue: 0x1E/255)
+        case "sql": return Color(red: 0xE3/255, green: 0x8C/255, blue: 0x00/255)
+        case "c": return Color(red: 0x55/255, green: 0x55/255, blue: 0xCC/255)
+        case "cpp", "c++": return Color(red: 0x00/255, green: 0x59/255, blue: 0x9C/255)
+        case "java": return Color(red: 0xB0/255, green: 0x72/255, blue: 0x19/255)
+        case "kotlin", "kt": return Color(red: 0x7F/255, green: 0x52/255, blue: 0xFF/255)
+        default: return AppTheme.textMuted
+        }
+    }
+}
+
 // MARK: - Code Block
 
 struct CodeBlockView: View {
@@ -1199,43 +1431,100 @@ struct CodeBlockView: View {
     let language: String
     @State private var copied = false
 
+    private var lines: [String] { code.components(separatedBy: "\n") }
+    private var lineNumberWidth: CGFloat {
+        let digits = max(2, String(lines.count).count)
+        return CGFloat(digits) * 8 + 12
+    }
+    private var langColor: Color { SyntaxHighlighter.languageColor(for: language) }
+    private var displayLang: String { language.isEmpty ? "code" : language.lowercased() }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Header bar with language label and copy button
-            HStack {
-                Text(language.isEmpty ? "code" : language)
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundColor(AppTheme.textMuted)
+            // Top border accent line
+            Rectangle()
+                .fill(langColor.opacity(0.6))
+                .frame(height: 2)
+
+            // Header bar with language badge and copy button
+            HStack(spacing: 0) {
+                Text(displayLang)
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .foregroundColor(langColor)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(langColor.opacity(0.12))
+                    .clipShape(RoundedRectangle(cornerRadius: 4))
+
                 Spacer()
+
                 Button(action: {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(code, forType: .string)
-                    copied = true
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) { copied = false }
+                    withAnimation(.easeInOut(duration: 0.2)) { copied = true }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                        withAnimation(.easeInOut(duration: 0.2)) { copied = false }
+                    }
                 }) {
-                    HStack(spacing: 3) {
+                    HStack(spacing: 4) {
                         Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                            .font(.system(size: 9))
-                        Text(copied ? "Copied" : "Copy")
-                            .font(.system(size: 9))
+                            .font(.system(size: 10, weight: .medium))
+                        Text(copied ? "Copied!" : "Copy")
+                            .font(.system(size: 10, weight: .medium))
                     }
                     .foregroundColor(copied ? AppTheme.success : AppTheme.textMuted)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(
+                        RoundedRectangle(cornerRadius: 5)
+                            .fill(copied ? AppTheme.success.opacity(0.12) : Color.white.opacity(0.05))
+                    )
                 }
                 .buttonStyle(.plain)
             }
-            .padding(.horizontal, 10).padding(.vertical, 5)
-            .background(AppTheme.bgPrimary.opacity(0.9))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(Color(red: 20/255, green: 20/255, blue: 28/255).opacity(0.95))
 
-            Text(code)
-                .font(.system(size: 12, design: .monospaced))
-                .foregroundColor(AppTheme.textSecondary)
-                .textSelection(.enabled)
-                .padding(10)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            Rectangle()
+                .fill(Color.white.opacity(0.06))
+                .frame(height: 1)
+
+            // Code area with line numbers
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(alignment: .top, spacing: 0) {
+                    VStack(alignment: .trailing, spacing: 0) {
+                        ForEach(Array(lines.enumerated()), id: \.offset) { idx, _ in
+                            Text("\(idx + 1)")
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundColor(Color(red: 0x44/255, green: 0x44/255, blue: 0x55/255))
+                                .frame(height: 18, alignment: .trailing)
+                        }
+                    }
+                    .frame(width: lineNumberWidth, alignment: .trailing)
+                    .padding(.trailing, 8)
+
+                    Rectangle()
+                        .fill(Color.white.opacity(0.06))
+                        .frame(width: 1)
+                        .padding(.trailing, 10)
+
+                    Text(SyntaxHighlighter.highlight(code, language: language))
+                        .textSelection(.enabled)
+                        .lineSpacing(0)
+                        .fixedSize(horizontal: true, vertical: false)
+                        .frame(minHeight: CGFloat(lines.count) * 18, alignment: .topLeading)
+                }
+                .padding(.vertical, 10)
+                .padding(.trailing, 10)
+            }
         }
-        .background(AppTheme.bgPrimary.opacity(0.6))
+        .background(Color(red: 16/255, green: 16/255, blue: 22/255))
         .clipShape(RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10).stroke(AppTheme.borderGlass, lineWidth: 0.5))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(Color.white.opacity(0.08), lineWidth: 0.5)
+        )
     }
 }
 

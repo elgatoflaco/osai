@@ -849,7 +849,8 @@ struct ChatView: View {
                                             message: msg,
                                             isLastAssistantMessage: msg.id == lastAssistantId,
                                             onCancel: msg.isStreaming ? { appState.cancelProcessing() } : nil,
-                                            onRetry: msg.id == lastAssistantId && !msg.isStreaming ? { appState.retryLastMessage() } : nil
+                                            onRetry: msg.id == lastAssistantId && !msg.isStreaming ? { appState.retryLastMessage() } : nil,
+                                            onReaction: msg.role == .assistant ? { reaction in appState.setReaction(messageId: msg.id, reaction: reaction) } : nil
                                         )
                                         .id(msg.id)
                                         .transition(.asymmetric(

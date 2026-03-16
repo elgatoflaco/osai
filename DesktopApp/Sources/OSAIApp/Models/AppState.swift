@@ -733,6 +733,20 @@ class AppState: ObservableObject {
         }
     }
 
+    func setReaction(messageId: String, reaction: MessageReaction?) {
+        guard let convId = activeConversation?.id else { return }
+        if let msgIdx = activeConversation?.messages.firstIndex(where: { $0.id == messageId }) {
+            activeConversation?.messages[msgIdx].reaction = reaction
+        }
+        if let convIdx = conversations.firstIndex(where: { $0.id == convId }),
+           let msgIdx = conversations[convIdx].messages.firstIndex(where: { $0.id == messageId }) {
+            conversations[convIdx].messages[msgIdx].reaction = reaction
+        }
+        if let updated = conversations.first(where: { $0.id == convId }) {
+            service.saveConversation(updated)
+        }
+    }
+
     func renameConversation(_ conv: Conversation, to newTitle: String) {
         let trimmed = newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }

@@ -325,6 +325,7 @@ class OSAIService {
             ]
             if let tool = msg.toolName { m["toolName"] = tool }
             if let result = msg.toolResult { m["toolResult"] = result }
+            if let reaction = msg.reaction { m["reaction"] = reaction.rawValue }
             return m
         }
 
@@ -364,10 +365,15 @@ class OSAIService {
                   let content = m["content"] as? String,
                   let tsStr = m["timestamp"] as? String,
                   let ts = ISO8601DateFormatter().date(from: tsStr) else { return nil }
+            var reaction: MessageReaction?
+            if let reactionStr = m["reaction"] as? String {
+                reaction = MessageReaction(rawValue: reactionStr)
+            }
             return ChatMessage(
                 id: msgId, role: role, content: content, timestamp: ts,
                 toolName: m["toolName"] as? String,
-                toolResult: m["toolResult"] as? String
+                toolResult: m["toolResult"] as? String,
+                reaction: reaction
             )
         }
 
