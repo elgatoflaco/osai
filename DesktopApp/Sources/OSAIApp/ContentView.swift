@@ -1315,6 +1315,7 @@ struct ContentView: View {
     @State private var showCommandPalette = false
     @State private var commandSearch = ""
     @State private var showCompactMenu = false
+    @State private var showKeyboardShortcuts = false
 
     var body: some View {
         GeometryReader { geo in
@@ -1522,6 +1523,14 @@ struct ContentView: View {
             }
         }
         .animation(.easeOut(duration: 0.15), value: showCommandPalette)
+        // Keyboard shortcuts overlay
+        .overlay {
+            if showKeyboardShortcuts {
+                KeyboardShortcutsView(isPresented: $showKeyboardShortcuts)
+                    .transition(.opacity.combined(with: .scale(scale: 0.97)))
+            }
+        }
+        .animation(.easeOut(duration: 0.15), value: showKeyboardShortcuts)
         .overlay(alignment: .top) {
             if let toast = appState.toastMessage {
                 ToastView(toast: toast)
@@ -1605,6 +1614,9 @@ struct ContentView: View {
                     .hidden()
                 Button("") { appState.navigateConversation(direction: 1) }
                     .keyboardShortcut("]", modifiers: .command)
+                    .hidden()
+                Button("") { showKeyboardShortcuts.toggle() }
+                    .keyboardShortcut("/", modifiers: .command)
                     .hidden()
             }
         )

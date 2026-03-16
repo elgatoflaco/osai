@@ -283,6 +283,7 @@ class AppState: ObservableObject {
     @Published var suggestedReplies: [String] = []
     @Published var streamingStartTime: Date?
     @Published var conversationSortOrder: ConversationSortOrder = .recent
+    @Published var showArchived: Bool = false
     @Published var filterTag: String?
     @Published var notifications: [AppNotification] = []
     @Published var showNotificationPanel: Bool = false
@@ -324,13 +325,19 @@ class AppState: ObservableObject {
     }
 
 
-    /// Returns conversations sorted by the selected sort order, with pinned items always first.
+    /// Returns non-archived conversations sorted by the selected sort order, with pinned items always first.
     var sortedConversations: [Conversation] {
-        let pinned = conversations.filter { $0.isPinned }
-        let unpinned = conversations.filter { !$0.isPinned }
+        let active = conversations.filter { !$0.isArchived }
+        let pinned = active.filter { $0.isPinned }
+        let unpinned = active.filter { !$0.isPinned }
         let sortedPinned = sortConversations(pinned)
         let sortedUnpinned = sortConversations(unpinned)
         return sortedPinned + sortedUnpinned
+    }
+
+    /// Returns archived conversations sorted by the selected sort order.
+    var archivedConversations: [Conversation] {
+        sortConversations(conversations.filter { $0.isArchived })
     }
 
     private func sortConversations(_ convs: [Conversation]) -> [Conversation] {
@@ -571,6 +578,11 @@ class AppState: ObservableObject {
                 }
 
                 syncConversationToList()
+
+                // Auto-generate smart title after first assistant response
+                autoTitleIfNeeded()
+                syncConversationToList()
+
                 if let conv = activeConversation {
                     service.saveConversation(conv)
                 }
@@ -877,6 +889,46 @@ class AppState: ObservableObject {
         }
     }
 
+    func archiveConversation(id: String) {
+        if let idx = conversations.firstIndex(where: { $0.id == id }) {
+            conversations[idx].isArchived = true
+            service.saveConversation(conversations[idx])
+        }
+        if activeConversation?.id == id {
+            activeConversation = nil
+        }
+        showToast("Conversation archived", type: .info)
+    }
+
+    func unarchiveConversation(id: String) {
+        if let idx = conversations.firstIndex(where: { $0.id == id }) {
+            conversations[idx].isArchived = false
+            service.saveConversation(conversations[idx])
+        }
+        showToast("Conversation unarchived", type: .info)
+    }
+
+    func autoArchiveOldConversations(olderThan days: Int) {
+        let cutoff = Calendar.current.date(byAdding: .day, value: -days, to: Date()) ?? Date()
+        var count = 0
+        for idx in conversations.indices {
+            if !conversations[idx].isArchived && !conversations[idx].isPinned && conversations[idx].lastUpdated < cutoff {
+                conversations[idx].isArchived = true
+                service.saveConversation(conversations[idx])
+                count += 1
+            }
+        }
+        if activeConversation != nil, let id = activeConversation?.id,
+           conversations.first(where: { $0.id == id })?.isArchived == true {
+            activeConversation = nil
+        }
+        if count > 0 {
+            showToast("\(count) conversation\(count == 1 ? "" : "s") archived", type: .info)
+        } else {
+            showToast("No old conversations to archive", type: .info)
+        }
+    }
+
     func setReaction(messageId: String, reaction: MessageReaction?) {
         guard let convId = activeConversation?.id else { return }
         if let msgIdx = activeConversation?.messages.firstIndex(where: { $0.id == messageId }) {
@@ -896,9 +948,11 @@ class AppState: ObservableObject {
         guard !trimmed.isEmpty else { return }
         if let idx = conversations.firstIndex(where: { $0.id == conv.id }) {
             conversations[idx].title = trimmed
+            conversations[idx].titleManuallySet = true
         }
         if activeConversation?.id == conv.id {
             activeConversation?.title = trimmed
+            activeConversation?.titleManuallySet = true
         }
         if let updated = conversations.first(where: { $0.id == conv.id }) {
             service.saveConversation(updated)
@@ -972,20 +1026,159 @@ class AppState: ObservableObject {
 
     /// Generate a clean, readable title from the user's first message.
     private func smartTitle(from text: String) -> String {
-        // Clean up: collapse newlines and trim
+        return generateSmartTitle(from: text)
+    }
+
+    /// Generate a meaningful title (max 40 chars) from the first user message.
+    func generateSmartTitle(from text: String) -> String {
+        // Clean up: collapse newlines, strip file attachments, and trim
         let cleaned = text
+            .replacingOccurrences(of: "File: [^\n]*```[\\s\\S]*?```", with: "", options: .regularExpression)
+            .replacingOccurrences(of: "\\[Attached: [^\\]]*\\]", with: "", options: .regularExpression)
+            .replacingOccurrences(of: "\\[Image: [^\\]]*\\]", with: "", options: .regularExpression)
             .replacingOccurrences(of: "\n", with: " ")
             .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
-        guard cleaned.count > 40 else { return cleaned }
+        guard !cleaned.isEmpty else { return "New Chat" }
 
-        // Truncate at last word boundary before 40 chars
-        let prefix = String(cleaned.prefix(40))
+        // Agent command: /agent <name>
+        if let agentMatch = cleaned.range(of: "^/agent\\s+(\\S+)", options: .regularExpression) {
+            let agentPart = cleaned[agentMatch]
+                .replacingOccurrences(of: "/agent ", with: "")
+                .trimmingCharacters(in: .whitespaces)
+            let name = agentPart.components(separatedBy: " ").first ?? agentPart
+            return truncateTitle("Agent: \(name)")
+        }
+
+        // Slash commands (e.g. /news, /research)
+        if cleaned.hasPrefix("/") {
+            let command = cleaned.components(separatedBy: " ").first ?? cleaned
+            let rest = String(cleaned.dropFirst(command.count)).trimmingCharacters(in: .whitespaces)
+            let label = String(command.dropFirst()).capitalized
+            if rest.isEmpty {
+                return truncateTitle(label)
+            }
+            return truncateTitle("\(label): \(rest)")
+        }
+
+        // Code request detection
+        let codeKeywords = ["write a function", "write a script", "write code", "create a function",
+                            "implement", "refactor", "debug", "fix the bug", "code review",
+                            "write a class", "create a class", "write a method"]
+        let lower = cleaned.lowercased()
+        for keyword in codeKeywords {
+            if lower.hasPrefix(keyword) || lower.contains("```") {
+                let content = cleaned.replacingOccurrences(of: "```[\\s\\S]*?```", with: "", options: .regularExpression)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                return truncateTitle("Code: \(content)")
+            }
+        }
+
+        // Question: use the question text
+        if cleaned.contains("?") {
+            if let qEnd = cleaned.firstIndex(of: "?") {
+                let question = String(cleaned[cleaned.startIndex...qEnd])
+                return truncateTitle(question)
+            }
+        }
+
+        // First sentence (split on . ! or ?)
+        let sentenceEnd = cleaned.rangeOfCharacter(from: CharacterSet(charactersIn: ".!"))
+        if let end = sentenceEnd, cleaned.distance(from: cleaned.startIndex, to: end.lowerBound) < 60 {
+            let sentence = String(cleaned[cleaned.startIndex...end.lowerBound])
+            return truncateTitle(sentence)
+        }
+
+        // Fallback: first N words
+        return truncateTitle(cleaned)
+    }
+
+    /// Truncate a title to max 40 characters at a word boundary, adding "..." if needed.
+    private func truncateTitle(_ text: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count > 40 else { return trimmed }
+
+        let prefix = String(trimmed.prefix(40))
         if let lastSpace = prefix.lastIndex(of: " ") {
             return String(prefix[prefix.startIndex..<lastSpace]) + "..."
         }
         return prefix + "..."
+    }
+
+    /// Auto-apply a smart title after the first assistant response, if title was not manually set.
+    func autoTitleIfNeeded() {
+        guard let conv = activeConversation else { return }
+        guard !conv.titleManuallySet else { return }
+
+        // Only auto-title after the first assistant message arrives
+        let assistantMessages = conv.messages.filter { $0.role == .assistant && !$0.isStreaming }
+        guard assistantMessages.count == 1 else { return }
+
+        // Get first user message
+        guard let firstUserMsg = conv.messages.first(where: { $0.role == .user }) else { return }
+
+        let newTitle = generateSmartTitle(from: firstUserMsg.content)
+        guard newTitle != conv.title else { return }
+
+        if let idx = conversations.firstIndex(where: { $0.id == conv.id }) {
+            conversations[idx].title = newTitle
+        }
+        activeConversation?.title = newTitle
+    }
+
+    /// Generate 2-3 title suggestions based on conversation content.
+    func titleSuggestions(for conv: Conversation) -> [String] {
+        var suggestions: [String] = []
+
+        // Suggestion from first user message
+        if let firstUser = conv.messages.first(where: { $0.role == .user }) {
+            suggestions.append(generateSmartTitle(from: firstUser.content))
+        }
+
+        // Suggestion from topic words across all user messages
+        let allUserText = conv.messages
+            .filter { $0.role == .user }
+            .map { $0.content }
+            .joined(separator: " ")
+            .lowercased()
+
+        let stopWords: Set<String> = ["the", "a", "an", "is", "are", "was", "were", "be", "been",
+                                       "being", "have", "has", "had", "do", "does", "did", "will",
+                                       "would", "could", "should", "may", "might", "can", "to",
+                                       "of", "in", "for", "on", "with", "at", "by", "from", "it",
+                                       "this", "that", "i", "you", "we", "they", "my", "your",
+                                       "and", "or", "but", "not", "no", "if", "so", "me", "what",
+                                       "how", "about", "just", "like", "please", "help", "need"]
+
+        let words = allUserText.components(separatedBy: .alphanumerics.inverted)
+            .filter { $0.count > 2 && !stopWords.contains($0) }
+
+        var freq: [String: Int] = [:]
+        for word in words { freq[word, default: 0] += 1 }
+        let topWords = freq.sorted { $0.value > $1.value }.prefix(4).map { $0.key.capitalized }
+
+        if topWords.count >= 2 {
+            let topicTitle = truncateTitle(topWords.joined(separator: ", "))
+            if !suggestions.contains(topicTitle) {
+                suggestions.append(topicTitle)
+            }
+        }
+
+        // Suggestion from agent name + first few words
+        if let agent = conv.agentName,
+           let firstUser = conv.messages.first(where: { $0.role == .user }) {
+            let shortContent = firstUser.content
+                .replacingOccurrences(of: "\n", with: " ")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let firstWords = shortContent.components(separatedBy: " ").prefix(4).joined(separator: " ")
+            let agentTitle = truncateTitle("\(agent): \(firstWords)")
+            if !suggestions.contains(agentTitle) {
+                suggestions.append(agentTitle)
+            }
+        }
+
+        return Array(suggestions.prefix(3))
     }
 
     func toggleGateway() {
@@ -1162,6 +1355,7 @@ class AppState: ObservableObject {
     }
 
     @Published var showExportSheet: Bool = false
+    @Published var showKeyboardShortcuts: Bool = false
     @Published var exportConversationTarget: Conversation?
 
     func presentExportSheet(for conv: Conversation) {

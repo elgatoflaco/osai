@@ -338,11 +338,13 @@ class OSAIService {
         if let agent = conv.agentName { json["agentName"] = agent }
         if let modelId = conv.modelId { json["modelId"] = modelId }
         if conv.isPinned { json["isPinned"] = true }
+        if conv.isArchived { json["isArchived"] = true }
         if conv.totalInputTokens > 0 { json["totalInputTokens"] = conv.totalInputTokens }
         if conv.totalOutputTokens > 0 { json["totalOutputTokens"] = conv.totalOutputTokens }
         if let branchedFromId = conv.branchedFromId { json["branchedFromId"] = branchedFromId }
         if let branchedAtMessageIndex = conv.branchedAtMessageIndex { json["branchedAtMessageIndex"] = branchedAtMessageIndex }
         if !conv.tags.isEmpty { json["tags"] = conv.tags }
+        if conv.titleManuallySet { json["titleManuallySet"] = true }
 
         let path = "\(dir)/\(conv.id).json"
         if let data = try? JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted]) {
@@ -386,11 +388,13 @@ class OSAIService {
             agentName: json["agentName"] as? String,
             modelId: json["modelId"] as? String,
             isPinned: json["isPinned"] as? Bool ?? false,
+            isArchived: json["isArchived"] as? Bool ?? false,
             tags: json["tags"] as? [String] ?? [],
             totalInputTokens: json["totalInputTokens"] as? Int ?? 0,
             totalOutputTokens: json["totalOutputTokens"] as? Int ?? 0,
             branchedFromId: json["branchedFromId"] as? String,
-            branchedAtMessageIndex: json["branchedAtMessageIndex"] as? Int
+            branchedAtMessageIndex: json["branchedAtMessageIndex"] as? Int,
+            titleManuallySet: json["titleManuallySet"] as? Bool ?? false
         )
     }
 

@@ -836,12 +836,20 @@ struct ChatView: View {
             },
             onCancelRename: { renamingConversationId = nil },
             allTags: appState.allTags,
+            onArchive: {
+                if conv.isArchived {
+                    appState.unarchiveConversation(id: conv.id)
+                } else {
+                    appState.archiveConversation(id: conv.id)
+                }
+            },
             onAddTag: { tag in appState.addTag(to: conv.id, tag: tag) },
             onRemoveTag: { tag in appState.removeTag(from: conv.id, tag: tag) },
             onNewTag: {
                 newTagText = ""
                 showNewTagPopover = conv.id
-            }
+            },
+            titleSuggestions: renamingConversationId == conv.id ? appState.titleSuggestions(for: conv) : []
         )
     }
 
@@ -1056,6 +1064,11 @@ struct ChatView: View {
                         }
                         .disabled(appState.conversations.filter({ !$0.isPinned }).isEmpty)
                         Divider()
+                        Button(action: { appState.autoArchiveOldConversations(olderThan: 7) }) {
+                            Label("Archive Old (>7 days)", systemImage: "archivebox")
+                        }
+                        .disabled(appState.conversations.filter({ !$0.isArchived }).isEmpty)
+                        Divider()
                         Button(action: { exportAllConversations() }) {
                             Label("Export All", systemImage: "square.and.arrow.up")
                         }
@@ -1195,12 +1208,18 @@ struct ChatView: View {
                                                     .onTapGesture { toggleSelection(conv.id) }
                                             }
                                             conversationRowView(for: conv)
-                                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                                                 Button(role: .destructive) {
                                                     deleteConfirmConversation = conv
                                                 } label: {
                                                     Label("Delete", systemImage: "trash")
                                                 }
+                                                Button {
+                                                    appState.archiveConversation(id: conv.id)
+                                                } label: {
+                                                    Label("Archive", systemImage: "archivebox")
+                                                }
+                                                .tint(.gray)
                                             }
                                             .swipeActions(edge: .leading, allowsFullSwipe: true) {
                                                 Button {
@@ -1240,12 +1259,18 @@ struct ChatView: View {
                                                     .onTapGesture { toggleSelection(conv.id) }
                                             }
                                             conversationRowView(for: conv)
-                                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                                                 Button(role: .destructive) {
                                                     deleteConfirmConversation = conv
                                                 } label: {
                                                     Label("Delete", systemImage: "trash")
                                                 }
+                                                Button {
+                                                    appState.archiveConversation(id: conv.id)
+                                                } label: {
+                                                    Label("Archive", systemImage: "archivebox")
+                                                }
+                                                .tint(.gray)
                                             }
                                             .swipeActions(edge: .leading, allowsFullSwipe: true) {
                                                 Button {
@@ -1360,10 +1385,104 @@ struct ChatView: View {
                                     .background(AppTheme.bgSecondary.opacity(0.3))
                                 }
                             }
+                            // Archived conversations section
+                            if appState.showArchived && !appState.archivedConversations.isEmpty {
+                                Section {
+                                    ForEach(appState.archivedConversations) { conv in
+                                        conversationRowView(for: conv)
+                                            .opacity(0.6)
+                                            .overlay(
+                                                HStack {
+                                                    Spacer()
+                                                    Image(systemName: "archivebox.fill")
+                                                        .font(.system(size: 8))
+                                                        .foregroundColor(AppTheme.textMuted)
+                                                        .padding(4)
+                                                }
+                                                .padding(.trailing, 6)
+                                                .padding(.top, 6),
+                                                alignment: .topTrailing
+                                            )
+                                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                                Button(role: .destructive) {
+                                                    deleteConfirmConversation = conv
+                                                } label: {
+                                                    Label("Delete", systemImage: "trash")
+                                                }
+                                            }
+                                            .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                                                Button {
+                                                    appState.unarchiveConversation(id: conv.id)
+                                                } label: {
+                                                    Label("Unarchive", systemImage: "tray.and.arrow.up")
+                                                }
+                                                .tint(.blue)
+                                            }
+                                    }
+                                } header: {
+                                    HStack(spacing: 4) {
+                                        Image(systemName: "archivebox.fill")
+                                            .font(.system(size: 8))
+                                            .foregroundColor(AppTheme.textMuted)
+                                        Text("Archived")
+                                            .font(.system(size: 10, weight: .semibold))
+                                            .foregroundColor(AppTheme.textMuted)
+                                            .textCase(.uppercase)
+                                        Spacer()
+                                    }
+                                    .padding(.horizontal, 12)
+                                    .padding(.top, 10)
+                                    .padding(.bottom, 4)
+                                    .background(AppTheme.bgSecondary.opacity(0.3))
+                                }
+                            }
                         }
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
                     }
+
+                    // Show Archived toggle and Archive All Read button
+                    VStack(spacing: 6) {
+                        Divider().background(AppTheme.borderGlass)
+
+                        Button(action: { appState.showArchived.toggle() }) {
+                            HStack(spacing: 6) {
+                                Image(systemName: "archivebox")
+                                    .font(.system(size: 11))
+                                Text(appState.showArchived ? "Hide Archived" : "Show Archived")
+                                    .font(.system(size: 11, weight: .medium))
+                                Spacer()
+                                if !appState.archivedConversations.isEmpty {
+                                    Text("\(appState.archivedConversations.count)")
+                                        .font(.system(size: 10, weight: .bold, design: .rounded))
+                                        .foregroundColor(AppTheme.textMuted)
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 2)
+                                        .background(AppTheme.bgCard.opacity(0.6))
+                                        .clipShape(Capsule())
+                                }
+                            }
+                            .foregroundColor(AppTheme.textSecondary)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                        }
+                        .buttonStyle(.plain)
+
+                        Button(action: { appState.autoArchiveOldConversations(olderThan: 7) }) {
+                            HStack(spacing: 6) {
+                                Image(systemName: "clock.badge.checkmark")
+                                    .font(.system(size: 11))
+                                Text("Archive All Read (>7 days)")
+                                    .font(.system(size: 11, weight: .medium))
+                                Spacer()
+                            }
+                            .foregroundColor(AppTheme.textMuted)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.bottom, 4)
                 }
                 // Floating selection action bar
                 if isSelecting && !selectedConversationIds.isEmpty {
@@ -1563,9 +1682,11 @@ struct ConversationRow: View {
     var onCommitRename: (() -> Void)? = nil
     var onCancelRename: (() -> Void)? = nil
     var allTags: [String] = []
+    var onArchive: (() -> Void)? = nil
     var onAddTag: ((String) -> Void)? = nil
     var onRemoveTag: ((String) -> Void)? = nil
     var onNewTag: (() -> Void)? = nil
+    var titleSuggestions: [String] = []
     @State private var isHovered = false
 
     private static let tagColors: [Color] = [.red, .orange, .yellow, .green, .blue, .purple, .pink, .teal]
@@ -1594,16 +1715,40 @@ struct ConversationRow: View {
                                 .foregroundColor(AppTheme.accent.opacity(0.7))
                         }
                         if isRenaming {
-                            TextField("Title", text: renamingText)
-                                .textFieldStyle(.plain)
-                                .font(.system(size: 12, weight: .semibold))
-                                .foregroundColor(AppTheme.textPrimary)
-                                .padding(.horizontal, 4)
-                                .padding(.vertical, 1)
-                                .background(AppTheme.bgCard.opacity(0.6))
-                                .clipShape(RoundedRectangle(cornerRadius: 4))
-                                .onSubmit { onCommitRename?() }
-                                .onExitCommand { onCancelRename?() }
+                            VStack(alignment: .leading, spacing: 2) {
+                                TextField("Title", text: renamingText)
+                                    .textFieldStyle(.plain)
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .foregroundColor(AppTheme.textPrimary)
+                                    .padding(.horizontal, 4)
+                                    .padding(.vertical, 1)
+                                    .background(AppTheme.bgCard.opacity(0.6))
+                                    .clipShape(RoundedRectangle(cornerRadius: 4))
+                                    .onSubmit { onCommitRename?() }
+                                    .onExitCommand { onCancelRename?() }
+                                if !titleSuggestions.isEmpty {
+                                    HStack(spacing: 3) {
+                                        Image(systemName: "lightbulb.min")
+                                            .font(.system(size: 8))
+                                            .foregroundColor(AppTheme.textMuted)
+                                        ForEach(titleSuggestions, id: \.self) { suggestion in
+                                            Button {
+                                                renamingText.wrappedValue = suggestion
+                                            } label: {
+                                                Text(suggestion)
+                                                    .font(.system(size: 9))
+                                                    .foregroundColor(AppTheme.accent)
+                                                    .lineLimit(1)
+                                                    .padding(.horizontal, 4)
+                                                    .padding(.vertical, 1)
+                                                    .background(AppTheme.accent.opacity(0.1))
+                                                    .clipShape(Capsule())
+                                            }
+                                            .buttonStyle(.plain)
+                                        }
+                                    }
+                                }
+                            }
                         } else {
                             Text(conv.title)
                                 .font(.system(size: 12, weight: isActive ? .semibold : .regular))
@@ -1672,6 +1817,9 @@ struct ConversationRow: View {
             }
             Button(action: { onTogglePin?() }) {
                 Label(conv.isPinned ? "Unpin" : "Pin", systemImage: conv.isPinned ? "pin.slash" : "pin")
+            }
+            Button(action: { onArchive?() }) {
+                Label(conv.isArchived ? "Unarchive" : "Archive", systemImage: conv.isArchived ? "tray.and.arrow.up" : "archivebox")
             }
             Button(action: { onExport?() }) {
                 Label("Export", systemImage: "square.and.arrow.up")

@@ -69,11 +69,13 @@ struct Conversation: Identifiable {
     var agentName: String?
     var modelId: String?
     var isPinned: Bool = false
+    var isArchived: Bool = false
     var tags: [String] = []
     var totalInputTokens: Int = 0
     var totalOutputTokens: Int = 0
     var branchedFromId: String?
     var branchedAtMessageIndex: Int?
+    var titleManuallySet: Bool = false
 
     /// Estimated cost based on typical rates ($3/M input, $15/M output for Sonnet)
     var estimatedCost: Double {
