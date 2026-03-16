@@ -3,6 +3,12 @@ import SwiftUI
 struct DashboardView: View {
     @EnvironmentObject var appState: AppState
     @State private var taskInput = ""
+    @State private var selectedTemplateCategory: TemplateCategory = .all
+    @State private var templateSearchQuery = ""
+    @State private var showTemplateEditor = false
+    @State private var editingTemplate: ConversationTemplate?
+    @State private var templateToDelete: ConversationTemplate?
+    @State private var showDeleteConfirmation = false
 
     var body: some View {
         ZStack {
@@ -185,25 +191,95 @@ struct DashboardView: View {
             GridItem(.flexible(), spacing: AppTheme.paddingMd),
             GridItem(.flexible(), spacing: AppTheme.paddingMd),
         ]
-        return LazyVGrid(columns: columns, spacing: AppTheme.paddingMd) {
-            ForEach(appState.conversationTemplates) { template in
+        let filteredTemplates = appState.templates(for: selectedTemplateCategory, searchQuery: templateSearchQuery)
+
+        return VStack(spacing: 12) {
+            // Search bar
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 12))
+                    .foregroundColor(AppTheme.textMuted)
+                TextField("Search templates...", text: $templateSearchQuery)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 12))
+                    .foregroundColor(AppTheme.textPrimary)
+                if !templateSearchQuery.isEmpty {
+                    Button(action: { templateSearchQuery = "" }) {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 12))
+                            .foregroundColor(AppTheme.textMuted)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(AppTheme.bgGlass)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(AppTheme.borderGlass, lineWidth: 0.5)
+            )
+
+            // Category filter tabs
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(TemplateCategory.allCases) { category in
+                        Button(action: {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                selectedTemplateCategory = category
+                            }
+                        }) {
+                            HStack(spacing: 5) {
+                                Image(systemName: category.icon)
+                                    .font(.system(size: 10))
+                                Text(category.rawValue)
+                                    .font(.system(size: 11, weight: .medium))
+                            }
+                            .foregroundColor(selectedTemplateCategory == category ? AppTheme.accent : AppTheme.textSecondary)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 5)
+                            .background(selectedTemplateCategory == category ? AppTheme.accent.opacity(0.12) : AppTheme.bgCard.opacity(0.4))
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .stroke(
+                                        selectedTemplateCategory == category ? AppTheme.accent.opacity(0.3) : AppTheme.borderGlass,
+                                        lineWidth: 1
+                                    )
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+
+            // Template grid
+            LazyVGrid(columns: columns, spacing: AppTheme.paddingMd) {
+                // Create Template card
                 Button(action: {
-                    appState.startFromTemplate(template)
+                    editingTemplate = nil
+                    showTemplateEditor = true
                 }) {
                     GlassCard(padding: AppTheme.paddingMd) {
                         HStack(spacing: 12) {
-                            Image(systemName: template.icon)
-                                .font(.system(size: 22))
+                            Image(systemName: "plus")
+                                .font(.system(size: 22, weight: .medium))
                                 .foregroundColor(AppTheme.accent)
                                 .frame(width: 36, height: 36)
                                 .background(AppTheme.accent.opacity(0.12))
                                 .clipShape(RoundedRectangle(cornerRadius: AppTheme.cornerRadiusSm))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: AppTheme.cornerRadiusSm)
+                                        .stroke(AppTheme.accent.opacity(0.3), lineWidth: 1)
+                                        .strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [4]))
+                                )
 
                             VStack(alignment: .leading, spacing: 3) {
-                                Text(template.name)
+                                Text("Create Template")
                                     .font(.system(size: 13, weight: .semibold))
-                                    .foregroundColor(AppTheme.textPrimary)
-                                Text(template.description)
+                                    .foregroundColor(AppTheme.accent)
+                                Text("Add your own starter")
                                     .font(AppTheme.fontCaption)
                                     .foregroundColor(AppTheme.textSecondary)
                                     .lineLimit(1)
@@ -214,7 +290,109 @@ struct DashboardView: View {
                     }
                 }
                 .buttonStyle(.plain)
+
+                ForEach(filteredTemplates) { template in
+                    Button(action: {
+                        appState.startFromTemplate(template)
+                    }) {
+                        GlassCard(padding: AppTheme.paddingMd) {
+                            HStack(spacing: 12) {
+                                Image(systemName: template.icon)
+                                    .font(.system(size: 22))
+                                    .foregroundColor(AppTheme.accent)
+                                    .frame(width: 36, height: 36)
+                                    .background(AppTheme.accent.opacity(0.12))
+                                    .clipShape(RoundedRectangle(cornerRadius: AppTheme.cornerRadiusSm))
+
+                                VStack(alignment: .leading, spacing: 3) {
+                                    HStack(spacing: 4) {
+                                        Text(template.name)
+                                            .font(.system(size: 13, weight: .semibold))
+                                            .foregroundColor(AppTheme.textPrimary)
+                                            .lineLimit(1)
+                                        if !template.isBuiltIn {
+                                            Image(systemName: "person.fill")
+                                                .font(.system(size: 8))
+                                                .foregroundColor(AppTheme.textMuted)
+                                        }
+                                    }
+                                    Text(template.description)
+                                        .font(AppTheme.fontCaption)
+                                        .foregroundColor(AppTheme.textSecondary)
+                                        .lineLimit(1)
+                                }
+
+                                Spacer()
+
+                                Text(template.category)
+                                    .font(.system(size: 9, weight: .medium))
+                                    .foregroundColor(AppTheme.textMuted)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(AppTheme.bgCard.opacity(0.5))
+                                    .clipShape(Capsule())
+                            }
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .contextMenu {
+                        if !template.isBuiltIn {
+                            Button(action: {
+                                editingTemplate = template
+                                showTemplateEditor = true
+                            }) {
+                                Label("Edit", systemImage: "pencil")
+                            }
+                        }
+                        Button(action: {
+                            appState.duplicateTemplate(template)
+                        }) {
+                            Label("Duplicate", systemImage: "doc.on.doc")
+                        }
+                        if !template.isBuiltIn {
+                            Divider()
+                            Button(role: .destructive, action: {
+                                templateToDelete = template
+                                showDeleteConfirmation = true
+                            }) {
+                                Label("Delete", systemImage: "trash")
+                            }
+                        }
+                    }
+                }
             }
+
+            if filteredTemplates.isEmpty && !templateSearchQuery.isEmpty {
+                HStack {
+                    Spacer()
+                    VStack(spacing: 6) {
+                        Image(systemName: "magnifyingglass")
+                            .font(.system(size: 20))
+                            .foregroundColor(AppTheme.textMuted)
+                        Text("No templates match \"\(templateSearchQuery)\"")
+                            .font(.system(size: 12))
+                            .foregroundColor(AppTheme.textSecondary)
+                    }
+                    .padding(.vertical, 20)
+                    Spacer()
+                }
+            }
+        }
+        .sheet(isPresented: $showTemplateEditor) {
+            TemplateEditorSheet(template: editingTemplate) { saved in
+                appState.saveUserTemplate(saved)
+            }
+            .environmentObject(appState)
+        }
+        .alert("Delete Template", isPresented: $showDeleteConfirmation) {
+            Button("Cancel", role: .cancel) { }
+            Button("Delete", role: .destructive) {
+                if let t = templateToDelete {
+                    appState.deleteUserTemplate(id: t.id)
+                }
+            }
+        } message: {
+            Text("Are you sure you want to delete \"\(templateToDelete?.name ?? "")\"? This cannot be undone.")
         }
     }
 
@@ -1090,6 +1268,292 @@ struct DashboardCustomizerOverlay: View {
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .onHover { isHovered in
             hoveredSection = isHovered ? section : nil
+        }
+    }
+}
+
+// MARK: - Template Editor Sheet
+
+struct TemplateEditorSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject var appState: AppState
+
+    let template: ConversationTemplate?
+    let onSave: (ConversationTemplate) -> Void
+
+    @State private var name: String = ""
+    @State private var selectedIcon: String = "star"
+    @State private var descriptionText: String = ""
+    @State private var initialMessage: String = ""
+    @State private var selectedCategory: String = "General"
+
+    private let iconOptions: [String] = [
+        "star", "heart", "bolt", "flame", "leaf",
+        "brain.head.profile", "lightbulb", "book", "pencil", "doc.text",
+        "magnifyingglass", "globe", "network", "server.rack", "cpu",
+        "chevron.left.forwardslash.chevron.right", "terminal", "hammer",
+        "wrench", "gearshape", "paintbrush", "photo", "camera",
+        "music.note", "mic", "bubble.left", "envelope", "paperplane",
+        "calendar", "clock", "chart.bar", "chart.pie", "list.bullet",
+        "checkmark.shield", "lock", "key", "person", "person.2",
+        "ladybug", "ant", "hare", "tortoise", "pawprint",
+        "sun.max", "moon", "cloud", "drop", "wind",
+        "airplane", "car", "bicycle", "figure.walk", "map",
+        "flag", "tag", "bookmark", "folder", "tray",
+        "archivebox", "puzzlepiece", "gamecontroller", "film", "theatermasks",
+    ]
+
+    private let categories = ["Development", "Writing", "Research", "General"]
+
+    var isEditing: Bool { template != nil }
+    var canSave: Bool { !name.trimmingCharacters(in: .whitespaces).isEmpty }
+
+    init(template: ConversationTemplate?, onSave: @escaping (ConversationTemplate) -> Void) {
+        self.template = template
+        self.onSave = onSave
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header
+            HStack {
+                Text(isEditing ? "Edit Template" : "Create Template")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundColor(AppTheme.textPrimary)
+                Spacer()
+                Button(action: { dismiss() }) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(AppTheme.textSecondary)
+                        .padding(6)
+                        .background(AppTheme.bgCard.opacity(0.5))
+                        .clipShape(Circle())
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 20)
+            .padding(.bottom, 12)
+
+            Divider().background(AppTheme.borderGlass)
+
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 18) {
+                    // Name field
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Name")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundColor(AppTheme.textSecondary)
+                        TextField("Template name", text: $name)
+                            .textFieldStyle(.plain)
+                            .font(.system(size: 13))
+                            .foregroundColor(AppTheme.textPrimary)
+                            .padding(10)
+                            .background(AppTheme.bgGlass)
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .stroke(AppTheme.borderGlass, lineWidth: 0.5)
+                            )
+                    }
+
+                    // Icon picker
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 8) {
+                            Text("Icon")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundColor(AppTheme.textSecondary)
+                            Image(systemName: selectedIcon)
+                                .font(.system(size: 16))
+                                .foregroundColor(AppTheme.accent)
+                        }
+
+                        LazyVGrid(columns: Array(repeating: GridItem(.fixed(32), spacing: 6), count: 10), spacing: 6) {
+                            ForEach(iconOptions, id: \.self) { icon in
+                                Button(action: { selectedIcon = icon }) {
+                                    Image(systemName: icon)
+                                        .font(.system(size: 13))
+                                        .foregroundColor(selectedIcon == icon ? AppTheme.accent : AppTheme.textSecondary)
+                                        .frame(width: 32, height: 32)
+                                        .background(selectedIcon == icon ? AppTheme.accent.opacity(0.15) : AppTheme.bgCard.opacity(0.3))
+                                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 6)
+                                                .stroke(
+                                                    selectedIcon == icon ? AppTheme.accent.opacity(0.5) : Color.clear,
+                                                    lineWidth: 1.5
+                                                )
+                                        )
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+
+                    // Category picker
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Category")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundColor(AppTheme.textSecondary)
+                        HStack(spacing: 6) {
+                            ForEach(categories, id: \.self) { cat in
+                                Button(action: { selectedCategory = cat }) {
+                                    Text(cat)
+                                        .font(.system(size: 11, weight: .medium))
+                                        .foregroundColor(selectedCategory == cat ? AppTheme.accent : AppTheme.textSecondary)
+                                        .padding(.horizontal, 12)
+                                        .padding(.vertical, 6)
+                                        .background(selectedCategory == cat ? AppTheme.accent.opacity(0.12) : AppTheme.bgCard.opacity(0.4))
+                                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 8)
+                                                .stroke(
+                                                    selectedCategory == cat ? AppTheme.accent.opacity(0.3) : AppTheme.borderGlass,
+                                                    lineWidth: 1
+                                                )
+                                        )
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+
+                    // Description field
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Description")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundColor(AppTheme.textSecondary)
+                        TextField("Brief description of this template", text: $descriptionText)
+                            .textFieldStyle(.plain)
+                            .font(.system(size: 13))
+                            .foregroundColor(AppTheme.textPrimary)
+                            .padding(10)
+                            .background(AppTheme.bgGlass)
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .stroke(AppTheme.borderGlass, lineWidth: 0.5)
+                            )
+                    }
+
+                    // Initial message field
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Initial Message")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundColor(AppTheme.textSecondary)
+                        TextEditor(text: $initialMessage)
+                            .font(.system(size: 12))
+                            .foregroundColor(AppTheme.textPrimary)
+                            .scrollContentBackground(.hidden)
+                            .frame(minHeight: 80, maxHeight: 140)
+                            .padding(10)
+                            .background(AppTheme.bgGlass)
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .stroke(AppTheme.borderGlass, lineWidth: 0.5)
+                            )
+                    }
+
+                    // Preview
+                    if canSave {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Preview")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundColor(AppTheme.textSecondary)
+                            GlassCard(padding: AppTheme.paddingMd) {
+                                HStack(spacing: 12) {
+                                    Image(systemName: selectedIcon)
+                                        .font(.system(size: 22))
+                                        .foregroundColor(AppTheme.accent)
+                                        .frame(width: 36, height: 36)
+                                        .background(AppTheme.accent.opacity(0.12))
+                                        .clipShape(RoundedRectangle(cornerRadius: AppTheme.cornerRadiusSm))
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text(name)
+                                            .font(.system(size: 13, weight: .semibold))
+                                            .foregroundColor(AppTheme.textPrimary)
+                                        Text(descriptionText.isEmpty ? "No description" : descriptionText)
+                                            .font(AppTheme.fontCaption)
+                                            .foregroundColor(AppTheme.textSecondary)
+                                            .lineLimit(1)
+                                    }
+                                    Spacer()
+                                    Text(selectedCategory)
+                                        .font(.system(size: 9, weight: .medium))
+                                        .foregroundColor(AppTheme.textMuted)
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 2)
+                                        .background(AppTheme.bgCard.opacity(0.5))
+                                        .clipShape(Capsule())
+                                }
+                            }
+                        }
+                    }
+                }
+                .padding(20)
+            }
+
+            Divider().background(AppTheme.borderGlass)
+
+            // Action buttons
+            HStack {
+                Button("Cancel") { dismiss() }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(AppTheme.textSecondary)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(AppTheme.bgCard.opacity(0.5))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(AppTheme.borderGlass, lineWidth: 1)
+                    )
+
+                Spacer()
+
+                Button(action: {
+                    let saved = ConversationTemplate(
+                        id: template?.id ?? UUID(),
+                        name: name.trimmingCharacters(in: .whitespaces),
+                        icon: selectedIcon,
+                        description: descriptionText.trimmingCharacters(in: .whitespaces),
+                        initialMessage: initialMessage,
+                        isBuiltIn: false,
+                        category: selectedCategory
+                    )
+                    onSave(saved)
+                    dismiss()
+                }) {
+                    HStack(spacing: 6) {
+                        Image(systemName: isEditing ? "checkmark" : "plus")
+                            .font(.system(size: 11))
+                        Text(isEditing ? "Save Changes" : "Create Template")
+                            .font(.system(size: 13, weight: .semibold))
+                    }
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(canSave ? AppTheme.accent : AppTheme.accent.opacity(0.4))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                }
+                .buttonStyle(.plain)
+                .disabled(!canSave)
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 14)
+        }
+        .frame(width: 500, height: 600)
+        .background(AppTheme.bgPrimary)
+        .onAppear {
+            if let t = template {
+                name = t.name
+                selectedIcon = t.icon
+                descriptionText = t.description
+                initialMessage = t.initialMessage
+                selectedCategory = t.category
+            }
         }
     }
 }

@@ -58,6 +58,30 @@ struct Sidebar: View {
             .padding(.horizontal, 12)
             .accessibilityLabel("Navigation")
 
+            // Mini Calendar Widget
+            if !appState.sidebarCollapsed {
+                MiniCalendarWidget()
+                    .environmentObject(appState)
+                    .padding(.horizontal, 12)
+                    .padding(.top, 8)
+            } else {
+                // Collapsed: just the toggle button
+                Button(action: {
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        appState.showSidebarCalendar.toggle()
+                    }
+                }) {
+                    Image(systemName: appState.showSidebarCalendar ? "calendar.circle.fill" : "calendar.circle")
+                        .font(.system(size: 17))
+                        .foregroundColor(appState.calendarFilterDate != nil ? AppTheme.accent : AppTheme.textSecondary)
+                        .frame(width: 28, height: 28)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Toggle calendar")
+                .padding(.top, 8)
+            }
+
             Spacer()
 
             // Processing status bar
@@ -519,4 +543,290 @@ struct SidebarButton: View {
         .accessibilityAddTraits(isSelected ? .isSelected : [])
         .help(isCollapsed ? item.rawValue : "")
     }
+}
+
+// MARK: - Mini Calendar Widget
+
+struct MiniCalendarWidget: View {
+    @EnvironmentObject var appState: AppState
+    @State private var displayedMonth: Date = Date()
+
+    private let calendar = Calendar.current
+    private let dayOfWeekSymbols = ["S", "M", "T", "W", "T", "F", "S"]
+
+    private var monthYearString: String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "MMM yyyy"
+        return formatter.string(from: displayedMonth)
+    }
+
+    private var daysInMonth: [DayCell] {
+        guard let monthInterval = calendar.dateInterval(of: .month, for: displayedMonth),
+              let monthRange = calendar.range(of: .day, in: .month, for: displayedMonth) else { return [] }
+
+        let firstWeekday = calendar.component(.weekday, from: monthInterval.start) // 1=Sun
+        let leadingBlanks = firstWeekday - 1
+
+        var cells: [DayCell] = []
+        // Leading blank cells
+        for i in 0..<leadingBlanks {
+            cells.append(DayCell(id: -i - 1, day: 0, isBlank: true))
+        }
+        // Day cells
+        for day in monthRange {
+            cells.append(DayCell(id: day, day: day, isBlank: false))
+        }
+        return cells
+    }
+
+    private var conversationDays: Set<Int> {
+        appState.conversationDatesForMonth(displayedMonth)
+    }
+
+    private var isCurrentMonth: Bool {
+        calendar.isDate(displayedMonth, equalTo: Date(), toGranularity: .month)
+    }
+
+    private var todayDay: Int? {
+        guard isCurrentMonth else { return nil }
+        return calendar.component(.day, from: Date())
+    }
+
+    private var selectedDay: Int? {
+        guard let filterDate = appState.calendarFilterDate,
+              calendar.isDate(filterDate, equalTo: displayedMonth, toGranularity: .month) else { return nil }
+        return calendar.component(.day, from: filterDate)
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Toggle header
+            Button(action: {
+                withAnimation(.easeOut(duration: 0.2)) {
+                    appState.showSidebarCalendar.toggle()
+                }
+            }) {
+                HStack(spacing: 6) {
+                    Image(systemName: appState.showSidebarCalendar ? "calendar.circle.fill" : "calendar.circle")
+                        .font(.system(size: 13))
+                        .foregroundColor(appState.calendarFilterDate != nil ? AppTheme.accent : AppTheme.textSecondary)
+
+                    Text("Calendar")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(AppTheme.textSecondary)
+
+                    Spacer()
+
+                    Image(systemName: appState.showSidebarCalendar ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundColor(AppTheme.textMuted)
+                }
+                .padding(.vertical, 6)
+                .padding(.horizontal, 8)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Toggle calendar")
+            .accessibilityValue(appState.showSidebarCalendar ? "expanded" : "collapsed")
+
+            if appState.showSidebarCalendar {
+                VStack(spacing: 6) {
+                    // Month navigation
+                    HStack {
+                        Button(action: { navigateMonth(by: -1) }) {
+                            Image(systemName: "chevron.left")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundColor(AppTheme.textSecondary)
+                                .frame(width: 22, height: 22)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Previous month")
+
+                        Spacer()
+
+                        Text(monthYearString)
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundColor(AppTheme.textPrimary)
+
+                        Spacer()
+
+                        if !isCurrentMonth {
+                            Button(action: { jumpToToday() }) {
+                                Text("Today")
+                                    .font(.system(size: 9, weight: .semibold))
+                                    .foregroundColor(AppTheme.accent)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(AppTheme.accent.opacity(0.1))
+                                    .clipShape(Capsule())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Jump to today")
+                        }
+
+                        Button(action: { navigateMonth(by: 1) }) {
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundColor(AppTheme.textSecondary)
+                                .frame(width: 22, height: 22)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Next month")
+                    }
+                    .padding(.horizontal, 4)
+
+                    // Day of week headers
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 0), count: 7), spacing: 0) {
+                        ForEach(dayOfWeekSymbols, id: \.self) { symbol in
+                            Text(symbol)
+                                .font(.system(size: 9, weight: .medium))
+                                .foregroundColor(AppTheme.textMuted)
+                                .frame(height: 16)
+                        }
+                    }
+
+                    // Day grid
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 0), count: 7), spacing: 2) {
+                        ForEach(daysInMonth) { cell in
+                            if cell.isBlank {
+                                Color.clear
+                                    .frame(height: 24)
+                            } else {
+                                CalendarDayButton(
+                                    day: cell.day,
+                                    isToday: todayDay == cell.day,
+                                    isSelected: selectedDay == cell.day,
+                                    hasConversations: conversationDays.contains(cell.day)
+                                ) {
+                                    selectDay(cell.day)
+                                }
+                            }
+                        }
+                    }
+
+                    // Active filter indicator
+                    if appState.calendarFilterDate != nil {
+                        Button(action: {
+                            withAnimation(.easeOut(duration: 0.2)) {
+                                appState.clearCalendarFilter()
+                            }
+                        }) {
+                            HStack(spacing: 4) {
+                                Image(systemName: "xmark.circle.fill")
+                                    .font(.system(size: 9))
+                                Text("Clear filter")
+                                    .font(.system(size: 10, weight: .medium))
+                            }
+                            .foregroundColor(AppTheme.accent)
+                            .padding(.vertical, 4)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Clear calendar filter")
+                    }
+                }
+                .padding(.horizontal, 8)
+                .padding(.bottom, 8)
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(AppTheme.bgCard.opacity(0.3))
+                )
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+    }
+
+    private func navigateMonth(by value: Int) {
+        withAnimation(.easeOut(duration: 0.2)) {
+            if let newDate = calendar.date(byAdding: .month, value: value, to: displayedMonth) {
+                displayedMonth = newDate
+            }
+        }
+    }
+
+    private func jumpToToday() {
+        withAnimation(.easeOut(duration: 0.2)) {
+            displayedMonth = Date()
+        }
+    }
+
+    private func selectDay(_ day: Int) {
+        var components = calendar.dateComponents([.year, .month], from: displayedMonth)
+        components.day = day
+        guard let date = calendar.date(from: components) else { return }
+
+        withAnimation(.easeOut(duration: 0.2)) {
+            if let current = appState.calendarFilterDate,
+               calendar.isDate(current, inSameDayAs: date) {
+                // Tapping the same day again clears the filter
+                appState.clearCalendarFilter()
+            } else {
+                appState.calendarFilterDate = date
+            }
+        }
+    }
+}
+
+// MARK: - Calendar Day Button
+
+private struct CalendarDayButton: View {
+    let day: Int
+    let isToday: Bool
+    let isSelected: Bool
+    let hasConversations: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 1) {
+                Text("\(day)")
+                    .font(.system(size: 10, weight: isToday ? .bold : (isSelected ? .semibold : .regular)))
+                    .foregroundColor(dayTextColor)
+
+                // Conversation indicator dot
+                Circle()
+                    .fill(hasConversations ? AppTheme.accent : Color.clear)
+                    .frame(width: 4, height: 4)
+            }
+            .frame(height: 24)
+            .frame(maxWidth: .infinity)
+            .background(
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(dayBackground)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Day \(day)\(isToday ? ", today" : "")\(hasConversations ? ", has conversations" : "")")
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+
+    private var dayTextColor: Color {
+        if isSelected {
+            return .white
+        } else if isToday {
+            return AppTheme.accent
+        } else {
+            return AppTheme.textSecondary
+        }
+    }
+
+    private var dayBackground: Color {
+        if isSelected {
+            return AppTheme.accent
+        } else if isToday {
+            return AppTheme.accent.opacity(0.1)
+        } else {
+            return .clear
+        }
+    }
+}
+
+// MARK: - Day Cell Model
+
+private struct DayCell: Identifiable {
+    let id: Int
+    let day: Int
+    let isBlank: Bool
 }

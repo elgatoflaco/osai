@@ -289,12 +289,48 @@ struct CodeBlock: Identifiable {
 @MainActor
 // MARK: - Conversation Template
 
-struct ConversationTemplate: Identifiable {
-    let id = UUID()
-    let name: String
-    let icon: String
-    let description: String
-    let initialMessage: String
+enum TemplateCategory: String, CaseIterable, Identifiable, Codable {
+    case all = "All"
+    case development = "Development"
+    case writing = "Writing"
+    case research = "Research"
+    case general = "General"
+
+    var id: String { rawValue }
+
+    var icon: String {
+        switch self {
+        case .all: return "square.grid.2x2"
+        case .development: return "chevron.left.forwardslash.chevron.right"
+        case .writing: return "pencil.line"
+        case .research: return "magnifyingglass"
+        case .general: return "sparkles"
+        }
+    }
+}
+
+struct ConversationTemplate: Identifiable, Codable, Equatable {
+    var id: UUID
+    var name: String
+    var icon: String
+    var description: String
+    var initialMessage: String
+    var isBuiltIn: Bool
+    var category: String
+
+    init(id: UUID = UUID(), name: String, icon: String, description: String, initialMessage: String, isBuiltIn: Bool = true, category: String = "General") {
+        self.id = id
+        self.name = name
+        self.icon = icon
+        self.description = description
+        self.initialMessage = initialMessage
+        self.isBuiltIn = isBuiltIn
+        self.category = category
+    }
+
+    static func == (lhs: ConversationTemplate, rhs: ConversationTemplate) -> Bool {
+        lhs.id == rhs.id
+    }
 }
 
 // MARK: - System Stats
@@ -860,6 +896,33 @@ class AppState: ObservableObject {
     @Published var unreadConversationIds: Set<String> = []
     @Published var mergeTargetId: String?
 
+    // MARK: - Calendar Filter
+    @Published var calendarFilterDate: Date?
+    @AppStorage("showSidebarCalendar") var showSidebarCalendar: Bool = false
+
+    /// Returns the set of day-of-month numbers that have conversations in the given month.
+    func conversationDatesForMonth(_ date: Date) -> Set<Int> {
+        let calendar = Calendar.current
+        guard let monthInterval = calendar.dateInterval(of: .month, for: date) else { return [] }
+        var days = Set<Int>()
+        for conversation in conversations {
+            let created = conversation.createdAt
+            if created >= monthInterval.start && created < monthInterval.end {
+                days.insert(calendar.component(.day, from: created))
+            }
+            if let lastMsg = conversation.messages.last?.timestamp,
+               lastMsg >= monthInterval.start && lastMsg < monthInterval.end {
+                days.insert(calendar.component(.day, from: lastMsg))
+            }
+        }
+        return days
+    }
+
+    /// Clears the calendar date filter.
+    func clearCalendarFilter() {
+        calendarFilterDate = nil
+    }
+
     // MARK: - Multi-Select Mode
     @Published var isMultiSelectMode: Bool = false
     @Published var selectedConversationIds: Set<String> = []
@@ -1140,39 +1203,122 @@ class AppState: ObservableObject {
             name: "Code Review",
             icon: "magnifyingglass.circle",
             description: "Get feedback on your code",
-            initialMessage: "Please review the following code for bugs, readability, and best practices. Suggest improvements:\n\n"
+            initialMessage: "Please review the following code for bugs, readability, and best practices. Suggest improvements:\n\n",
+            isBuiltIn: true,
+            category: "Development"
         ),
         ConversationTemplate(
             name: "Debug Issue",
             icon: "ladybug",
             description: "Track down and fix bugs",
-            initialMessage: "I'm running into a bug and need help debugging. Here's what's happening:\n\n"
+            initialMessage: "I'm running into a bug and need help debugging. Here's what's happening:\n\n",
+            isBuiltIn: true,
+            category: "Development"
         ),
         ConversationTemplate(
             name: "Explain Code",
             icon: "doc.text.magnifyingglass",
             description: "Understand how code works",
-            initialMessage: "Please explain the following code in detail, including what each part does and why:\n\n"
+            initialMessage: "Please explain the following code in detail, including what each part does and why:\n\n",
+            isBuiltIn: true,
+            category: "Development"
         ),
         ConversationTemplate(
             name: "Write Tests",
             icon: "checkmark.shield",
             description: "Generate test cases",
-            initialMessage: "Write comprehensive unit tests for the following code. Cover edge cases and happy paths:\n\n"
+            initialMessage: "Write comprehensive unit tests for the following code. Cover edge cases and happy paths:\n\n",
+            isBuiltIn: true,
+            category: "Development"
         ),
         ConversationTemplate(
             name: "Brainstorm",
             icon: "brain.head.profile",
             description: "Explore ideas and solutions",
-            initialMessage: "Let's brainstorm ideas. I'm working on the following and would love creative input:\n\n"
+            initialMessage: "Let's brainstorm ideas. I'm working on the following and would love creative input:\n\n",
+            isBuiltIn: true,
+            category: "General"
         ),
         ConversationTemplate(
             name: "Research",
             icon: "books.vertical",
             description: "Deep dive into a topic",
-            initialMessage: "I'd like to research and understand the following topic in depth:\n\n"
+            initialMessage: "I'd like to research and understand the following topic in depth:\n\n",
+            isBuiltIn: true,
+            category: "Research"
         ),
     ]
+
+    @Published var userTemplates: [ConversationTemplate] = [] {
+        didSet { persistUserTemplates() }
+    }
+
+    /// All templates combined: built-in + user-created
+    var allTemplates: [ConversationTemplate] {
+        conversationTemplates + userTemplates
+    }
+
+    /// Templates filtered by category
+    func templates(for category: TemplateCategory, searchQuery: String = "") -> [ConversationTemplate] {
+        var results = allTemplates
+        if category != .all {
+            results = results.filter { $0.category == category.rawValue }
+        }
+        if !searchQuery.isEmpty {
+            let query = searchQuery.lowercased()
+            results = results.filter {
+                $0.name.lowercased().contains(query) ||
+                $0.description.lowercased().contains(query) ||
+                $0.category.lowercased().contains(query)
+            }
+        }
+        return results
+    }
+
+    func saveUserTemplate(_ template: ConversationTemplate) {
+        var t = template
+        t.isBuiltIn = false
+        if let index = userTemplates.firstIndex(where: { $0.id == t.id }) {
+            userTemplates[index] = t
+        } else {
+            userTemplates.append(t)
+        }
+    }
+
+    func deleteUserTemplate(id: UUID) {
+        userTemplates.removeAll { $0.id == id }
+    }
+
+    func editUserTemplate(id: UUID, name: String, icon: String, description: String, initialMessage: String, category: String) {
+        if let index = userTemplates.firstIndex(where: { $0.id == id }) {
+            userTemplates[index].name = name
+            userTemplates[index].icon = icon
+            userTemplates[index].description = description
+            userTemplates[index].initialMessage = initialMessage
+            userTemplates[index].category = category
+        }
+    }
+
+    func duplicateTemplate(_ template: ConversationTemplate) {
+        var copy = template
+        copy.id = UUID()
+        copy.name = "\(template.name) Copy"
+        copy.isBuiltIn = false
+        userTemplates.append(copy)
+    }
+
+    private func persistUserTemplates() {
+        if let data = try? JSONEncoder().encode(userTemplates) {
+            UserDefaults.standard.set(data, forKey: "osai_user_templates")
+        }
+    }
+
+    func loadUserTemplates() {
+        if let data = UserDefaults.standard.data(forKey: "osai_user_templates"),
+           let templates = try? JSONDecoder().decode([ConversationTemplate].self, from: data) {
+            userTemplates = templates
+        }
+    }
 
     func startFromTemplate(_ template: ConversationTemplate) {
         let conv = Conversation(
@@ -1663,6 +1809,7 @@ class AppState: ObservableObject {
         gatewayRunning = status.running
         gatewayPID = status.pid
         loadSpending()
+        loadUserTemplates()
         isLoading = false
 
         // Auto-refresh every 30s

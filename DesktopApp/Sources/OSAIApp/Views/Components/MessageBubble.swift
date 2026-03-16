@@ -711,6 +711,120 @@ struct InlineImagesStack: View {
     }
 }
 
+// MARK: - Diff Helper
+
+enum DiffType {
+    case unchanged
+    case added
+    case removed
+}
+
+struct DiffLine: Identifiable {
+    let id = UUID()
+    let type: DiffType
+    let content: String
+}
+
+/// Computes a line-by-line diff between two strings using a simple LCS algorithm.
+func computeLineDiff(old: String, new: String) -> [DiffLine] {
+    let oldLines = old.components(separatedBy: "\n")
+    let newLines = new.components(separatedBy: "\n")
+    let m = oldLines.count
+    let n = newLines.count
+
+    // Build LCS table
+    var dp = Array(repeating: Array(repeating: 0, count: n + 1), count: m + 1)
+    for i in 1...max(m, 1) {
+        guard i <= m else { break }
+        for j in 1...max(n, 1) {
+            guard j <= n else { break }
+            if oldLines[i - 1] == newLines[j - 1] {
+                dp[i][j] = dp[i - 1][j - 1] + 1
+            } else {
+                dp[i][j] = max(dp[i - 1][j], dp[i][j - 1])
+            }
+        }
+    }
+
+    // Backtrack to produce diff
+    var result: [DiffLine] = []
+    var i = m, j = n
+    while i > 0 || j > 0 {
+        if i > 0 && j > 0 && oldLines[i - 1] == newLines[j - 1] {
+            result.append(DiffLine(type: .unchanged, content: oldLines[i - 1]))
+            i -= 1; j -= 1
+        } else if j > 0 && (i == 0 || dp[i][j - 1] >= dp[i - 1][j]) {
+            result.append(DiffLine(type: .added, content: newLines[j - 1]))
+            j -= 1
+        } else if i > 0 {
+            result.append(DiffLine(type: .removed, content: oldLines[i - 1]))
+            i -= 1
+        }
+    }
+
+    return result.reversed()
+}
+
+// MARK: - Diff View
+
+struct InlineDiffView: View {
+    let diffLines: [DiffLine]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(diffLines) { line in
+                HStack(spacing: 4) {
+                    Text(linePrefix(line.type))
+                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .foregroundColor(lineColor(line.type))
+                        .frame(width: 12, alignment: .center)
+
+                    Text(line.content.isEmpty ? " " : line.content)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundColor(lineTextColor(line.type))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding(.horizontal, 6)
+                .padding(.vertical, 1)
+                .background(lineBackground(line.type))
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+
+    private func linePrefix(_ type: DiffType) -> String {
+        switch type {
+        case .unchanged: return " "
+        case .added: return "+"
+        case .removed: return "-"
+        }
+    }
+
+    private func lineColor(_ type: DiffType) -> Color {
+        switch type {
+        case .unchanged: return AppTheme.textMuted
+        case .added: return AppTheme.success
+        case .removed: return AppTheme.error
+        }
+    }
+
+    private func lineTextColor(_ type: DiffType) -> Color {
+        switch type {
+        case .unchanged: return AppTheme.textSecondary
+        case .added: return AppTheme.success
+        case .removed: return AppTheme.error
+        }
+    }
+
+    private func lineBackground(_ type: DiffType) -> Color {
+        switch type {
+        case .unchanged: return .clear
+        case .added: return AppTheme.success.opacity(0.1)
+        case .removed: return AppTheme.error.opacity(0.1)
+        }
+    }
+}
+
 // MARK: - Message Bubble
 
 struct MessageBubble: View {
@@ -749,6 +863,8 @@ struct MessageBubble: View {
     /// Per-message raw markdown override: nil follows global, true/false overrides
     @State private var localRawMode: Bool?
     @State private var showEditHistory = false
+    @State private var showDiff = false
+    @State private var diffTargetRecordId: UUID?
     /// Pulse animation state for streaming border glow
     @State private var streamingPulse = false
     /// Hover state for timestamp (used in "hover" display mode)
@@ -1361,9 +1477,59 @@ struct MessageBubble: View {
             }
             .padding(.horizontal, 12)
             .padding(.top, 10)
-            .padding(.bottom, 8)
+            .padding(.bottom, 6)
+
+            // Show Diff toggle
+            HStack {
+                Toggle(isOn: $showDiff) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "arrow.left.arrow.right")
+                            .font(.system(size: 9))
+                        Text("Show Diff")
+                            .font(.system(size: 10, weight: .medium))
+                    }
+                    .foregroundColor(AppTheme.textSecondary)
+                }
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+                Spacer()
+            }
+            .padding(.horizontal, 12)
+            .padding(.bottom, 6)
 
             Divider().opacity(0.3)
+
+            // Diff view when a record is selected for comparison
+            if showDiff, let targetId = diffTargetRecordId,
+               let record = message.editHistory.first(where: { $0.id == targetId }) {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Text("Comparing with current")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundColor(AppTheme.accent)
+                        Spacer()
+                        Button(action: { diffTargetRecordId = nil }) {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 11))
+                                .foregroundColor(AppTheme.textMuted)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.top, 8)
+
+                    ScrollView {
+                        InlineDiffView(
+                            diffLines: computeLineDiff(old: record.content, new: message.content)
+                        )
+                        .padding(.horizontal, 6)
+                    }
+                    .frame(maxHeight: 200)
+                    .padding(.bottom, 4)
+                }
+
+                Divider().opacity(0.3)
+            }
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
@@ -1374,6 +1540,30 @@ struct MessageBubble: View {
                                     .font(.system(size: 9, weight: .medium))
                                     .foregroundColor(AppTheme.textMuted)
                                 Spacer()
+
+                                if showDiff {
+                                    Button(action: {
+                                        diffTargetRecordId = record.id
+                                    }) {
+                                        HStack(spacing: 3) {
+                                            Image(systemName: "arrow.left.arrow.right")
+                                                .font(.system(size: 8))
+                                            Text("Compare with current")
+                                                .font(.system(size: 9, weight: .medium))
+                                        }
+                                        .foregroundColor(diffTargetRecordId == record.id ? .white : AppTheme.accent)
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 2)
+                                        .background(
+                                            diffTargetRecordId == record.id
+                                                ? AppTheme.accent
+                                                : AppTheme.accent.opacity(0.1)
+                                        )
+                                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+
                                 if onRestoreEdit != nil {
                                     Button(action: {
                                         showEditHistory = false
@@ -1397,7 +1587,7 @@ struct MessageBubble: View {
                             Text(record.content)
                                 .font(.system(size: 11))
                                 .foregroundColor(AppTheme.textSecondary)
-                                .lineLimit(4)
+                                .lineLimit(showDiff && diffTargetRecordId == record.id ? nil : 4)
                                 .truncationMode(.tail)
                         }
                         .padding(.horizontal, 12)
@@ -1411,7 +1601,7 @@ struct MessageBubble: View {
             }
             .frame(maxHeight: 250)
         }
-        .frame(width: 300)
+        .frame(width: showDiff && diffTargetRecordId != nil ? 420 : 300)
         .padding(.bottom, 8)
         .background(
             RoundedRectangle(cornerRadius: 12)
@@ -1422,6 +1612,8 @@ struct MessageBubble: View {
                 )
                 .shadow(color: .black.opacity(0.2), radius: 12, y: 4)
         )
+        .animation(.easeInOut(duration: 0.2), value: showDiff)
+        .animation(.easeInOut(duration: 0.2), value: diffTargetRecordId)
     }
 
     private func editHistoryTimeString(_ date: Date) -> String {
