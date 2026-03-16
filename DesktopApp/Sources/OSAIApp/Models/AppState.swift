@@ -2856,6 +2856,25 @@ class AppState: ObservableObject {
 
         let streamState = StreamState()
 
+        // Build conversation context from previous messages (last 10 exchanges max)
+        var contextPrefix = ""
+        if let conv = activeConversation {
+            let previousMessages = conv.messages.dropLast(2) // exclude the user+assistant we just appended
+            if !previousMessages.isEmpty {
+                let recentMessages = previousMessages.suffix(20) // last 10 exchanges (20 messages)
+                var contextLines = [String]()
+                for msg in recentMessages {
+                    if msg.isStreaming { continue }
+                    let role = msg.role == .user ? "User" : "Assistant"
+                    let content = String(msg.content.prefix(500)) // truncate long messages
+                    contextLines.append("[\(role)]: \(content)")
+                }
+                if !contextLines.isEmpty {
+                    contextPrefix = "[CONVERSATION HISTORY — use this context to understand what the user is referring to]\n" + contextLines.joined(separator: "\n") + "\n[END HISTORY]\n\n"
+                }
+            }
+        }
+
         // Build CLI args — agent model takes priority, then selected model
         var args = [String]()
         if yoloMode {
@@ -2868,7 +2887,7 @@ class AppState: ObservableObject {
         } else if selectedModel != config.activeModel {
             args += ["--model", selectedModel]
         }
-        args.append(fullText)
+        args.append(contextPrefix + fullText)
 
         Task { @MainActor [weak self] in
             guard let self else { return }

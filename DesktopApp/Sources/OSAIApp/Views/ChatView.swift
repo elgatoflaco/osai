@@ -66,7 +66,7 @@ struct ChatView: View {
     @State private var infoTagInput: String = ""
     @State private var infoTagFocused: Bool = false
     @State private var budgetIndicatorDismissed: Bool = false
-    @State private var showConversationList: Bool = false
+    @State private var showConversationList: Bool = true
 
     private var filteredConversations: [Conversation] {
         var sorted = appState.workspaceFilteredConversations(appState.sortedConversations)
@@ -4280,7 +4280,7 @@ struct ChatView: View {
                     .background(AppTheme.bgSecondary.opacity(0.95))
                 }
             }
-            .frame(width: 220)
+            .frame(width: 180)
             .background(AppTheme.bgSecondary.opacity(0.3))
             .alert("Delete Conversation", isPresented: Binding(
                 get: { deleteConfirmConversation != nil },
@@ -4311,10 +4311,8 @@ struct ChatView: View {
                 Text("Restore snapshot \"\(snapshotRestoreConfirm?.name ?? "")\"? This will replace the current conversation state with \(snapshotRestoreConfirm?.messageCount ?? 0) messages from the snapshot.")
             }
 
-            Divider().background(AppTheme.borderGlass)
-
-        Divider().background(AppTheme.borderGlass)
         }
+        Divider().background(AppTheme.borderGlass)
         .sheet(isPresented: Binding(
             get: { showNewTagPopover != nil },
             set: { if !$0 { showNewTagPopover = nil } }
