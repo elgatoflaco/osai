@@ -297,6 +297,18 @@ struct ConversationTemplate: Identifiable {
     let initialMessage: String
 }
 
+// MARK: - System Stats
+
+struct SystemStats {
+    var cpuUsage: Double = 0.0
+    var memoryUsed: UInt64 = 0
+    var memoryTotal: UInt64 = 0
+    var diskUsed: UInt64 = 0
+    var diskTotal: UInt64 = 0
+    var uptime: TimeInterval = 0
+    var processCount: Int = 0
+}
+
 // MARK: - Dashboard Section
 
 enum DashboardSection: String, Codable, CaseIterable, Identifiable {
@@ -311,6 +323,7 @@ enum DashboardSection: String, Codable, CaseIterable, Identifiable {
     case recentActivity
     case recentConversations
     case systemHealth
+    case systemStatus
 
     var id: String { rawValue }
 
@@ -327,6 +340,7 @@ enum DashboardSection: String, Codable, CaseIterable, Identifiable {
         case .recentActivity: return "Recent Activity"
         case .recentConversations: return "Recent Conversations"
         case .systemHealth: return "System Health"
+        case .systemStatus: return "System Status"
         }
     }
 
@@ -343,11 +357,12 @@ enum DashboardSection: String, Codable, CaseIterable, Identifiable {
         case .recentActivity: return "clock.arrow.circlepath"
         case .recentConversations: return "bubble.left.and.text.bubble.right"
         case .systemHealth: return "server.rack"
+        case .systemStatus: return "cpu"
         }
     }
 
     static let defaultOrder: [DashboardSection] = [
-        .quickStart, .gateway, .stats, .spending, .recentConversations, .tokenStats, .analytics, .chatInsights, .performance, .recentActivity, .systemHealth
+        .quickStart, .gateway, .stats, .spending, .recentConversations, .tokenStats, .analytics, .chatInsights, .performance, .recentActivity, .systemHealth, .systemStatus
     ]
 }
 
@@ -955,6 +970,107 @@ class AppState: ObservableObject {
     @Published var showNotificationPanel: Bool = false
     @Published var selectedModel: String = "anthropic/claude-sonnet-4-20250514"
     @Published var showConversationInfo: Bool = false
+
+    // MARK: - System Status
+
+    @Published var systemStats: SystemStats?
+
+    func fetchSystemStats() -> SystemStats {
+        var stats = SystemStats()
+
+        // Memory info from ProcessInfo
+        let processInfo = ProcessInfo.processInfo
+        stats.memoryTotal = processInfo.physicalMemory
+        stats.uptime = processInfo.systemUptime
+
+        // CPU usage via top command
+        if let cpuOutput = runShellCommand("top -l 1 -n 0 | grep 'CPU usage'") {
+            // Parse: "CPU usage: 5.26% user, 10.52% sys, 84.21% idle"
+            let parts = cpuOutput.components(separatedBy: ",")
+            if let idlePart = parts.last,
+               let idleStr = idlePart.trimmingCharacters(in: .whitespaces)
+                   .components(separatedBy: "%").first?.trimmingCharacters(in: .whitespaces),
+               let idle = Double(idleStr) {
+                stats.cpuUsage = max(0, min(100, 100.0 - idle))
+            }
+        }
+
+        // Memory pressure via vm_stat
+        if let vmOutput = runShellCommand("vm_stat") {
+            let pageSize: UInt64 = 16384
+            var free: UInt64 = 0
+            var active: UInt64 = 0
+            var inactive: UInt64 = 0
+            var speculative: UInt64 = 0
+            var wired: UInt64 = 0
+            var compressed: UInt64 = 0
+
+            for line in vmOutput.components(separatedBy: "\n") {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                if trimmed.hasPrefix("Pages free:") {
+                    free = parseVMStatValue(trimmed) * pageSize
+                } else if trimmed.hasPrefix("Pages active:") {
+                    active = parseVMStatValue(trimmed) * pageSize
+                } else if trimmed.hasPrefix("Pages inactive:") {
+                    inactive = parseVMStatValue(trimmed) * pageSize
+                } else if trimmed.hasPrefix("Pages speculative:") {
+                    speculative = parseVMStatValue(trimmed) * pageSize
+                } else if trimmed.hasPrefix("Pages wired down:") {
+                    wired = parseVMStatValue(trimmed) * pageSize
+                } else if trimmed.hasPrefix("Pages occupied by compressor:") {
+                    compressed = parseVMStatValue(trimmed) * pageSize
+                }
+            }
+
+            let used = active + wired + compressed
+            let totalAccountedFor = free + active + inactive + speculative + wired + compressed
+            if totalAccountedFor > 0 {
+                stats.memoryUsed = used
+            }
+        }
+
+        // Disk space
+        if let attrs = try? FileManager.default.attributesOfFileSystem(forPath: "/") {
+            if let totalSize = attrs[.systemSize] as? UInt64,
+               let freeSize = attrs[.systemFreeSize] as? UInt64 {
+                stats.diskTotal = totalSize
+                stats.diskUsed = totalSize - freeSize
+            }
+        }
+
+        // Process count
+        if let psOutput = runShellCommand("ps -e | wc -l") {
+            let trimmed = psOutput.trimmingCharacters(in: .whitespacesAndNewlines)
+            stats.processCount = max(0, (Int(trimmed) ?? 1) - 1) // subtract header line
+        }
+
+        return stats
+    }
+
+    private func runShellCommand(_ command: String) -> String? {
+        let process = Process()
+        let pipe = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        process.arguments = ["-c", command]
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+            process.waitUntilExit()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            return String(data: data, encoding: .utf8)
+        } catch {
+            return nil
+        }
+    }
+
+    private func parseVMStatValue(_ line: String) -> UInt64 {
+        // Lines look like: "Pages free:    123456."
+        let parts = line.components(separatedBy: ":")
+        guard parts.count == 2 else { return 0 }
+        let numStr = parts[1].trimmingCharacters(in: .whitespaces).replacingOccurrences(of: ".", with: "")
+        return UInt64(numStr) ?? 0
+    }
 
     // MARK: - Agent Usage Tracking
 
@@ -3423,6 +3539,39 @@ class AppState: ObservableObject {
         case .plainText:
             return exportAsPlainText(conversation: conv, options: options)
         }
+    }
+
+    // MARK: - Search Scope
+
+    enum SearchScope: String, CaseIterable, Identifiable {
+        case currentChat = "currentChat"
+        case allChats = "allChats"
+
+        var id: String { rawValue }
+
+        var displayName: String {
+            switch self {
+            case .currentChat: return "Current Chat"
+            case .allChats: return "All Chats"
+            }
+        }
+    }
+
+    @Published var searchScope: SearchScope = .allChats
+
+    /// Search within the active conversation and return indices of matching messages
+    func searchInCurrentConversation(query: String) -> [Int] {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let conv = activeConversation else { return [] }
+        let lower = trimmed.lowercased()
+        var indices: [Int] = []
+        for (index, msg) in conv.messages.enumerated() {
+            guard msg.role == .user || msg.role == .assistant else { continue }
+            if msg.content.lowercased().contains(lower) {
+                indices.append(index)
+            }
+        }
+        return indices
     }
 
     // MARK: - Search Filters

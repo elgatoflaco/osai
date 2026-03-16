@@ -168,6 +168,13 @@ struct DashboardView: View {
             CollapsibleSection(section: .systemHealth) {
                 systemHealthContent
             }
+
+        case .systemStatus:
+            CollapsibleSection(section: .systemStatus) {
+                SystemStatusContent()
+                    .environmentObject(appState)
+            }
+            .frame(maxWidth: 800)
         }
     }
 
@@ -615,6 +622,223 @@ struct DashboardView: View {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .abbreviated
         return formatter.localizedString(for: date, relativeTo: Date())
+    }
+}
+
+// MARK: - System Status Widget
+
+struct SystemStatusContent: View {
+    @EnvironmentObject var appState: AppState
+    @State private var stats: SystemStats?
+    @State private var refreshTimer: Timer?
+
+    var body: some View {
+        GlassCard {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack {
+                    SectionHeader(title: "System Status", icon: "cpu")
+                    Spacer()
+                    if stats != nil {
+                        Button(action: { refreshStats() }) {
+                            Image(systemName: "arrow.clockwise")
+                                .font(.system(size: 11))
+                                .foregroundColor(AppTheme.textMuted)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Refresh system stats")
+                    }
+                }
+
+                if let stats = stats {
+                    LazyVGrid(columns: [
+                        GridItem(.flexible(), spacing: 10),
+                        GridItem(.flexible(), spacing: 10),
+                    ], spacing: 10) {
+                        // CPU Usage
+                        SystemStatCard(
+                            icon: "cpu",
+                            label: "CPU",
+                            value: String(format: "%.1f%%", stats.cpuUsage),
+                            progress: stats.cpuUsage / 100.0,
+                            color: stats.cpuUsage > 80 ? AppTheme.error :
+                                   stats.cpuUsage > 50 ? AppTheme.warning : AppTheme.success
+                        )
+
+                        // Memory Usage
+                        SystemStatCard(
+                            icon: "memorychip",
+                            label: "Memory",
+                            value: "\(formatBytes(stats.memoryUsed)) / \(formatBytes(stats.memoryTotal))",
+                            progress: stats.memoryTotal > 0 ? Double(stats.memoryUsed) / Double(stats.memoryTotal) : 0,
+                            color: memoryColor(used: stats.memoryUsed, total: stats.memoryTotal)
+                        )
+
+                        // Disk Space
+                        SystemStatCard(
+                            icon: "internaldrive",
+                            label: "Disk",
+                            value: "\(formatBytes(stats.diskUsed)) / \(formatBytes(stats.diskTotal))",
+                            progress: stats.diskTotal > 0 ? Double(stats.diskUsed) / Double(stats.diskTotal) : 0,
+                            color: diskColor(used: stats.diskUsed, total: stats.diskTotal)
+                        )
+
+                        // Uptime
+                        SystemStatCard(
+                            icon: "clock",
+                            label: "Uptime",
+                            value: formatUptime(stats.uptime),
+                            progress: nil,
+                            color: AppTheme.accent
+                        )
+
+                        // Process Count
+                        SystemStatCard(
+                            icon: "list.number",
+                            label: "Processes",
+                            value: "\(stats.processCount)",
+                            progress: nil,
+                            color: AppTheme.accent
+                        )
+                    }
+                } else {
+                    HStack {
+                        Spacer()
+                        ProgressView()
+                            .scaleEffect(0.7)
+                        Text("Loading system info...")
+                            .font(.system(size: 12))
+                            .foregroundColor(AppTheme.textMuted)
+                        Spacer()
+                    }
+                    .padding(.vertical, 8)
+                }
+            }
+        }
+        .onAppear {
+            refreshStats()
+            startTimer()
+        }
+        .onDisappear {
+            stopTimer()
+        }
+    }
+
+    private func refreshStats() {
+        DispatchQueue.global(qos: .utility).async {
+            let fetched = appState.fetchSystemStats()
+            DispatchQueue.main.async {
+                stats = fetched
+                appState.systemStats = fetched
+            }
+        }
+    }
+
+    private func startTimer() {
+        stopTimer()
+        refreshTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { _ in
+            refreshStats()
+        }
+    }
+
+    private func stopTimer() {
+        refreshTimer?.invalidate()
+        refreshTimer = nil
+    }
+
+    private func formatBytes(_ bytes: UInt64) -> String {
+        let gb = Double(bytes) / 1_073_741_824
+        if gb >= 100 {
+            return String(format: "%.0f GB", gb)
+        } else if gb >= 10 {
+            return String(format: "%.1f GB", gb)
+        } else {
+            return String(format: "%.2f GB", gb)
+        }
+    }
+
+    private func formatUptime(_ interval: TimeInterval) -> String {
+        let totalSeconds = Int(interval)
+        let days = totalSeconds / 86400
+        let hours = (totalSeconds % 86400) / 3600
+        let minutes = (totalSeconds % 3600) / 60
+
+        if days > 0 {
+            return "\(days)d \(hours)h \(minutes)m"
+        } else if hours > 0 {
+            return "\(hours)h \(minutes)m"
+        } else {
+            return "\(minutes)m"
+        }
+    }
+
+    private func memoryColor(used: UInt64, total: UInt64) -> Color {
+        guard total > 0 else { return AppTheme.success }
+        let ratio = Double(used) / Double(total)
+        if ratio > 0.85 { return AppTheme.error }
+        if ratio > 0.65 { return AppTheme.warning }
+        return AppTheme.success
+    }
+
+    private func diskColor(used: UInt64, total: UInt64) -> Color {
+        guard total > 0 else { return AppTheme.success }
+        let ratio = Double(used) / Double(total)
+        if ratio > 0.9 { return AppTheme.error }
+        if ratio > 0.75 { return AppTheme.warning }
+        return AppTheme.success
+    }
+}
+
+struct SystemStatCard: View {
+    let icon: String
+    let label: String
+    let value: String
+    let progress: Double?
+    let color: Color
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: icon)
+                    .font(.system(size: 12))
+                    .foregroundColor(color)
+                Text(label)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(AppTheme.textSecondary)
+                Spacer()
+            }
+
+            Text(value)
+                .font(.system(size: 13, weight: .bold, design: .monospaced))
+                .foregroundColor(AppTheme.textPrimary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+
+            if let progress = progress {
+                GeometryReader { geometry in
+                    ZStack(alignment: .leading) {
+                        RoundedRectangle(cornerRadius: 3)
+                            .fill(AppTheme.bgSecondary)
+                            .frame(height: 6)
+
+                        RoundedRectangle(cornerRadius: 3)
+                            .fill(color)
+                            .frame(width: geometry.size.width * min(1.0, CGFloat(progress)), height: 6)
+                    }
+                }
+                .frame(height: 6)
+
+                Text(String(format: "%.0f%%", progress * 100))
+                    .font(.system(size: 9, weight: .medium, design: .monospaced))
+                    .foregroundColor(AppTheme.textMuted)
+            }
+        }
+        .padding(10)
+        .background(AppTheme.bgGlass)
+        .clipShape(RoundedRectangle(cornerRadius: AppTheme.cornerRadiusSm))
+        .overlay(
+            RoundedRectangle(cornerRadius: AppTheme.cornerRadiusSm)
+                .stroke(AppTheme.borderGlass, lineWidth: 0.5)
+        )
     }
 }
 

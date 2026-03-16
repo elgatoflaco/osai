@@ -133,12 +133,37 @@ struct ChatView: View {
     }
 
     private var conversationMatches: [String] {
-        guard !searchInConversation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+        guard !searchInConversation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [] }
+
+        if appState.searchScope == .currentChat {
+            guard let conv = appState.activeConversation else { return [] }
+            let query = searchInConversation.lowercased()
+            return conv.messages
+                .filter { $0.content.lowercased().contains(query) }
+                .map { $0.id }
+        } else {
+            // All Chats mode: return matching message IDs across all conversations
+            let results = appState.searchAllConversations(query: searchInConversation)
+            return results.flatMap { $0.matches.map { $0.id } }
+        }
+    }
+
+    /// Set of message IDs that match the current in-conversation search (for highlight)
+    private var currentChatMatchIds: Set<String> {
+        guard appState.searchScope == .currentChat,
+              !searchInConversation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               let conv = appState.activeConversation else { return [] }
         let query = searchInConversation.lowercased()
-        return conv.messages
+        return Set(conv.messages
             .filter { $0.content.lowercased().contains(query) }
-            .map { $0.id }
+            .map { $0.id })
+    }
+
+    /// The message ID of the currently focused match (for brighter highlight)
+    private var currentFocusedMatchId: String? {
+        let matches = conversationMatches
+        guard !matches.isEmpty, currentMatchIndex < matches.count else { return nil }
+        return matches[currentMatchIndex]
     }
 
     private func contextPressureColor(_ percent: Int) -> Color {
@@ -612,64 +637,84 @@ struct ChatView: View {
 
                 // Conversation search bar
                 if showConversationSearch {
-                    HStack(spacing: 8) {
-                        Image(systemName: "magnifyingglass")
-                            .font(.system(size: 11))
-                            .foregroundColor(AppTheme.textMuted)
-
-                        TextField("Find in conversation...", text: $searchInConversation)
-                            .textFieldStyle(.plain)
-                            .font(.system(size: 12))
-                            .foregroundColor(AppTheme.textPrimary)
-                            .onSubmit {
-                                if !conversationMatches.isEmpty {
-                                    currentMatchIndex = (currentMatchIndex + 1) % conversationMatches.count
-                                }
-                            }
-
-                        if !searchInConversation.isEmpty {
-                            Text(conversationMatches.isEmpty ? "0 of 0" : "\(currentMatchIndex + 1) of \(conversationMatches.count)")
-                                .font(.system(size: 11, design: .monospaced))
+                    VStack(spacing: 0) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "magnifyingglass")
+                                .font(.system(size: 11))
                                 .foregroundColor(AppTheme.textMuted)
 
-                            Button(action: {
-                                if !conversationMatches.isEmpty {
-                                    currentMatchIndex = (currentMatchIndex - 1 + conversationMatches.count) % conversationMatches.count
+                            TextField(appState.searchScope == .currentChat ? "Find in conversation..." : "Search all chats...", text: $searchInConversation)
+                                .textFieldStyle(.plain)
+                                .font(.system(size: 12))
+                                .foregroundColor(AppTheme.textPrimary)
+                                .onSubmit {
+                                    if !conversationMatches.isEmpty {
+                                        currentMatchIndex = (currentMatchIndex + 1) % conversationMatches.count
+                                    }
                                 }
-                            }) {
-                                Image(systemName: "chevron.up")
-                                    .font(.system(size: 10, weight: .semibold))
-                                    .foregroundColor(conversationMatches.isEmpty ? AppTheme.textMuted.opacity(0.4) : AppTheme.textSecondary)
+
+                            if !searchInConversation.isEmpty {
+                                Text(conversationMatches.isEmpty ? "0 of 0" : "\(currentMatchIndex + 1) of \(conversationMatches.count)")
+                                    .font(.system(size: 11, design: .monospaced))
+                                    .foregroundColor(AppTheme.textMuted)
+
+                                Button(action: {
+                                    if !conversationMatches.isEmpty {
+                                        currentMatchIndex = (currentMatchIndex - 1 + conversationMatches.count) % conversationMatches.count
+                                    }
+                                }) {
+                                    Image(systemName: "chevron.up")
+                                        .font(.system(size: 10, weight: .semibold))
+                                        .foregroundColor(conversationMatches.isEmpty ? AppTheme.textMuted.opacity(0.4) : AppTheme.textSecondary)
+                                }
+                                .buttonStyle(.plain)
+                                .disabled(conversationMatches.isEmpty)
+
+                                Button(action: {
+                                    if !conversationMatches.isEmpty {
+                                        currentMatchIndex = (currentMatchIndex + 1) % conversationMatches.count
+                                    }
+                                }) {
+                                    Image(systemName: "chevron.down")
+                                        .font(.system(size: 10, weight: .semibold))
+                                        .foregroundColor(conversationMatches.isEmpty ? AppTheme.textMuted.opacity(0.4) : AppTheme.textSecondary)
+                                }
+                                .buttonStyle(.plain)
+                                .disabled(conversationMatches.isEmpty)
                             }
-                            .buttonStyle(.plain)
-                            .disabled(conversationMatches.isEmpty)
 
                             Button(action: {
-                                if !conversationMatches.isEmpty {
-                                    currentMatchIndex = (currentMatchIndex + 1) % conversationMatches.count
-                                }
+                                showConversationSearch = false
+                                searchInConversation = ""
+                                currentMatchIndex = 0
+                                appState.searchScope = .allChats
                             }) {
-                                Image(systemName: "chevron.down")
+                                Image(systemName: "xmark")
                                     .font(.system(size: 10, weight: .semibold))
-                                    .foregroundColor(conversationMatches.isEmpty ? AppTheme.textMuted.opacity(0.4) : AppTheme.textSecondary)
+                                    .foregroundColor(AppTheme.textMuted)
                             }
                             .buttonStyle(.plain)
-                            .disabled(conversationMatches.isEmpty)
                         }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
 
-                        Button(action: {
-                            showConversationSearch = false
-                            searchInConversation = ""
-                            currentMatchIndex = 0
-                        }) {
-                            Image(systemName: "xmark")
-                                .font(.system(size: 10, weight: .semibold))
-                                .foregroundColor(AppTheme.textMuted)
+                        // Search scope segmented control
+                        HStack(spacing: 0) {
+                            Picker("", selection: $appState.searchScope) {
+                                ForEach(AppState.SearchScope.allCases) { scope in
+                                    Text(scope.displayName).tag(scope)
+                                }
+                            }
+                            .pickerStyle(.segmented)
+                            .frame(maxWidth: 240)
+                            .onChange(of: appState.searchScope) { _, _ in
+                                currentMatchIndex = 0
+                            }
+                            Spacer()
                         }
-                        .buttonStyle(.plain)
+                        .padding(.horizontal, 12)
+                        .padding(.bottom, 6)
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
                     .background(AppTheme.bgCard.opacity(0.6))
                     .overlay(
                         Rectangle()
@@ -846,8 +891,28 @@ struct ChatView: View {
                             .onChange(of: currentMatchIndex) { _, newIndex in
                                 let matches = conversationMatches
                                 if newIndex < matches.count {
+                                    let targetId = matches[newIndex]
+                                    if appState.searchScope == .allChats {
+                                        // Find which conversation contains this message and switch to it
+                                        let results = appState.searchAllConversations(query: searchInConversation)
+                                        for result in results {
+                                            if result.matches.contains(where: { $0.id == targetId }) {
+                                                if appState.activeConversation?.id != result.conversation.id {
+                                                    appState.activeConversation = result.conversation
+                                                    // Delay scroll to let conversation load
+                                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                                                        withAnimation(.easeOut(duration: 0.3)) {
+                                                            proxy.scrollTo(targetId, anchor: .center)
+                                                        }
+                                                    }
+                                                    return
+                                                }
+                                                break
+                                            }
+                                        }
+                                    }
                                     withAnimation(.easeOut(duration: 0.3)) {
-                                        proxy.scrollTo(matches[newIndex], anchor: .center)
+                                        proxy.scrollTo(targetId, anchor: .center)
                                     }
                                 }
                             }
@@ -1118,12 +1183,33 @@ struct ChatView: View {
                     withAnimation(.easeInOut(duration: 0.15)) {
                         showConversationSearch.toggle()
                     }
-                    if !showConversationSearch {
+                    if showConversationSearch {
+                        appState.searchScope = .currentChat
+                    } else {
                         searchInConversation = ""
                         currentMatchIndex = 0
+                        appState.searchScope = .allChats
                     }
                 }
                 .keyboardShortcut("f", modifiers: .command)
+                .hidden()
+
+                // Cmd+G: Next match in current chat search
+                Button("") {
+                    if showConversationSearch && !conversationMatches.isEmpty {
+                        currentMatchIndex = (currentMatchIndex + 1) % conversationMatches.count
+                    }
+                }
+                .keyboardShortcut("g", modifiers: .command)
+                .hidden()
+
+                // Cmd+Shift+G: Previous match in current chat search
+                Button("") {
+                    if showConversationSearch && !conversationMatches.isEmpty {
+                        currentMatchIndex = (currentMatchIndex - 1 + conversationMatches.count) % conversationMatches.count
+                    }
+                }
+                .keyboardShortcut("g", modifiers: [.command, .shift])
                 .hidden()
 
                 // Cmd+Shift+F: Toggle focus/zen mode
@@ -1650,6 +1736,17 @@ struct ChatView: View {
             showTimestamp: showTimestamp
         )
         .id(msg.id)
+        .background(
+            Group {
+                if showConversationSearch && appState.searchScope == .currentChat && currentChatMatchIds.contains(msg.id) {
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(msg.id == currentFocusedMatchId
+                              ? Color.yellow.opacity(0.35)
+                              : Color.yellow.opacity(0.15))
+                        .animation(.easeInOut(duration: 0.2), value: currentFocusedMatchId)
+                }
+            }
+        )
         .transition(.asymmetric(
             insertion: .move(edge: .bottom).combined(with: .opacity),
             removal: .opacity

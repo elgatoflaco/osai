@@ -464,6 +464,127 @@ struct ModelSelectorPopover: View {
     }
 }
 
+// MARK: - Markdown Formatting Toolbar
+
+struct MarkdownToolbar: View {
+    @Binding var text: String
+    var isVisible: Bool
+
+    @State private var hoveredButton: String?
+
+    private struct ToolbarItem {
+        let id: String
+        let icon: String
+        let label: String
+        let shortcut: String?
+    }
+
+    private let items: [ToolbarItem] = [
+        ToolbarItem(id: "bold", icon: "bold", label: "Bold", shortcut: "B"),
+        ToolbarItem(id: "italic", icon: "italic", label: "Italic", shortcut: "I"),
+        ToolbarItem(id: "code", icon: "chevron.left.forwardslash.chevron.right", label: "Code", shortcut: "E"),
+        ToolbarItem(id: "codeblock", icon: "terminal", label: "Code Block", shortcut: nil),
+        ToolbarItem(id: "link", icon: "link", label: "Link", shortcut: nil),
+        ToolbarItem(id: "bullet", icon: "list.bullet", label: "Bullet List", shortcut: nil),
+        ToolbarItem(id: "numbered", icon: "list.number", label: "Numbered List", shortcut: nil),
+        ToolbarItem(id: "heading", icon: "number", label: "Heading", shortcut: nil),
+    ]
+
+    var body: some View {
+        if isVisible {
+            HStack(spacing: 2) {
+                ForEach(items, id: \.id) { item in
+                    Button(action: { performAction(item.id) }) {
+                        Image(systemName: item.icon)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(hoveredButton == item.id ? AppTheme.accent : AppTheme.textMuted)
+                            .frame(width: 26, height: 22)
+                            .background(hoveredButton == item.id ? AppTheme.accent.opacity(0.1) : Color.clear)
+                            .clipShape(RoundedRectangle(cornerRadius: 5))
+                    }
+                    .buttonStyle(.plain)
+                    .onHover { isHovered in
+                        hoveredButton = isHovered ? item.id : nil
+                    }
+                    .help(item.shortcut != nil ? "\(item.label) (\u{2318}\(item.shortcut!))" : item.label)
+                    .accessibilityLabel(item.label)
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 4)
+            .background(.ultraThinMaterial)
+            .background(AppTheme.bgGlass.opacity(0.8))
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .overlay(
+                RoundedRectangle(cornerRadius: 10)
+                    .stroke(AppTheme.borderGlass.opacity(0.5), lineWidth: 0.5)
+            )
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+        }
+    }
+
+    private func performAction(_ id: String) {
+        switch id {
+        case "bold": insertBold()
+        case "italic": insertItalic()
+        case "code": insertCode()
+        case "codeblock": insertCodeBlock()
+        case "link": insertLink()
+        case "bullet": insertList()
+        case "numbered": insertNumberedList()
+        case "heading": insertHeading()
+        default: break
+        }
+    }
+
+    // MARK: - Markdown insertion helpers
+
+    private func wrapSelection(prefix: String, suffix: String, placeholder: String) {
+        if text.isEmpty {
+            text = prefix + placeholder + suffix
+        } else {
+            text += prefix + placeholder + suffix
+        }
+    }
+
+    private func insertBold() {
+        wrapSelection(prefix: "**", suffix: "**", placeholder: "bold text")
+    }
+
+    private func insertItalic() {
+        wrapSelection(prefix: "_", suffix: "_", placeholder: "italic text")
+    }
+
+    private func insertCode() {
+        wrapSelection(prefix: "`", suffix: "`", placeholder: "code")
+    }
+
+    private func insertCodeBlock() {
+        let newline = text.isEmpty || text.hasSuffix("\n") ? "" : "\n"
+        text += newline + "```\n" + "code here" + "\n```"
+    }
+
+    private func insertLink() {
+        wrapSelection(prefix: "[", suffix: "](url)", placeholder: "link text")
+    }
+
+    private func insertList() {
+        let newline = text.isEmpty || text.hasSuffix("\n") ? "" : "\n"
+        text += newline + "- item"
+    }
+
+    private func insertNumberedList() {
+        let newline = text.isEmpty || text.hasSuffix("\n") ? "" : "\n"
+        text += newline + "1. item"
+    }
+
+    private func insertHeading() {
+        let newline = text.isEmpty || text.hasSuffix("\n") ? "" : "\n"
+        text += newline + "# Heading"
+    }
+}
+
 // MARK: - ChatInputBar
 
 struct ChatInputBar: View {
@@ -536,6 +657,11 @@ struct ChatInputBar: View {
                     .padding(.bottom, 6)
                 }
             }
+
+            // Markdown formatting toolbar
+            MarkdownToolbar(text: $text, isVisible: showMarkdownToolbar)
+                .animation(.easeInOut(duration: 0.2), value: showMarkdownToolbar)
+                .padding(.bottom, showMarkdownToolbar ? 4 : 0)
 
             HStack(alignment: .bottom, spacing: 10) {
                 ModelSelectorButton()
@@ -662,6 +788,58 @@ struct ChatInputBar: View {
             PromptTemplateManagerSheet()
                 .environmentObject(appState)
         }
+        .background(
+            // Keyboard shortcuts for markdown formatting
+            Group {
+                Button("") { markdownBold() }
+                    .keyboardShortcut("b", modifiers: .command)
+                    .frame(width: 0, height: 0)
+                    .opacity(0)
+
+                Button("") { markdownItalic() }
+                    .keyboardShortcut("i", modifiers: .command)
+                    .frame(width: 0, height: 0)
+                    .opacity(0)
+
+                Button("") { markdownCode() }
+                    .keyboardShortcut("e", modifiers: .command)
+                    .frame(width: 0, height: 0)
+                    .opacity(0)
+            }
+        )
+    }
+
+    // MARK: - Markdown keyboard shortcut actions
+
+    private func markdownBold() {
+        guard isFocused else { return }
+        if text.isEmpty {
+            text = "**bold text**"
+        } else {
+            text += "**bold text**"
+        }
+    }
+
+    private func markdownItalic() {
+        guard isFocused else { return }
+        if text.isEmpty {
+            text = "_italic text_"
+        } else {
+            text += "_italic text_"
+        }
+    }
+
+    private func markdownCode() {
+        guard isFocused else { return }
+        if text.isEmpty {
+            text = "`code`"
+        } else {
+            text += "`code`"
+        }
+    }
+
+    private var showMarkdownToolbar: Bool {
+        isFocused || !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private var canSubmit: Bool {
