@@ -1,4 +1,203 @@
 import SwiftUI
+import AppKit
+import Quartz
+
+// MARK: - Image Path Detection
+
+private let imageExtensions: Set<String> = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "tiff", "heic"]
+
+/// Extracts image file paths from message text.
+/// Matches absolute paths (/path/to/image.png) and file:// URLs.
+private func extractImagePaths(from text: String) -> [String] {
+    var paths: [String] = []
+    // Match file:///... URLs ending with image extension
+    let fileURLPattern = #"file:///[^\s\"\]\)>]+"#
+    // Match absolute paths like /Users/.../screenshot.png
+    let absPathPattern = #"(?<!\w)/(?:Users|tmp|var|private)[^\s\"\]\)>]*\.(?:png|jpg|jpeg|gif|webp|bmp|tiff|heic)"#
+    for pattern in [fileURLPattern, absPathPattern] {
+        if let regex = try? NSRegularExpression(pattern: pattern, options: []) {
+            let range = NSRange(text.startIndex..., in: text)
+            for match in regex.matches(in: text, range: range) {
+                if let r = Range(match.range, in: text) {
+                    var path = String(text[r])
+                    if path.hasPrefix("file://") {
+                        path = path.replacingOccurrences(of: "file://", with: "")
+                    }
+                    // Remove URL-encoded characters
+                    if let decoded = path.removingPercentEncoding {
+                        path = decoded
+                    }
+                    let ext = (path as NSString).pathExtension.lowercased()
+                    if imageExtensions.contains(ext) && !paths.contains(path) {
+                        paths.append(path)
+                    }
+                }
+            }
+        }
+    }
+    return paths
+}
+
+// MARK: - Quick Look Coordinator
+
+final class QLCoordinator: NSObject, QLPreviewPanelDataSource {
+    var url: URL?
+
+    func numberOfPreviewItems(in panel: QLPreviewPanel!) -> Int {
+        return url != nil ? 1 : 0
+    }
+
+    func previewPanel(_ panel: QLPreviewPanel!, previewItemAt index: Int) -> (any QLPreviewItem)! {
+        return url as? QLPreviewItem
+    }
+}
+
+// MARK: - Inline Image View
+
+struct InlineImageView: View {
+    let path: String
+    @State private var nsImage: NSImage?
+    @State private var showFullSize = false
+    @State private var loadFailed = false
+    @State private var zoomScale: CGFloat = 1.0
+
+    private static let qlCoordinator = QLCoordinator()
+
+    var body: some View {
+        Group {
+            if let nsImage = nsImage {
+                Image(nsImage: nsImage)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(maxWidth: 400)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(AppTheme.borderGlass, lineWidth: 1)
+                    )
+                    .shadow(color: .black.opacity(0.1), radius: 4, y: 2)
+                    .onTapGesture {
+                        showFullSize = true
+                    }
+                    .gesture(TapGesture(count: 2).onEnded {
+                        openQuickLook()
+                    })
+                    .help("Click to enlarge. Double-click for Quick Look.")
+            } else if loadFailed {
+                // Placeholder for missing image
+                HStack(spacing: 6) {
+                    Image(systemName: "photo.badge.exclamationmark")
+                        .font(.system(size: 14))
+                        .foregroundColor(AppTheme.textMuted)
+                    Text((path as NSString).lastPathComponent)
+                        .font(.system(size: 12))
+                        .foregroundColor(AppTheme.textMuted)
+                        .lineLimit(1)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(AppTheme.bgCard.opacity(0.5))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(AppTheme.borderGlass, lineWidth: 0.5)
+                )
+            }
+        }
+        .onAppear { loadImage() }
+        .sheet(isPresented: $showFullSize) {
+            imageOverlay
+        }
+    }
+
+    private func loadImage() {
+        let url = URL(fileURLWithPath: path)
+        if let img = NSImage(contentsOf: url) {
+            nsImage = img
+        } else {
+            loadFailed = true
+        }
+    }
+
+    private func openQuickLook() {
+        let url = URL(fileURLWithPath: path)
+        guard FileManager.default.fileExists(atPath: path) else { return }
+        Self.qlCoordinator.url = url
+        if let panel = QLPreviewPanel.shared() {
+            panel.dataSource = Self.qlCoordinator
+            panel.makeKeyAndOrderFront(nil)
+            panel.reloadData()
+        }
+    }
+
+    @ViewBuilder
+    private var imageOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.85).ignoresSafeArea()
+
+            if let nsImage = nsImage {
+                ScrollView([.horizontal, .vertical], showsIndicators: true) {
+                    Image(nsImage: nsImage)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .scaleEffect(zoomScale)
+                        .frame(
+                            minWidth: 200, maxWidth: .infinity,
+                            minHeight: 200, maxHeight: .infinity
+                        )
+                }
+                .gesture(
+                    MagnificationGesture()
+                        .onChanged { value in
+                            zoomScale = max(0.5, min(5.0, value))
+                        }
+                )
+            }
+
+            // Controls overlay
+            VStack {
+                HStack {
+                    Spacer()
+                    HStack(spacing: 12) {
+                        Button(action: { zoomScale = max(0.5, zoomScale - 0.25) }) {
+                            Image(systemName: "minus.magnifyingglass")
+                                .font(.system(size: 14))
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundColor(.white.opacity(0.8))
+
+                        Text("\(Int(zoomScale * 100))%")
+                            .font(.system(size: 12, weight: .medium, design: .monospaced))
+                            .foregroundColor(.white.opacity(0.6))
+
+                        Button(action: { zoomScale = min(5.0, zoomScale + 0.25) }) {
+                            Image(systemName: "plus.magnifyingglass")
+                                .font(.system(size: 14))
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundColor(.white.opacity(0.8))
+
+                        Divider().frame(height: 16)
+
+                        Button(action: { showFullSize = false }) {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 18))
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundColor(.white.opacity(0.8))
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(.ultraThinMaterial)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .padding()
+                }
+                Spacer()
+            }
+        }
+        .frame(minWidth: 500, minHeight: 400)
+    }
+}
 
 // MARK: - Message Bubble
 
@@ -87,6 +286,17 @@ struct MessageBubble: View {
                             StreamingPlaceholder(hasActivities: !message.activities.isEmpty)
                         } else if !message.content.isEmpty {
                             ResponseView(text: message.content, isStreaming: message.isStreaming)
+                        }
+
+                        // Inline images detected in message content
+                        let imagePaths = extractImagePaths(from: message.content)
+                        if !imagePaths.isEmpty {
+                            VStack(alignment: .leading, spacing: 8) {
+                                ForEach(imagePaths, id: \.self) { path in
+                                    InlineImageView(path: path)
+                                }
+                            }
+                            .padding(.top, 4)
                         }
                     }
 
@@ -1040,7 +1250,12 @@ struct StreamingPlaceholder: View {
                 Text("Working...").font(.system(size: 12)).foregroundColor(AppTheme.textMuted)
             }
         } else {
-            TypingIndicator()
+            VStack(alignment: .leading, spacing: 6) {
+                TypingIndicator()
+                Text("Agent is thinking...")
+                    .font(.system(size: 11))
+                    .foregroundColor(AppTheme.textMuted)
+            }
         }
     }
 }
@@ -1048,17 +1263,125 @@ struct StreamingPlaceholder: View {
 struct TypingIndicator: View {
     @State private var phase: Int = 0
     var body: some View {
-        HStack(spacing: 5) {
+        HStack(spacing: 6) {
             ForEach(0..<3, id: \.self) { i in
-                Circle().fill(AppTheme.accent).frame(width: 6, height: 6)
-                    .scaleEffect(phase == i ? 1.2 : 0.7)
-                    .opacity(phase == i ? 1.0 : 0.35)
+                Circle()
+                    .fill(AppTheme.accent)
+                    .frame(width: 7, height: 7)
+                    .scaleEffect(phase == i ? 1.3 : 0.6)
+                    .opacity(phase == i ? 1.0 : 0.3)
+                    .offset(y: phase == i ? -3 : 0)
+                    .animation(
+                        .easeInOut(duration: 0.35).delay(Double(i) * 0.12),
+                        value: phase
+                    )
             }
         }
-        .padding(.vertical, 4)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(AppTheme.bgCard.opacity(0.6))
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(AppTheme.borderGlass, lineWidth: 0.5))
         .onAppear {
-            Timer.scheduledTimer(withTimeInterval: 0.35, repeats: true) { _ in
-                withAnimation(.easeInOut(duration: 0.25)) { phase = (phase + 1) % 3 }
+            Timer.scheduledTimer(withTimeInterval: 0.45, repeats: true) { _ in
+                withAnimation { phase = (phase + 1) % 3 }
+            }
+        }
+    }
+}
+
+// MARK: - Streaming Status Bar
+
+struct StreamingStatusBar: View {
+    let activities: [ActivityItem]
+    let startTime: Date?
+    @State private var shimmerOffset: CGFloat = -200
+    @State private var elapsed: TimeInterval = 0
+    @State private var timer: Timer?
+
+    private var statusText: String {
+        if let active = activities.last(where: { !$0.isComplete }) {
+            switch active.type {
+            case .toolCall:
+                return "Running tool: \(active.label)"
+            case .mcpLoading:
+                return "Loading: \(active.label)"
+            case .thinking:
+                return "Thinking..."
+            case .agentRoute:
+                return "Routing to \(active.label)..."
+            case .status:
+                return active.label
+            }
+        }
+        if let last = activities.last {
+            if last.type == .toolCall && last.isComplete {
+                return "Analyzing results..."
+            }
+        }
+        return "Thinking..."
+    }
+
+    private var elapsedString: String {
+        let totalSeconds = Int(elapsed)
+        let minutes = totalSeconds / 60
+        let seconds = totalSeconds % 60
+        return "\(minutes):\(String(format: "%02d", seconds))"
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(statusText)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(AppTheme.textMuted)
+
+            Spacer()
+
+            Text(elapsedString)
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundColor(AppTheme.textMuted.opacity(0.7))
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(AppTheme.bgCard.opacity(0.5))
+                .overlay(
+                    LinearGradient(
+                        colors: [
+                            Color.clear,
+                            AppTheme.accent.opacity(0.08),
+                            Color.clear
+                        ],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                    .frame(width: 120)
+                    .offset(x: shimmerOffset)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                )
+        )
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(AppTheme.borderGlass, lineWidth: 0.5))
+        .padding(.leading, 38)
+        .onAppear {
+            startTimers()
+        }
+        .onDisappear {
+            timer?.invalidate()
+            timer = nil
+        }
+    }
+
+    private func startTimers() {
+        withAnimation(.linear(duration: 2.0).repeatForever(autoreverses: false)) {
+            shimmerOffset = 400
+        }
+        if let start = startTime {
+            elapsed = Date().timeIntervalSince(start)
+        }
+        timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
+            if let start = startTime {
+                elapsed = Date().timeIntervalSince(start)
             }
         }
     }

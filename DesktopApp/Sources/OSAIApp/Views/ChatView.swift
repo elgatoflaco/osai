@@ -1,5 +1,6 @@
 import SwiftUI
 import UniformTypeIdentifiers
+import AppKit
 
 struct ChatView: View {
     @EnvironmentObject var appState: AppState
@@ -858,6 +859,16 @@ struct ChatView: View {
                                     }
                                     .animation(.spring(response: 0.35, dampingFraction: 0.85), value: conv.messages.count)
 
+                                    // Streaming status bar with elapsed timer
+                                    if let lastMsg = conv.messages.last, lastMsg.isStreaming, !lastMsg.content.isEmpty || !lastMsg.activities.isEmpty {
+                                        StreamingStatusBar(
+                                            activities: lastMsg.activities,
+                                            startTime: appState.streamingStartTime
+                                        )
+                                        .transition(.opacity.combined(with: .move(edge: .bottom)))
+                                        .animation(.easeInOut(duration: 0.25), value: lastMsg.activities.count)
+                                    }
+
                                     // Invisible anchor at the very bottom
                                     Color.clear.frame(height: 1).id("scroll_bottom_anchor")
                                 }
@@ -980,31 +991,14 @@ struct ChatView: View {
                 VStack(spacing: 0) {
                     Divider().background(AppTheme.borderGlass)
 
-                    // Attachment pills
+                    // Attachment pills with image thumbnails
                     if !attachedFiles.isEmpty {
                         ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 6) {
+                            HStack(spacing: 8) {
                                 ForEach(attachedFiles, id: \.absoluteString) { url in
-                                    HStack(spacing: 4) {
-                                        Image(systemName: fileIcon(for: url))
-                                            .font(.system(size: 10))
-                                            .foregroundColor(AppTheme.accent)
-                                        Text(url.lastPathComponent)
-                                            .font(.system(size: 11))
-                                            .foregroundColor(AppTheme.textPrimary)
-                                            .lineLimit(1)
-                                        Button(action: { attachedFiles.removeAll { $0 == url } }) {
-                                            Image(systemName: "xmark.circle.fill")
-                                                .font(.system(size: 10))
-                                                .foregroundColor(AppTheme.textMuted)
-                                        }
-                                        .buttonStyle(.plain)
+                                    AttachmentPill(url: url) {
+                                        attachedFiles.removeAll { $0 == url }
                                     }
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 4)
-                                    .background(AppTheme.bgCard.opacity(0.8))
-                                    .clipShape(Capsule())
-                                    .overlay(Capsule().stroke(AppTheme.borderGlass, lineWidth: 1))
                                 }
                             }
                             .padding(.horizontal, AppTheme.paddingMd)
@@ -1448,5 +1442,109 @@ struct QuickSuggestion: View {
         .accessibilityLabel(text)
         .accessibilityHint("Double tap to use this suggestion")
         .onHover { isHovered = $0 }
+    }
+}
+
+// MARK: - Attachment Pill
+
+private let attachmentImageExts: Set<String> = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "tiff", "heic"]
+
+struct AttachmentPill: View {
+    let url: URL
+    let onRemove: () -> Void
+    @State private var thumbnail: NSImage?
+
+    private var isImage: Bool {
+        attachmentImageExts.contains(url.pathExtension.lowercased())
+    }
+
+    private var fileSize: String? {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let size = attrs[.size] as? UInt64 else { return nil }
+        return formattedSize(size)
+    }
+
+    private func formattedSize(_ bytes: UInt64) -> String {
+        if bytes < 1024 {
+            return "\(bytes) B"
+        } else if bytes < 1024 * 1024 {
+            return String(format: "%.0f KB", Double(bytes) / 1024.0)
+        } else {
+            return String(format: "%.1f MB", Double(bytes) / (1024.0 * 1024.0))
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if isImage, let thumb = thumbnail {
+                Image(nsImage: thumb)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: 40, height: 40)
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+            } else {
+                Image(systemName: fileIconName)
+                    .font(.system(size: 16))
+                    .foregroundColor(AppTheme.accent)
+                    .frame(width: 40, height: 40)
+                    .background(AppTheme.accent.opacity(0.08))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+            }
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(url.lastPathComponent)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(AppTheme.textPrimary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+
+                if let size = fileSize {
+                    Text(size)
+                        .font(.system(size: 9))
+                        .foregroundColor(AppTheme.textMuted)
+                }
+            }
+            .frame(maxWidth: 120, alignment: .leading)
+
+            Button(action: onRemove) {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 12))
+                    .foregroundColor(AppTheme.textMuted)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(AppTheme.bgCard.opacity(0.8))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(AppTheme.borderGlass, lineWidth: 1))
+        .onAppear { loadThumbnail() }
+    }
+
+    private var fileIconName: String {
+        let ext = url.pathExtension.lowercased()
+        let textExts: Set<String> = ["swift", "py", "js", "ts", "md", "txt", "json", "yaml", "yml", "html", "css", "sh", "rb", "go", "rs", "c", "cpp", "h", "java", "kt", "toml", "xml", "csv", "log", "sql"]
+        if textExts.contains(ext) { return "doc.text" }
+        if attachmentImageExts.contains(ext) { return "photo" }
+        return "doc"
+    }
+
+    private func loadThumbnail() {
+        guard isImage else { return }
+        DispatchQueue.global(qos: .userInitiated).async {
+            if let img = NSImage(contentsOf: url) {
+                // Create a scaled-down thumbnail
+                let thumbSize = NSSize(width: 80, height: 80)
+                let thumb = NSImage(size: thumbSize)
+                thumb.lockFocus()
+                img.draw(in: NSRect(origin: .zero, size: thumbSize),
+                         from: NSRect(origin: .zero, size: img.size),
+                         operation: .copy, fraction: 1.0)
+                thumb.unlockFocus()
+                DispatchQueue.main.async {
+                    thumbnail = thumb
+                }
+            }
+        }
     }
 }

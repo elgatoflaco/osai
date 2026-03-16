@@ -139,6 +139,8 @@ class AppState: ObservableObject {
     @AppStorage("globalHotkeyEnabled") var globalHotkeyEnabled: Bool = true
     @AppStorage("notificationsEnabled") var notificationsEnabled: Bool = true
 
+    @Published var selectedAccentColor: String = UserDefaults.standard.string(forKey: "selectedAccentColor") ?? "teal"
+
     @Published var selectedTab: SidebarItem = .home
     @Published var agents: [AgentInfo] = []
     @Published var tasks: [TaskInfo] = []
@@ -162,6 +164,7 @@ class AppState: ObservableObject {
     @Published var showSidebarOverlay: Bool = false
     @Published var contextPressurePercent: Int = 0
     @Published var suggestedReplies: [String] = []
+    @Published var streamingStartTime: Date?
     @Published var conversationSortOrder: ConversationSortOrder = .recent
     @Published var notifications: [AppNotification] = []
     @Published var showNotificationPanel: Bool = false
@@ -251,7 +254,16 @@ class AppState: ObservableObject {
         notifications.removeAll()
     }
 
+    func changeAccentColor(_ presetId: String) {
+        selectedAccentColor = presetId
+        UserDefaults.standard.set(presetId, forKey: "selectedAccentColor")
+        AppTheme.setAccentColor(presetId)
+    }
+
     func loadAll() {
+        // Apply saved accent color on launch
+        AppTheme.setAccentColor(selectedAccentColor)
+
         requestNotificationPermission()
         isLoading = true
         agents = service.loadAgents()
@@ -361,6 +373,7 @@ class AppState: ObservableObject {
 
         let streamingId = assistantMsg.id
         isProcessing = true
+        streamingStartTime = Date()
 
         let streamState = StreamState()
 
@@ -426,6 +439,7 @@ class AppState: ObservableObject {
                 syncConversationToList()
             }
             isProcessing = false
+            streamingStartTime = nil
         }
     }
 
@@ -532,6 +546,7 @@ class AppState: ObservableObject {
         }
         runningProcess = nil
         isProcessing = false
+        streamingStartTime = nil
 
         // Mark current streaming message as done
         if let conv = activeConversation {

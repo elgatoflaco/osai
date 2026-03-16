@@ -1,6 +1,43 @@
 import SwiftUI
 import AppKit
 
+// MARK: - Accent Color Presets
+
+struct AccentColorPreset: Identifiable, Equatable {
+    let id: String
+    let name: String
+    let color: Color
+    let nsColor: NSColor
+
+    static func == (lhs: AccentColorPreset, rhs: AccentColorPreset) -> Bool {
+        lhs.id == rhs.id
+    }
+}
+
+let accentColorPresets: [AccentColorPreset] = [
+    AccentColorPreset(id: "teal", name: "Teal",
+                      color: Color(red: 80/255, green: 200/255, blue: 200/255),
+                      nsColor: NSColor(red: 80/255, green: 200/255, blue: 200/255, alpha: 1)),
+    AccentColorPreset(id: "purple", name: "Purple",
+                      color: Color(red: 0x8B/255, green: 0x5C/255, blue: 0xF6/255),
+                      nsColor: NSColor(red: 0x8B/255, green: 0x5C/255, blue: 0xF6/255, alpha: 1)),
+    AccentColorPreset(id: "blue", name: "Blue",
+                      color: Color(red: 0x3B/255, green: 0x82/255, blue: 0xF6/255),
+                      nsColor: NSColor(red: 0x3B/255, green: 0x82/255, blue: 0xF6/255, alpha: 1)),
+    AccentColorPreset(id: "green", name: "Green",
+                      color: Color(red: 0x10/255, green: 0xB9/255, blue: 0x81/255),
+                      nsColor: NSColor(red: 0x10/255, green: 0xB9/255, blue: 0x81/255, alpha: 1)),
+    AccentColorPreset(id: "orange", name: "Orange",
+                      color: Color(red: 0xF5/255, green: 0x9E/255, blue: 0x0B/255),
+                      nsColor: NSColor(red: 0xF5/255, green: 0x9E/255, blue: 0x0B/255, alpha: 1)),
+    AccentColorPreset(id: "pink", name: "Pink",
+                      color: Color(red: 0xEC/255, green: 0x48/255, blue: 0x99/255),
+                      nsColor: NSColor(red: 0xEC/255, green: 0x48/255, blue: 0x99/255, alpha: 1)),
+    AccentColorPreset(id: "red", name: "Red",
+                      color: Color(red: 0xEF/255, green: 0x44/255, blue: 0x44/255),
+                      nsColor: NSColor(red: 0xEF/255, green: 0x44/255, blue: 0x44/255, alpha: 1)),
+]
+
 struct AppTheme {
     // MARK: - Adaptive color helper
     // Creates a Color that automatically switches between light and dark variants
@@ -15,9 +52,27 @@ struct AppTheme {
         })
     }
 
-    // Accent — same teal/cyan in both modes
-    static let accent = Color(red: 80/255, green: 200/255, blue: 200/255)
-    static let accentGlow = Color(red: 80/255, green: 200/255, blue: 200/255).opacity(0.3)
+    // MARK: - Configurable Accent
+
+    /// The current accent NSColor backing the theme. Defaults to teal.
+    private static var _accentNSColor: NSColor = NSColor(red: 80/255, green: 200/255, blue: 200/255, alpha: 1)
+
+    /// Update the theme accent color at runtime. Call from the main thread.
+    static func setAccentColor(_ presetId: String) {
+        guard let preset = accentColorPresets.first(where: { $0.id == presetId }) else { return }
+        _accentNSColor = preset.nsColor
+    }
+
+    /// Current accent color — reads from the mutable backing store so it always
+    /// reflects the latest selection.  SwiftUI views that reference this will
+    /// re-render when the owning @Published state changes.
+    static var accent: Color {
+        Color(nsColor: _accentNSColor)
+    }
+
+    static var accentGlow: Color {
+        Color(nsColor: _accentNSColor).opacity(0.3)
+    }
 
     // Backgrounds
     static let bgPrimary = adaptive(
@@ -36,10 +91,14 @@ struct AppTheme {
         light: NSColor(red: 255/255, green: 255/255, blue: 255/255, alpha: 0.85),
         dark:  NSColor(red: 24/255,  green: 24/255,  blue: 34/255,  alpha: 1)
     )
-    static let borderGlass = adaptive(
-        light: NSColor(red: 0, green: 0, blue: 0, alpha: 0.1),
-        dark:  NSColor(red: 80/255, green: 200/255, blue: 200/255, alpha: 0.15)
-    )
+
+    /// Border glass uses the accent color for the dark-mode tint.
+    static var borderGlass: Color {
+        adaptive(
+            light: NSColor(red: 0, green: 0, blue: 0, alpha: 0.1),
+            dark:  _accentNSColor.withAlphaComponent(0.15)
+        )
+    }
 
     // Text
     static let textPrimary = adaptive(

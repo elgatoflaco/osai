@@ -388,7 +388,8 @@ struct SettingsView: View {
 
     private var appearanceSection: some View {
         SettingsSection(title: "Appearance", icon: "paintbrush") {
-            VStack(spacing: 10) {
+            VStack(spacing: 14) {
+                // Dark Mode toggle
                 HStack {
                     Text("Dark Mode")
                         .font(AppTheme.fontBody)
@@ -402,6 +403,7 @@ struct SettingsView: View {
                         .accessibilityValue(appState.isDarkMode ? "On" : "Off")
                 }
 
+                // Sidebar collapsed toggle
                 HStack {
                     Text("Sidebar collapsed")
                         .font(AppTheme.fontBody)
@@ -413,6 +415,70 @@ struct SettingsView: View {
                         .labelsHidden()
                         .accessibilityLabel("Sidebar collapsed")
                         .accessibilityValue(appState.sidebarCollapsed ? "On" : "Off")
+                }
+
+                Divider().background(AppTheme.borderGlass)
+
+                // Accent Color
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Accent Color")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(AppTheme.textPrimary)
+
+                    HStack(spacing: 12) {
+                        ForEach(accentColorPresets) { preset in
+                            Button(action: {
+                                appState.changeAccentColor(preset.id)
+                            }) {
+                                ZStack {
+                                    Circle()
+                                        .fill(preset.color)
+                                        .frame(width: 28, height: 28)
+                                        .shadow(color: appState.selectedAccentColor == preset.id
+                                                ? preset.color.opacity(0.6) : .clear,
+                                                radius: 6)
+
+                                    if appState.selectedAccentColor == preset.id {
+                                        Image(systemName: "checkmark")
+                                            .font(.system(size: 12, weight: .bold))
+                                            .foregroundColor(.white)
+                                    }
+                                }
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(preset.name)
+                            .accessibilityAddTraits(appState.selectedAccentColor == preset.id ? .isSelected : [])
+                        }
+                    }
+
+                    // Preview strip
+                    HStack(spacing: 12) {
+                        Text("Preview")
+                            .font(.system(size: 11))
+                            .foregroundColor(AppTheme.textMuted)
+
+                        Text("Link text")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(AppTheme.accent)
+
+                        Text("Button")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 4)
+                            .background(AppTheme.accent)
+                            .clipShape(Capsule())
+
+                        RoundedRectangle(cornerRadius: 4)
+                            .stroke(AppTheme.accent, lineWidth: 2)
+                            .frame(width: 48, height: 22)
+                            .overlay(
+                                Text("Input")
+                                    .font(.system(size: 9))
+                                    .foregroundColor(AppTheme.textMuted)
+                            )
+                    }
+                    .padding(.top, 2)
                 }
             }
         }
