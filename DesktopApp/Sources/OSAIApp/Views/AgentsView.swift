@@ -906,11 +906,13 @@ private let agentModelOptions = [
     "claude-code",
 ]
 
-// MARK: - Create Agent Sheet
+// MARK: - Create Agent Sheet (5-Step Wizard)
 
 struct CreateAgentSheet: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var appState: AppState
+
+    private let totalSteps = 5
 
     @State private var step = 1
     @State private var name = ""
@@ -932,7 +934,21 @@ struct CreateAgentSheet: View {
     }
 
     private var canAdvance: Bool {
-        !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        switch step {
+        case 1: return !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        default: return true
+        }
+    }
+
+    private var stepLabel: String {
+        switch step {
+        case 1: return "Name & Description"
+        case 2: return "Model Selection"
+        case 3: return "System Prompt"
+        case 4: return "Trigger Keywords"
+        case 5: return "Review & Create"
+        default: return ""
+        }
     }
 
     var body: some View {
@@ -943,7 +959,7 @@ struct CreateAgentSheet: View {
                     Text("Create Agent")
                         .font(AppTheme.fontHeadline)
                         .foregroundColor(AppTheme.textPrimary)
-                    Text("Step \(step) of 2 — \(step == 1 ? "Basics" : "Behavior")")
+                    Text("Step \(step) of \(totalSteps) — \(stepLabel)")
                         .font(.system(size: 12, weight: .medium))
                         .foregroundColor(AppTheme.textMuted)
                 }
@@ -957,7 +973,18 @@ struct CreateAgentSheet: View {
             }
             .padding(20)
 
-            // Step indicator bar
+            // Step indicator dots
+            HStack(spacing: 8) {
+                ForEach(1...totalSteps, id: \.self) { s in
+                    Circle()
+                        .fill(s <= step ? AppTheme.accent : AppTheme.textMuted.opacity(0.3))
+                        .frame(width: s == step ? 10 : 7, height: s == step ? 10 : 7)
+                        .animation(.easeInOut(duration: 0.25), value: step)
+                }
+            }
+            .padding(.bottom, 8)
+
+            // Progress bar
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
                     Rectangle()
@@ -965,7 +992,7 @@ struct CreateAgentSheet: View {
                         .frame(height: 3)
                     Rectangle()
                         .fill(AppTheme.accent)
-                        .frame(width: geo.size.width * (CGFloat(step) / 2.0), height: 3)
+                        .frame(width: geo.size.width * (CGFloat(step) / CGFloat(totalSteps)), height: 3)
                         .animation(.easeInOut(duration: 0.3), value: step)
                 }
             }
@@ -973,12 +1000,19 @@ struct CreateAgentSheet: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    if step == 1 {
+                    switch step {
+                    case 1:
                         AgentFormIdentity(name: $name, description: $description, slug: slug, nameEditable: true)
+                    case 2:
                         AgentFormModel(model: $model)
-                    } else {
+                    case 3:
                         AgentFormSystemPrompt(systemPrompt: $systemPrompt)
+                    case 4:
                         AgentFormTriggers(triggers: $triggers, triggerList: triggerList)
+                    case 5:
+                        wizardReviewStep
+                    default:
+                        EmptyView()
                     }
                 }
                 .padding(20)
@@ -986,14 +1020,14 @@ struct CreateAgentSheet: View {
 
             Divider().background(AppTheme.borderGlass)
 
-            // Footer
+            // Footer navigation
             HStack {
                 if step == 1 {
                     Button("Cancel") { dismiss() }
                         .foregroundColor(AppTheme.textSecondary)
                         .buttonStyle(.plain)
                 } else {
-                    Button(action: { withAnimation { step = 1 } }) {
+                    Button(action: { withAnimation { step -= 1 } }) {
                         HStack(spacing: 4) {
                             Image(systemName: "chevron.left")
                             Text("Back")
@@ -1006,8 +1040,8 @@ struct CreateAgentSheet: View {
 
                 Spacer()
 
-                if step == 1 {
-                    Button(action: { withAnimation { step = 2 } }) {
+                if step < totalSteps {
+                    Button(action: { withAnimation { step += 1 } }) {
                         HStack(spacing: 6) {
                             Text("Next")
                             Image(systemName: "chevron.right")
@@ -1040,43 +1074,131 @@ struct CreateAgentSheet: View {
             }
             .padding(20)
         }
-        .frame(width: 540, height: 620)
+        .frame(width: 540, height: 660)
         .background(AppTheme.bgSecondary)
+    }
+
+    // MARK: - Step 5: Review
+
+    @ViewBuilder
+    private var wizardReviewStep: some View {
+        GlassCard(hoverEnabled: false) {
+            VStack(alignment: .leading, spacing: 16) {
+                Label("Review Agent", systemImage: "checkmark.seal")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(AppTheme.accent)
+
+                // Name & Description
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Name")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(AppTheme.textSecondary)
+                    Text(name)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundColor(AppTheme.textPrimary)
+                }
+
+                if !slug.isEmpty {
+                    HStack(spacing: 4) {
+                        Image(systemName: "doc.text")
+                            .font(.system(size: 10))
+                        Text("~/.desktop-agent/agents/\(slug).md")
+                            .font(.system(size: 11, design: .monospaced))
+                    }
+                    .foregroundColor(AppTheme.textMuted)
+                }
+
+                if !description.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Description")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(AppTheme.textSecondary)
+                        Text(description)
+                            .font(AppTheme.fontBody)
+                            .foregroundColor(AppTheme.textPrimary)
+                    }
+                }
+
+                Divider().background(AppTheme.borderGlass)
+
+                // Model
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Model")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(AppTheme.textSecondary)
+                    HStack(spacing: 6) {
+                        Image(systemName: "cpu")
+                            .font(.system(size: 10))
+                            .foregroundColor(AppTheme.accent)
+                        Text(model)
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundColor(AppTheme.textPrimary)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(AppTheme.accent.opacity(0.08))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                }
+
+                // System Prompt
+                if !systemPrompt.isEmpty {
+                    Divider().background(AppTheme.borderGlass)
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("System Prompt")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(AppTheme.textSecondary)
+                        Text(systemPrompt)
+                            .font(AppTheme.fontMono)
+                            .foregroundColor(AppTheme.textPrimary)
+                            .lineLimit(6)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(10)
+                            .background(AppTheme.bgPrimary.opacity(0.5))
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                    }
+                }
+
+                // Triggers
+                if !triggerList.isEmpty {
+                    Divider().background(AppTheme.borderGlass)
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Triggers")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(AppTheme.textSecondary)
+                        FlowLayout(spacing: 6) {
+                            ForEach(triggerList, id: \.self) { trigger in
+                                Text(trigger)
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundColor(AppTheme.accent)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 4)
+                                    .background(AppTheme.accent.opacity(0.12))
+                                    .clipShape(Capsule())
+                                    .overlay(
+                                        Capsule()
+                                            .stroke(AppTheme.accent.opacity(0.25), lineWidth: 0.5)
+                                    )
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // MARK: - Save
 
     private func saveAndDismiss() {
         let finalSlug = slug.isEmpty ? "agent" : slug
-        let backend = model == "claude-code" ? "claude-code" : "api"
-
-        var content = "---\n"
-        content += "name: \(finalSlug)\n"
-        content += "description: \(description)\n"
-        content += "model: \(model)\n"
-        if backend != "api" {
-            content += "backend: \(backend)\n"
-        }
-        if !triggerList.isEmpty {
-            content += "triggers:\n"
-            for t in triggerList {
-                content += "  - \(t)\n"
-            }
-        }
-        content += "---\n"
-        if !systemPrompt.isEmpty {
-            content += systemPrompt + "\n"
-        }
-
-        let path = NSHomeDirectory() + "/.desktop-agent/agents/\(finalSlug).md"
-        try? FileManager.default.createDirectory(
-            atPath: NSHomeDirectory() + "/.desktop-agent/agents",
-            withIntermediateDirectories: true
+        appState.createAgent(
+            name: finalSlug,
+            description: description,
+            model: model,
+            systemPrompt: systemPrompt,
+            triggers: triggerList
         )
-        try? content.write(toFile: path, atomically: true, encoding: .utf8)
-
-        appState.agents = appState.service.loadAgents()
-        appState.showToast("Agent \"\(finalSlug)\" created", type: .success)
         dismiss()
     }
 }

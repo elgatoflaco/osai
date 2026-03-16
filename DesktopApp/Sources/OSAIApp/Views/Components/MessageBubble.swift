@@ -751,6 +751,12 @@ struct MessageBubble: View {
     @State private var showEditHistory = false
     /// Pulse animation state for streaming border glow
     @State private var streamingPulse = false
+    /// Hover state for timestamp (used in "hover" display mode)
+    @State private var timestampHovered = false
+    /// Timer-driven tick for relative timestamp updates
+    @State private var relativeTick: Int = 0
+    /// Timer for relative timestamp auto-refresh
+    @State private var relativeTimer: Timer?
 
     /// Whether raw markdown is active for this message
     private var isRawMode: Bool {
@@ -803,6 +809,14 @@ struct MessageBubble: View {
         .offset(y: appeared ? 0 : 12)
         .onAppear {
             withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) { appeared = true }
+            updateRelativeTimer()
+        }
+        .onDisappear {
+            relativeTimer?.invalidate()
+            relativeTimer = nil
+        }
+        .onChange(of: appState.timestampDisplay) { _ in
+            updateRelativeTimer()
         }
         .transition(.asymmetric(
             insertion: .move(edge: .bottom).combined(with: .opacity),
@@ -1306,9 +1320,9 @@ struct MessageBubble: View {
                 replyActionButton
             }
 
-            if showTimestamp {
+            if showTimestamp && appState.timestampDisplay != "hidden" {
                 HStack(spacing: 4) {
-                    Text(timeString(message.timestamp))
+                    Text(formattedTimestamp(message.timestamp))
                         .font(.system(size: 9))
                         .foregroundColor(AppTheme.textMuted)
 
@@ -1325,6 +1339,8 @@ struct MessageBubble: View {
                     }
                 }
                 .padding(.trailing, 4)
+                .opacity(isTimestampVisible ? 1 : 0)
+                .animation(.easeInOut(duration: 0.2), value: isTimestampVisible)
             }
         }
     }
@@ -1611,28 +1627,32 @@ struct MessageBubble: View {
 
                 // Footer
                 HStack(spacing: 10) {
-                    if showTimestamp {
-                        Text(timeString(message.timestamp))
-                            .font(.system(size: 9))
-                            .foregroundColor(AppTheme.textMuted)
+                    if showTimestamp && appState.timestampDisplay != "hidden" {
+                        HStack(spacing: 10) {
+                            Text(formattedTimestamp(message.timestamp))
+                                .font(.system(size: 9))
+                                .foregroundColor(AppTheme.textMuted)
 
-                        if !message.editHistory.isEmpty {
-                            Button(action: { showEditHistory.toggle() }) {
-                                Text("(edited)")
-                                    .font(.system(size: 9, weight: .medium))
-                                    .foregroundColor(AppTheme.accent.opacity(0.8))
+                            if !message.editHistory.isEmpty {
+                                Button(action: { showEditHistory.toggle() }) {
+                                    Text("(edited)")
+                                        .font(.system(size: 9, weight: .medium))
+                                        .foregroundColor(AppTheme.accent.opacity(0.8))
+                                }
+                                .buttonStyle(.plain)
+                                .popover(isPresented: $showEditHistory, arrowEdge: .bottom) {
+                                    editHistoryPopover
+                                }
                             }
-                            .buttonStyle(.plain)
-                            .popover(isPresented: $showEditHistory, arrowEdge: .bottom) {
-                                editHistoryPopover
+
+                            if let rtMs = message.responseTimeMs {
+                                Text(responseTimeLabel(rtMs))
+                                    .font(.system(size: 9, weight: .medium, design: .rounded))
+                                    .foregroundColor(responseTimeColor(rtMs).opacity(0.7))
                             }
                         }
-
-                        if let rtMs = message.responseTimeMs {
-                            Text(responseTimeLabel(rtMs))
-                                .font(.system(size: 9, weight: .medium, design: .rounded))
-                                .foregroundColor(responseTimeColor(rtMs).opacity(0.7))
-                        }
+                        .opacity(isTimestampVisible ? 1 : 0)
+                        .animation(.easeInOut(duration: 0.2), value: isTimestampVisible)
                     }
 
                     // Reaction picker: show on hover or if a reaction is already set
@@ -1791,6 +1811,50 @@ struct MessageBubble: View {
 
     private func timeString(_ date: Date) -> String {
         let f = DateFormatter(); f.dateFormat = "HH:mm"; return f.string(from: date)
+    }
+
+    /// Returns a human-readable relative timestamp string.
+    private func relativeTimeString(_ date: Date) -> String {
+        // Reference relativeTick so SwiftUI re-evaluates when the timer fires
+        _ = relativeTick
+        let elapsed = Date().timeIntervalSince(date)
+        if elapsed < 60 { return "just now" }
+        let minutes = Int(elapsed / 60)
+        if minutes < 60 { return "\(minutes)m ago" }
+        let hours = Int(elapsed / 3600)
+        if hours < 24 { return "\(hours)h ago" }
+        let days = Int(elapsed / 86400)
+        return "\(days)d ago"
+    }
+
+    /// Returns the appropriate timestamp text based on the current display setting.
+    private func formattedTimestamp(_ date: Date) -> String {
+        switch appState.timestampDisplay {
+        case "always": return timeString(date)
+        case "relative": return relativeTimeString(date)
+        default: return timeString(date)
+        }
+    }
+
+    /// Whether the timestamp should currently be visible based on display mode and hover state.
+    private var isTimestampVisible: Bool {
+        switch appState.timestampDisplay {
+        case "hidden": return false
+        case "hover": return isHovered
+        case "always", "relative": return true
+        default: return isHovered
+        }
+    }
+
+    /// Starts the relative-time refresh timer if needed, and invalidates it on mode change.
+    private func updateRelativeTimer() {
+        relativeTimer?.invalidate()
+        relativeTimer = nil
+        if appState.timestampDisplay == "relative" {
+            relativeTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { _ in
+                relativeTick += 1
+            }
+        }
     }
 
     private func responseTimeLabel(_ ms: Int) -> String {

@@ -648,6 +648,16 @@ struct SettingsView: View {
 
     // MARK: - Appearance
 
+    private var timestampDisplayDescription: String {
+        switch appState.timestampDisplay {
+        case "hidden": return "Timestamps are not shown on messages"
+        case "hover": return "Timestamps appear when you hover over a message"
+        case "always": return "Timestamps are always shown below messages (HH:mm)"
+        case "relative": return "Shows relative time (e.g. \"2m ago\") that auto-updates"
+        default: return ""
+        }
+    }
+
     private var appearanceSection: some View {
         SettingsSection(title: "Appearance", icon: "paintbrush") {
             VStack(spacing: 14) {
@@ -704,6 +714,26 @@ struct SettingsView: View {
                         .labelsHidden()
                         .accessibilityLabel("Text-to-Speech")
                         .accessibilityValue(appState.textToSpeechEnabled ? "On" : "Off")
+                }
+
+                // Message Timestamps
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Message Timestamps")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(AppTheme.textPrimary)
+
+                    Picker("Message Timestamps", selection: $appState.timestampDisplay) {
+                        Text("Hidden").tag("hidden")
+                        Text("Hover only").tag("hover")
+                        Text("Always visible").tag("always")
+                        Text("Relative").tag("relative")
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+
+                    Text(timestampDisplayDescription)
+                        .font(.system(size: 10))
+                        .foregroundColor(AppTheme.textMuted)
                 }
 
                 Divider().background(AppTheme.borderGlass)

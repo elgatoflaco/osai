@@ -88,6 +88,7 @@ enum ConversationSortOption: String, CaseIterable, Identifiable {
     case alphabetical = "alphabetical"
     case messageCount = "messageCount"
     case tokenUsage = "tokenUsage"
+    case custom = "custom"
 
     var id: String { rawValue }
 
@@ -98,6 +99,7 @@ enum ConversationSortOption: String, CaseIterable, Identifiable {
         case .alphabetical: return "Alphabetical"
         case .messageCount: return "Message Count"
         case .tokenUsage: return "Token Usage"
+        case .custom: return "Custom"
         }
     }
 
@@ -108,6 +110,7 @@ enum ConversationSortOption: String, CaseIterable, Identifiable {
         case .alphabetical: return "textformat.abc"
         case .messageCount: return "bubble.left.and.bubble.right"
         case .tokenUsage: return "number"
+        case .custom: return "hand.draw"
         }
     }
 }
@@ -534,6 +537,7 @@ class AppState: ObservableObject {
         }
     }
 
+    @AppStorage("timestampDisplay") var timestampDisplay: String = "hover"
     @AppStorage("chatFontSize") var chatFontSize: Double = 13.0
     @AppStorage("syntaxTheme") var syntaxTheme: String = "Monokai"
     @AppStorage("autoScrollEnabled") var autoScrollEnabled: Bool = true
@@ -898,10 +902,43 @@ class AppState: ObservableObject {
     @AppStorage("conversationSortOption") var conversationSortOption: String = "lastUpdated"
     @AppStorage("conversationSortAscending") var conversationSortAscending: Bool = false
 
+    /// Custom conversation ordering persisted as an array of conversation IDs
+    @Published var customConversationOrder: [String] = {
+        UserDefaults.standard.stringArray(forKey: "customConversationOrder") ?? []
+    }() {
+        didSet {
+            UserDefaults.standard.set(customConversationOrder, forKey: "customConversationOrder")
+        }
+    }
+
     /// Computed accessor for the typed sort option enum
     var conversationSortOrder: ConversationSortOption {
         get { ConversationSortOption(rawValue: conversationSortOption) ?? .lastUpdated }
         set { conversationSortOption = newValue.rawValue }
+    }
+
+    /// Move a conversation in the custom order array from one index to another
+    func moveConversation(fromIndex: Int, toIndex: Int) {
+        guard fromIndex != toIndex,
+              fromIndex >= 0, fromIndex < customConversationOrder.count,
+              toIndex >= 0, toIndex <= customConversationOrder.count else { return }
+        let id = customConversationOrder.remove(at: fromIndex)
+        let insertAt = toIndex > fromIndex ? toIndex - 1 : toIndex
+        customConversationOrder.insert(id, at: min(insertAt, customConversationOrder.count))
+    }
+
+    /// Ensure all current conversation IDs are present in the custom order (appending new ones)
+    func syncCustomOrder() {
+        let existingIds = Set(customConversationOrder)
+        let allIds = conversations.map { $0.id }
+        // Remove IDs that no longer exist
+        customConversationOrder = customConversationOrder.filter { id in
+            conversations.contains { $0.id == id }
+        }
+        // Append any new conversations not yet in the custom order
+        for id in allIds where !existingIds.contains(id) {
+            customConversationOrder.append(id)
+        }
     }
     @Published var showArchived: Bool = false
     @Published var showRawMarkdown: Bool = false
@@ -1344,6 +1381,13 @@ class AppState: ObservableObject {
                 let result = $0.title.localizedCaseInsensitiveCompare($1.title)
                 return ascending ? result == .orderedAscending : result == .orderedDescending
             }
+        case .custom:
+            let orderMap = Dictionary(uniqueKeysWithValues: customConversationOrder.enumerated().map { ($1, $0) })
+            return convs.sorted { a, b in
+                let idxA = orderMap[a.id] ?? Int.max
+                let idxB = orderMap[b.id] ?? Int.max
+                return idxA < idxB
+            }
         }
     }
 
@@ -1355,6 +1399,14 @@ class AppState: ObservableObject {
     func groupedConversations(from conversations: [Conversation]) -> [(String, [Conversation])] {
         let pinned = conversations.filter { $0.isPinned }
         let unpinned = conversations.filter { !$0.isPinned }
+
+        // In custom sort mode, show pinned and all others as flat groups
+        if conversationSortOrder == .custom {
+            var result: [(String, [Conversation])] = []
+            if !pinned.isEmpty { result.append(("Pinned", pinned)) }
+            if !unpinned.isEmpty { result.append(("All Conversations", unpinned)) }
+            return result
+        }
 
         let cal = Calendar.current
         let now = Date()
@@ -2595,6 +2647,40 @@ class AppState: ObservableObject {
             let gwMsg = wasRunning ? "Gateway stopped" : "Gateway started"
             showToast(gwMsg, type: .success)
             addNotification(title: "Gateway", message: gwMsg, type: wasRunning ? .warning : .success)
+        }
+    }
+
+    func createAgent(name: String, description: String, model: String, systemPrompt: String, triggers: [String]) {
+        let backend = model == "claude-code" ? "claude-code" : "api"
+
+        var content = "---\n"
+        content += "name: \(name)\n"
+        content += "description: \(description)\n"
+        content += "model: \(model)\n"
+        if backend != "api" {
+            content += "backend: \(backend)\n"
+        }
+        if !triggers.isEmpty {
+            content += "triggers:\n"
+            for t in triggers {
+                content += "  - \(t)\n"
+            }
+        }
+        content += "---\n"
+        if !systemPrompt.isEmpty {
+            content += systemPrompt + "\n"
+        }
+
+        let agentsDir = NSHomeDirectory() + "/.desktop-agent/agents"
+        try? FileManager.default.createDirectory(atPath: agentsDir, withIntermediateDirectories: true)
+        let path = "\(agentsDir)/\(name).md"
+
+        do {
+            try content.write(toFile: path, atomically: true, encoding: .utf8)
+            agents = service.loadAgents()
+            showToast("Agent \"\(name)\" created", type: .success)
+        } catch {
+            showToast("Failed to create agent: \(error.localizedDescription)", type: .error)
         }
     }
 

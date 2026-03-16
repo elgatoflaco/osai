@@ -38,6 +38,9 @@ struct ChatView: View {
     @State private var showCodeBlocksSheet: Bool = false
     @State private var showCalendarBrowser: Bool = false
     @State private var calendarSelectedDate: Date? = nil
+    @State private var draggedConversationId: String? = nil
+    @State private var dropTargetConversationId: String? = nil
+    @State private var dropTargetIsAbove: Bool = true
     @State private var searchFilters = AppState.SearchFilters()
     @State private var showSearchFilters: Bool = false
     @State private var showStatsSheet: Bool = false
@@ -2443,7 +2446,12 @@ struct ChatView: View {
                     Menu {
                         // Sort option choices with checkmark on current selection
                         ForEach(ConversationSortOption.allCases) { option in
-                            Button(action: { appState.conversationSortOrder = option }) {
+                            Button(action: {
+                                appState.conversationSortOrder = option
+                                if option == .custom {
+                                    appState.syncCustomOrder()
+                                }
+                            }) {
                                 HStack {
                                     Label {
                                         Text(option.displayName)
@@ -2569,40 +2577,77 @@ struct ChatView: View {
                             ForEach(sidebarGroups, id: \.0) { group, convs in
                                 Section {
                                     ForEach(convs) { conv in
-                                        HStack(spacing: 6) {
-                                            if appState.isMultiSelectMode {
-                                                Image(systemName: appState.selectedConversationIds.contains(conv.id) ? "checkmark.circle.fill" : "circle")
-                                                    .font(.system(size: 14))
-                                                    .foregroundColor(appState.selectedConversationIds.contains(conv.id) ? AppTheme.accent : AppTheme.textMuted)
-                                                    .contentShape(Rectangle())
-                                                    .onTapGesture {
-                                                        let flags = NSEvent.modifierFlags
-                                                        toggleSelection(conv.id, shift: flags.contains(.shift), cmd: flags.contains(.command))
+                                        VStack(spacing: 0) {
+                                            // Drop indicator above this row
+                                            if appState.conversationSortOrder == .custom,
+                                               dropTargetConversationId == conv.id,
+                                               dropTargetIsAbove {
+                                                Rectangle()
+                                                    .fill(AppTheme.accent)
+                                                    .frame(height: 2)
+                                                    .padding(.horizontal, 8)
+                                                    .transition(.opacity)
+                                            }
+                                            HStack(spacing: 6) {
+                                                if appState.isMultiSelectMode {
+                                                    Image(systemName: appState.selectedConversationIds.contains(conv.id) ? "checkmark.circle.fill" : "circle")
+                                                        .font(.system(size: 14))
+                                                        .foregroundColor(appState.selectedConversationIds.contains(conv.id) ? AppTheme.accent : AppTheme.textMuted)
+                                                        .contentShape(Rectangle())
+                                                        .onTapGesture {
+                                                            let flags = NSEvent.modifierFlags
+                                                            toggleSelection(conv.id, shift: flags.contains(.shift), cmd: flags.contains(.command))
+                                                        }
+                                                }
+                                                conversationRowView(for: conv)
+                                                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                                    Button(role: .destructive) {
+                                                        deleteConfirmConversation = conv
+                                                    } label: {
+                                                        Label("Delete", systemImage: "trash")
                                                     }
+                                                    Button {
+                                                        appState.archiveConversation(id: conv.id)
+                                                    } label: {
+                                                        Label("Archive", systemImage: "archivebox")
+                                                    }
+                                                    .tint(.gray)
+                                                }
+                                                .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                                                    Button {
+                                                        appState.togglePin(conv)
+                                                    } label: {
+                                                        Label(conv.isPinned ? "Unpin" : "Pin", systemImage: conv.isPinned ? "pin.slash" : "pin")
+                                                    }
+                                                    .tint(.yellow)
+                                                }
                                             }
-                                            conversationRowView(for: conv)
-                                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                                Button(role: .destructive) {
-                                                    deleteConfirmConversation = conv
-                                                } label: {
-                                                    Label("Delete", systemImage: "trash")
-                                                }
-                                                Button {
-                                                    appState.archiveConversation(id: conv.id)
-                                                } label: {
-                                                    Label("Archive", systemImage: "archivebox")
-                                                }
-                                                .tint(.gray)
-                                            }
-                                            .swipeActions(edge: .leading, allowsFullSwipe: true) {
-                                                Button {
-                                                    appState.togglePin(conv)
-                                                } label: {
-                                                    Label(conv.isPinned ? "Unpin" : "Pin", systemImage: conv.isPinned ? "pin.slash" : "pin")
-                                                }
-                                                .tint(.yellow)
+                                            // Drop indicator below this row (for last item)
+                                            if appState.conversationSortOrder == .custom,
+                                               dropTargetConversationId == conv.id,
+                                               !dropTargetIsAbove {
+                                                Rectangle()
+                                                    .fill(AppTheme.accent)
+                                                    .frame(height: 2)
+                                                    .padding(.horizontal, 8)
+                                                    .transition(.opacity)
                                             }
                                         }
+                                        .onDrag({
+                                            guard appState.conversationSortOrder == .custom else {
+                                                return NSItemProvider()
+                                            }
+                                            draggedConversationId = conv.id
+                                            return NSItemProvider(object: conv.id as NSString)
+                                        })
+                                        .onDrop(of: [UTType.text], delegate: ConversationDropDelegate(
+                                            conversationId: conv.id,
+                                            groupName: group,
+                                            appState: appState,
+                                            draggedId: $draggedConversationId,
+                                            dropTargetId: $dropTargetConversationId,
+                                            dropTargetIsAbove: $dropTargetIsAbove
+                                        ))
                                     }
                                 } header: {
                                     HStack(spacing: 4) {
@@ -4128,5 +4173,82 @@ struct ConversationStatsSheet: View {
             return String(format: "%.1fk", Double(count) / 1000.0)
         }
         return String(format: "%.2fM", Double(count) / 1_000_000.0)
+    }
+}
+
+// MARK: - Conversation Drag-and-Drop Delegate
+
+struct ConversationDropDelegate: DropDelegate {
+    let conversationId: String
+    let groupName: String
+    let appState: AppState
+    @Binding var draggedId: String?
+    @Binding var dropTargetId: String?
+    @Binding var dropTargetIsAbove: Bool
+
+    func dropEntered(info: DropInfo) {
+        guard appState.conversationSortOrder == .custom,
+              let draggedId = draggedId,
+              draggedId != conversationId else { return }
+
+        // Only allow reorder within the same pinned/unpinned group
+        let draggedConv = appState.conversations.first { $0.id == draggedId }
+        let targetConv = appState.conversations.first { $0.id == conversationId }
+        guard let dc = draggedConv, let tc = targetConv, dc.isPinned == tc.isPinned else { return }
+
+        withAnimation(.easeInOut(duration: 0.15)) {
+            dropTargetId = conversationId
+            dropTargetIsAbove = true
+        }
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        return DropProposal(operation: .move)
+    }
+
+    func dropExited(info: DropInfo) {
+        if dropTargetId == conversationId {
+            withAnimation(.easeInOut(duration: 0.15)) {
+                dropTargetId = nil
+            }
+        }
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        guard appState.conversationSortOrder == .custom,
+              let draggedId = draggedId,
+              draggedId != conversationId else {
+            resetState()
+            return false
+        }
+
+        // Ensure both are in the same pinned/unpinned group
+        let draggedConv = appState.conversations.first { $0.id == draggedId }
+        let targetConv = appState.conversations.first { $0.id == conversationId }
+        guard let dc = draggedConv, let tc = targetConv, dc.isPinned == tc.isPinned else {
+            resetState()
+            return false
+        }
+
+        // Sync custom order to make sure it is up to date
+        appState.syncCustomOrder()
+
+        guard let fromIndex = appState.customConversationOrder.firstIndex(of: draggedId),
+              let toIndex = appState.customConversationOrder.firstIndex(of: conversationId) else {
+            resetState()
+            return false
+        }
+
+        withAnimation(.easeInOut(duration: 0.2)) {
+            appState.moveConversation(fromIndex: fromIndex, toIndex: toIndex)
+        }
+
+        resetState()
+        return true
+    }
+
+    private func resetState() {
+        draggedId = nil
+        dropTargetId = nil
     }
 }
