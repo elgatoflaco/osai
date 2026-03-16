@@ -736,9 +736,13 @@ struct ResponseView: View {
 
         case .heading(let text, let level):
             Text(text)
-                .font(.system(size: level == 1 ? 18 : level == 2 ? 16 : 14, weight: .bold, design: .rounded))
+                .font(.system(
+                    size: level == 1 ? 20 : level == 2 ? 17 : 15,
+                    weight: level == 1 ? .bold : level == 2 ? .semibold : .medium,
+                    design: .rounded
+                ))
                 .foregroundColor(AppTheme.textPrimary)
-                .padding(.top, 4)
+                .padding(.top, level == 1 ? 8 : level == 2 ? 6 : 4)
 
         case .sectionCard(let title, let icon, let color, let items):
             SectionCardView(title: title, icon: icon, accentColor: color, items: items)
@@ -784,6 +788,26 @@ struct ResponseView: View {
 
         case .table(let headers, let rows):
             MarkdownTableView(headers: headers, rows: rows)
+
+        case .blockquote(let lines):
+            HStack(alignment: .top, spacing: 0) {
+                RoundedRectangle(cornerRadius: 1)
+                    .fill(AppTheme.accent)
+                    .frame(width: 3)
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                        RichTextView(text: line)
+                    }
+                }
+                .padding(.leading, 12)
+                .padding(.vertical, 6)
+            }
+            .padding(.vertical, 2)
+            .padding(.horizontal, 4)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(AppTheme.bgCard.opacity(0.4))
+            )
 
         case .divider:
             Rectangle().fill(AppTheme.borderGlass).frame(height: 1).padding(.vertical, 4)
@@ -1082,6 +1106,7 @@ enum ResponseSection {
     case numberedList([String])
     case codeBlock(String, String)
     case table(headers: [String], rows: [[String]])
+    case blockquote([String])
     case divider
 }
 
@@ -1147,6 +1172,25 @@ struct ResponseParser {
             // Divider
             if trimmed.hasPrefix("---") || trimmed.hasPrefix("===") || trimmed.hasPrefix("___") {
                 sections.append(.divider); i += 1; continue
+            }
+
+            // Blockquotes
+            if trimmed.hasPrefix("> ") || trimmed == ">" {
+                var quoteLines: [String] = []
+                while i < lines.count {
+                    let ql = lines[i].trimmingCharacters(in: .whitespaces)
+                    if ql.hasPrefix("> ") {
+                        quoteLines.append(String(ql.dropFirst(2)))
+                        i += 1
+                    } else if ql == ">" {
+                        quoteLines.append("")
+                        i += 1
+                    } else {
+                        break
+                    }
+                }
+                if !quoteLines.isEmpty { sections.append(.blockquote(quoteLines)) }
+                continue
             }
 
             // Headings
@@ -1228,6 +1272,7 @@ struct ResponseParser {
                 let pl = lines[i].trimmingCharacters(in: .whitespaces)
                 if pl.isEmpty || pl.hasPrefix("#") || pl.hasPrefix("```") || pl.hasPrefix("---") ||
                    pl.hasPrefix("- ") || pl.hasPrefix("* ") || pl.hasPrefix("• ") ||
+                   pl.hasPrefix("> ") || pl == ">" ||
                    isStepLine(pl) || pl.contains("Plan:") || isSectionHeader(pl) || isTableRow(pl) {
                     break
                 }
@@ -1400,7 +1445,7 @@ struct RichTextView: View {
                 case .text(let t):
                     if var attr = try? AttributedString(markdown: t, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)) {
                         attr.font = .system(size: 14)
-                        attr.foregroundColor = AppTheme.textPrimary
+                        Self.styleLinks(&attr)
                         combined.append(attr)
                     } else {
                         var attr = AttributedString(t)
@@ -1409,25 +1454,48 @@ struct RichTextView: View {
                         combined.append(attr)
                     }
                 case .code(let c):
+                    var space = AttributedString("\u{200A}")
+                    space.font = .system(size: 2)
+                    combined.append(space)
                     var attr = AttributedString(c)
                     attr.font = .system(size: 12.5, design: .monospaced)
                     attr.foregroundColor = AppTheme.accent
-                    attr.backgroundColor = AppTheme.bgPrimary.opacity(0.6)
+                    attr.backgroundColor = AppTheme.bgCard
                     combined.append(attr)
+                    combined.append(space)
                 }
                 return combined
             }
             Text(combined)
                 .lineSpacing(4).textSelection(.enabled)
+                .environment(\.openURL, OpenURLAction { url in
+                    NSWorkspace.shared.open(url)
+                    return .handled
+                })
         } else {
-            if let attributed = try? AttributedString(markdown: str, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)) {
+            if var attributed = try? AttributedString(markdown: str, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)) {
+                let _ = Self.styleLinks(&attributed)
                 Text(attributed)
                     .font(.system(size: 14)).foregroundColor(AppTheme.textPrimary)
                     .lineSpacing(4).textSelection(.enabled)
+                    .environment(\.openURL, OpenURLAction { url in
+                        NSWorkspace.shared.open(url)
+                        return .handled
+                    })
             } else {
                 Text(str)
                     .font(.system(size: 14)).foregroundColor(AppTheme.textPrimary)
                     .lineSpacing(4).textSelection(.enabled)
+            }
+        }
+    }
+
+    /// Styles link runs in an AttributedString to be blue and underlined
+    private static func styleLinks(_ attr: inout AttributedString) {
+        for run in attr.runs {
+            if attr[run.range].link != nil {
+                attr[run.range].foregroundColor = Color(red: 0.3, green: 0.55, blue: 1.0)
+                attr[run.range].underlineStyle = .single
             }
         }
     }

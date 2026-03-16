@@ -745,6 +745,35 @@ class AppState: ObservableObject {
 
     // MARK: - Export
 
+    // MARK: - Full-text search across all conversations
+
+    struct ConversationSearchResult: Identifiable {
+        let id: String
+        let conversation: Conversation
+        let matches: [ChatMessage]
+
+        init(conversation: Conversation, matches: [ChatMessage]) {
+            self.id = conversation.id
+            self.conversation = conversation
+            self.matches = matches
+        }
+    }
+
+    func searchAllConversations(query: String) -> [ConversationSearchResult] {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return [] }
+        let lower = trimmed.lowercased()
+
+        return conversations.compactMap { conv in
+            let matchingMessages = conv.messages.filter { msg in
+                (msg.role == .user || msg.role == .assistant) &&
+                msg.content.lowercased().contains(lower)
+            }
+            guard !matchingMessages.isEmpty else { return nil }
+            return ConversationSearchResult(conversation: conv, matches: matchingMessages)
+        }
+    }
+
     func exportConversation(_ conv: Conversation) -> String {
         let dateFormatter = DateFormatter()
         dateFormatter.dateStyle = .long

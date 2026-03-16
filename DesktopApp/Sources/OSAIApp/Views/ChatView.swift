@@ -16,6 +16,8 @@ struct ChatView: View {
     @State private var showClearAllAlert = false
     @State private var isSelecting = false
     @State private var selectedConversationIds: Set<String> = []
+    @State private var scrollToMessageId: String? = nil
+    @State private var searchIncludesMessages = false
 
     // MARK: - Date grouping
 
@@ -38,10 +40,41 @@ struct ChatView: View {
     private var filteredConversations: [Conversation] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return appState.conversations }
-        return appState.conversations.filter { conv in
+
+        // Title/agent matches
+        let titleMatches = appState.conversations.filter { conv in
             conv.title.localizedCaseInsensitiveContains(query) ||
             (conv.agentName?.localizedCaseInsensitiveContains(query) ?? false)
         }
+
+        // When searching messages or no title matches found, include content matches
+        if searchIncludesMessages || titleMatches.isEmpty {
+            let contentResults = appState.searchAllConversations(query: query)
+            let titleIds = Set(titleMatches.map { $0.id })
+            let extraConvs = contentResults
+                .filter { !titleIds.contains($0.conversation.id) }
+                .map { $0.conversation }
+            return titleMatches + extraConvs
+        }
+
+        return titleMatches
+    }
+
+    /// Content search results grouped by conversation, only when actively searching messages
+    private var contentSearchResults: [AppState.ConversationSearchResult] {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return [] }
+
+        let titleMatches = appState.conversations.filter { conv in
+            conv.title.localizedCaseInsensitiveContains(query) ||
+            (conv.agentName?.localizedCaseInsensitiveContains(query) ?? false)
+        }
+
+        // Auto-enable message search when no title matches
+        if searchIncludesMessages || titleMatches.isEmpty {
+            return appState.searchAllConversations(query: query)
+        }
+        return []
     }
 
     private var pinnedConversations: [Conversation] {
@@ -172,7 +205,33 @@ struct ChatView: View {
                 .padding(.top, 8)
                 .padding(.bottom, 4)
 
-                if filteredConversations.isEmpty {
+                // "Search in messages" toggle when there's a query
+                if !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    HStack(spacing: 4) {
+                        Toggle(isOn: $searchIncludesMessages) {
+                            Text("Search in messages")
+                                .font(.system(size: 10))
+                                .foregroundColor(AppTheme.textMuted)
+                        }
+                        .toggleStyle(.switch)
+                        .controlSize(.mini)
+
+                        if !contentSearchResults.isEmpty {
+                            let totalMatches = contentSearchResults.reduce(0) { $0 + $1.matches.count }
+                            Text("\(totalMatches) match\(totalMatches == 1 ? "" : "es")")
+                                .font(.system(size: 9, weight: .medium, design: .monospaced))
+                                .foregroundColor(AppTheme.accent)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 1)
+                                .background(AppTheme.accent.opacity(0.1))
+                                .clipShape(Capsule())
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 4)
+                }
+
+                if filteredConversations.isEmpty && contentSearchResults.isEmpty {
                     VStack(spacing: 8) {
                         Spacer()
                         Image(systemName: searchText.isEmpty ? "bubble.left.and.bubble.right" : "magnifyingglass")
@@ -246,6 +305,95 @@ struct ChatView: View {
                                 } header: {
                                     HStack {
                                         Text(group.rawValue)
+                                            .font(.system(size: 10, weight: .semibold))
+                                            .foregroundColor(AppTheme.textMuted)
+                                            .textCase(.uppercase)
+                                        Spacer()
+                                    }
+                                    .padding(.horizontal, 12)
+                                    .padding(.top, 10)
+                                    .padding(.bottom, 4)
+                                    .background(AppTheme.bgSecondary.opacity(0.3))
+                                }
+                            }
+
+                            // Content search results
+                            if !contentSearchResults.isEmpty {
+                                Section {
+                                    ForEach(contentSearchResults) { result in
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            HStack(spacing: 4) {
+                                                Text(result.conversation.title)
+                                                    .font(.system(size: 11, weight: .semibold))
+                                                    .foregroundColor(AppTheme.textPrimary)
+                                                    .lineLimit(1)
+                                                Spacer()
+                                                Text("\(result.matches.count)")
+                                                    .font(.system(size: 9, weight: .bold, design: .rounded))
+                                                    .foregroundColor(AppTheme.accent)
+                                                    .padding(.horizontal, 5)
+                                                    .padding(.vertical, 1)
+                                                    .background(AppTheme.accent.opacity(0.15))
+                                                    .clipShape(Capsule())
+                                            }
+
+                                            ForEach(result.matches.prefix(3)) { msg in
+                                                Button(action: {
+                                                    scrollToMessageId = msg.id
+                                                    appState.openConversation(result.conversation)
+                                                }) {
+                                                    HStack(spacing: 6) {
+                                                        Image(systemName: msg.role == .user ? "person.fill" : "sparkle")
+                                                            .font(.system(size: 8))
+                                                            .foregroundColor(AppTheme.textMuted)
+                                                            .frame(width: 12)
+                                                        HighlightedText(
+                                                            text: messagePreview(msg.content, query: searchText),
+                                                            highlight: searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+                                                        )
+                                                        .lineLimit(2)
+                                                    }
+                                                    .padding(.vertical, 3)
+                                                    .padding(.horizontal, 6)
+                                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                                    .background(AppTheme.bgCard.opacity(0.3))
+                                                    .clipShape(RoundedRectangle(cornerRadius: 5))
+                                                }
+                                                .buttonStyle(.plain)
+                                            }
+
+                                            if result.matches.count > 3 {
+                                                Button(action: {
+                                                    if let firstMatch = result.matches.first {
+                                                        scrollToMessageId = firstMatch.id
+                                                    }
+                                                    appState.openConversation(result.conversation)
+                                                }) {
+                                                    Text("+\(result.matches.count - 3) more match\(result.matches.count - 3 == 1 ? "" : "es")")
+                                                        .font(.system(size: 9))
+                                                        .foregroundColor(AppTheme.accent)
+                                                }
+                                                .buttonStyle(.plain)
+                                                .padding(.leading, 18)
+                                            }
+                                        }
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 6)
+                                        .background(
+                                            RoundedRectangle(cornerRadius: 8)
+                                                .fill(AppTheme.bgCard.opacity(0.2))
+                                        )
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 8)
+                                                .stroke(AppTheme.borderGlass, lineWidth: 0.5)
+                                        )
+                                    }
+                                } header: {
+                                    HStack(spacing: 4) {
+                                        Image(systemName: "text.magnifyingglass")
+                                            .font(.system(size: 8))
+                                            .foregroundColor(AppTheme.accent)
+                                        Text("Message Matches")
                                             .font(.system(size: 10, weight: .semibold))
                                             .foregroundColor(AppTheme.textMuted)
                                             .textCase(.uppercase)
@@ -575,6 +723,17 @@ struct ChatView: View {
                                     }
                                 }
                             }
+                            .onChange(of: scrollToMessageId) { _, targetId in
+                                if let targetId = targetId {
+                                    // Small delay to let the conversation load
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                                        withAnimation(.easeOut(duration: 0.3)) {
+                                            proxy.scrollTo(targetId, anchor: .center)
+                                        }
+                                        self.scrollToMessageId = nil
+                                    }
+                                }
+                            }
 
                             // Scroll-to-bottom floating button
                             if !isAtBottom {
@@ -845,6 +1004,86 @@ struct ChatView: View {
                 proxy.scrollTo(lastId, anchor: .bottom)
             }
         }
+    }
+
+    /// Extract a short preview of the message content centered around the first match
+    private func messagePreview(_ content: String, query: String) -> String {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return String(content.prefix(80)) }
+
+        let lower = content.lowercased()
+        let queryLower = trimmed.lowercased()
+
+        guard let range = lower.range(of: queryLower) else {
+            return String(content.prefix(80))
+        }
+
+        let matchStart = content.distance(from: content.startIndex, to: range.lowerBound)
+        let contextRadius = 40
+        let start = max(0, matchStart - contextRadius)
+        let startIdx = content.index(content.startIndex, offsetBy: start)
+        let endOffset = min(content.count, matchStart + trimmed.count + contextRadius)
+        let endIdx = content.index(content.startIndex, offsetBy: endOffset)
+
+        var preview = String(content[startIdx..<endIdx])
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+        if start > 0 { preview = "..." + preview }
+        if endOffset < content.count { preview = preview + "..." }
+        return preview
+    }
+}
+
+// MARK: - Highlighted Text
+
+/// Renders text with matching substrings highlighted in accent color and bold
+struct HighlightedText: View {
+    let text: String
+    let highlight: String
+
+    var body: some View {
+        if highlight.isEmpty {
+            Text(text)
+                .font(.system(size: 10))
+                .foregroundColor(AppTheme.textSecondary)
+        } else {
+            highlightedTextView()
+        }
+    }
+
+    private func highlightedTextView() -> Text {
+        let lower = text.lowercased()
+        let queryLower = highlight.lowercased()
+        var result = Text("")
+        var currentIndex = lower.startIndex
+
+        while let range = lower.range(of: queryLower, range: currentIndex..<lower.endIndex) {
+            // Text before match
+            if currentIndex < range.lowerBound {
+                let beforeStr = String(text[currentIndex..<range.lowerBound])
+                result = result + Text(beforeStr)
+                    .font(.system(size: 10))
+                    .foregroundColor(AppTheme.textSecondary)
+            }
+
+            // Matched text
+            let matchStr = String(text[range])
+            result = result + Text(matchStr)
+                .font(.system(size: 10, weight: .bold))
+                .foregroundColor(AppTheme.accent)
+
+            currentIndex = range.upperBound
+        }
+
+        // Remaining text after last match
+        if currentIndex < lower.endIndex {
+            let remainingStr = String(text[currentIndex..<text.endIndex])
+            result = result + Text(remainingStr)
+                .font(.system(size: 10))
+                .foregroundColor(AppTheme.textSecondary)
+        }
+
+        return result
     }
 }
 
