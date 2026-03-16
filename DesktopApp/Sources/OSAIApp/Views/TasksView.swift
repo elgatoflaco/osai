@@ -338,9 +338,14 @@ struct TaskCardImproved: View {
     @State private var showLog = false
     @State private var logContent = ""
     @State private var elapsedTime: String = ""
+    @State private var pulseAnimation = false
+    @State private var completionScale: CGFloat = 0.0
     @EnvironmentObject var appState: AppState
 
     private let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+
+    private var isRunning: Bool { task.enabled }
+    private var isCompleted: Bool { !task.enabled && task.runCount > 0 }
 
     var body: some View {
         GlassCard(padding: 0) {
@@ -380,7 +385,26 @@ struct TaskCardImproved: View {
                             }
 
                             // Status badge
-                            if task.isOverdue {
+                            if isRunning {
+                                HStack(spacing: 3) {
+                                    Circle()
+                                        .fill(AppTheme.warning)
+                                        .frame(width: 6, height: 6)
+                                    Text("Running")
+                                        .font(.system(size: 9, weight: .medium))
+                                }
+                                .foregroundColor(AppTheme.warning)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(AppTheme.warning.opacity(0.1))
+                                .clipShape(Capsule())
+                                .opacity(pulseAnimation ? 0.6 : 1.0)
+                                .animation(
+                                    .easeInOut(duration: 1.2).repeatForever(autoreverses: true),
+                                    value: pulseAnimation
+                                )
+                                .onAppear { pulseAnimation = true }
+                            } else if task.isOverdue {
                                 HStack(spacing: 3) {
                                     Image(systemName: "exclamationmark.triangle.fill")
                                         .font(.system(size: 8))
@@ -407,13 +431,28 @@ struct TaskCardImproved: View {
                                 .lineLimit(1)
                         }
 
-                        // Progress bar for active tasks
-                        if task.enabled {
-                            ProgressView()
-                                .progressViewStyle(.linear)
-                                .tint(AppTheme.accent)
-                                .scaleEffect(y: 0.5)
-                                .frame(maxWidth: 160)
+                        // Progress bar for active/running tasks
+                        if isRunning {
+                            IndeterminateProgressBar()
+                                .frame(maxWidth: 180, maxHeight: 4)
+                        }
+
+                        // Completion checkmark for completed tasks
+                        if isCompleted {
+                            HStack(spacing: 5) {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .font(.system(size: 12))
+                                    .foregroundColor(AppTheme.success)
+                                    .scaleEffect(completionScale)
+                                Text("Completed")
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundColor(AppTheme.success)
+                            }
+                            .onAppear {
+                                withAnimation(.spring(response: 0.4, dampingFraction: 0.6)) {
+                                    completionScale = 1.0
+                                }
+                            }
                         }
 
                         // Schedule + stats row
@@ -872,5 +911,41 @@ struct CreateTaskSheet: View {
 
         onCreated()
         dismiss()
+    }
+}
+
+// MARK: - Indeterminate Progress Bar
+
+struct IndeterminateProgressBar: View {
+    @State private var offset: CGFloat = -1.0
+
+    var body: some View {
+        GeometryReader { geo in
+            let barWidth = geo.size.width * 0.35
+            RoundedRectangle(cornerRadius: 2)
+                .fill(AppTheme.accent.opacity(0.15))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(
+                            LinearGradient(
+                                colors: [AppTheme.accent.opacity(0.0), AppTheme.accent, AppTheme.accent.opacity(0.0)],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
+                        .frame(width: barWidth)
+                        .offset(x: offset * (geo.size.width / 2 + barWidth / 2))
+                    , alignment: .leading
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 2))
+        }
+        .onAppear {
+            withAnimation(
+                .easeInOut(duration: 1.4)
+                .repeatForever(autoreverses: true)
+            ) {
+                offset = 1.0
+            }
+        }
     }
 }

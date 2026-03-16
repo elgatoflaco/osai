@@ -338,6 +338,111 @@ struct AgentsView: View {
     }
 }
 
+// MARK: - Usage Sparkline
+
+struct UsageSparkline: View {
+    let dataPoints: [CGFloat]
+    let color: Color
+
+    var body: some View {
+        GeometryReader { geo in
+            let maxVal = max(dataPoints.max() ?? 1, 1)
+            let stepX = geo.size.width / CGFloat(max(dataPoints.count - 1, 1))
+            let height = geo.size.height
+
+            ZStack {
+                // Fill gradient under the line
+                Path { path in
+                    for (index, value) in dataPoints.enumerated() {
+                        let x = stepX * CGFloat(index)
+                        let y = height - (value / maxVal) * height
+                        if index == 0 {
+                            path.move(to: CGPoint(x: x, y: y))
+                        } else {
+                            path.addLine(to: CGPoint(x: x, y: y))
+                        }
+                    }
+                    path.addLine(to: CGPoint(x: geo.size.width, y: height))
+                    path.addLine(to: CGPoint(x: 0, y: height))
+                    path.closeSubpath()
+                }
+                .fill(
+                    LinearGradient(
+                        colors: [color.opacity(0.25), color.opacity(0.0)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+
+                // Stroke line
+                Path { path in
+                    for (index, value) in dataPoints.enumerated() {
+                        let x = stepX * CGFloat(index)
+                        let y = height - (value / maxVal) * height
+                        if index == 0 {
+                            path.move(to: CGPoint(x: x, y: y))
+                        } else {
+                            path.addLine(to: CGPoint(x: x, y: y))
+                        }
+                    }
+                }
+                .stroke(color, style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round))
+            }
+        }
+    }
+}
+
+/// Generates 7 mock sparkline data points from a usage count, providing
+/// a deterministic but varied distribution based on the agent name hash.
+private func sparklineData(for agentName: String, usageCount: Int) -> [CGFloat] {
+    guard usageCount > 0 else { return Array(repeating: 0, count: 7) }
+    // Use a simple hash-based seed for deterministic variety
+    let seed = abs(agentName.hashValue)
+    let weights: [Double] = (0..<7).map { i in
+        let angle = Double((seed >> i) & 0xFF) + Double(i) * 1.3
+        return max(0.1, abs(sin(angle)))
+    }
+    let totalWeight = weights.reduce(0, +)
+    return weights.map { CGFloat(Double(usageCount) * ($0 / totalWeight)) }
+}
+
+// MARK: - Pulsing Status Dot
+
+struct PulsingDot: View {
+    let color: Color
+    let isPulsing: Bool
+
+    @State private var pulseScale: CGFloat = 1.0
+    @State private var pulseOpacity: Double = 0.5
+
+    var body: some View {
+        ZStack {
+            if isPulsing {
+                Circle()
+                    .fill(color.opacity(pulseOpacity))
+                    .frame(width: 10 * pulseScale, height: 10 * pulseScale)
+            }
+            Circle()
+                .fill(color)
+                .frame(width: 10, height: 10)
+                .overlay(
+                    Circle()
+                        .stroke(AppTheme.bgCard, lineWidth: 2)
+                )
+        }
+        .onAppear {
+            guard isPulsing else { return }
+            withAnimation(
+                .easeInOut(duration: 1.5)
+                .repeatForever(autoreverses: true)
+            ) {
+                pulseScale = 2.0
+                pulseOpacity = 0.0
+            }
+        }
+    }
+}
+
 // MARK: - Agent Card
 
 struct AgentCard: View {
@@ -432,15 +537,12 @@ struct AgentCard: View {
             ZStack(alignment: .bottomTrailing) {
                 GhostIcon(size: 36, animate: false, tint: agentColor(agent.name))
 
-                // Status dot indicator
-                Circle()
-                    .fill(status.dotColor)
-                    .frame(width: 10, height: 10)
-                    .overlay(
-                        Circle()
-                            .stroke(AppTheme.bgCard, lineWidth: 2)
-                    )
-                    .offset(x: 2, y: 2)
+                // Pulsing status dot for active agents
+                PulsingDot(
+                    color: status.dotColor,
+                    isPulsing: status == .recentlyUsed
+                )
+                .offset(x: 2, y: 2)
             }
 
             VStack(alignment: .leading, spacing: 2) {
@@ -521,6 +623,31 @@ struct AgentCard: View {
                 .foregroundColor(AppTheme.textSecondary)
                 .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
+        }
+
+        // Last used relative timestamp
+        if let lastUsed = lastUsedLabel {
+            HStack(spacing: 4) {
+                Image(systemName: "clock")
+                    .font(.system(size: 9))
+                Text("Last used: \(lastUsed)")
+                    .font(.system(size: 11, weight: .medium))
+            }
+            .foregroundColor(AppTheme.textMuted)
+        }
+
+        // Usage sparkline (last 7 days)
+        if usageCount > 0 {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("7-day activity")
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundColor(AppTheme.textMuted)
+                UsageSparkline(
+                    dataPoints: sparklineData(for: agent.name, usageCount: usageCount),
+                    color: agentColor(agent.name)
+                )
+                .frame(height: 28)
+            }
         }
 
         // Model pill

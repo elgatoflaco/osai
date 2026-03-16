@@ -1275,47 +1275,68 @@ struct MessageBubble: View {
 
     // MARK: - Quote / Reply-To Bar
 
+    /// Truncate to approximately 80 characters for the quote preview
+    private func quotePreviewText(_ text: String) -> String {
+        if text.count <= 80 { return text }
+        let truncated = String(text.prefix(80))
+        return truncated + "..."
+    }
+
     @ViewBuilder
     private var quoteBar: some View {
         if let replyId = message.replyToMessageId,
            let content = quotedMessageContent {
-            Button(action: {
-                onScrollToMessage?(replyId)
-            }) {
-                HStack(alignment: .top, spacing: 8) {
-                    RoundedRectangle(cornerRadius: 1.5)
-                        .fill(AppTheme.accent)
-                        .frame(width: 3)
+            VStack(alignment: .leading, spacing: 3) {
+                // "Reply" label with arrow icon
+                HStack(spacing: 4) {
+                    Image(systemName: "arrowshape.turn.up.left.fill")
+                        .font(.system(size: 8))
+                        .foregroundColor(AppTheme.textMuted)
+                    Text("Reply")
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundColor(AppTheme.textMuted)
+                }
 
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack(spacing: 4) {
-                            Image(systemName: quotedMessageRole == .user ? "person.circle.fill" : "bubble.left.fill")
-                                .font(.system(size: 9))
-                                .foregroundColor(AppTheme.accent)
-                            Text(quotedMessageRole == .user ? "You" : "Assistant")
-                                .font(.system(size: 9, weight: .semibold))
-                                .foregroundColor(AppTheme.accent)
+                // Thread indicator: thin vertical line + quoted preview
+                Button(action: {
+                    onScrollToMessage?(replyId)
+                }) {
+                    HStack(alignment: .top, spacing: 8) {
+                        // Thin 2pt accent vertical line
+                        RoundedRectangle(cornerRadius: 1)
+                            .fill(AppTheme.accent)
+                            .frame(width: 2)
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack(spacing: 4) {
+                                Image(systemName: quotedMessageRole == .user ? "person.circle.fill" : "bubble.left.fill")
+                                    .font(.system(size: 9))
+                                    .foregroundColor(AppTheme.accent)
+                                Text(quotedMessageRole == .user ? "You" : "Assistant")
+                                    .font(.system(size: 9, weight: .semibold))
+                                    .foregroundColor(AppTheme.accent)
+                            }
+
+                            Text(quotePreviewText(content))
+                                .font(.system(size: 11).italic())
+                                .foregroundColor(AppTheme.textMuted)
+                                .lineLimit(2)
+                                .truncationMode(.tail)
                         }
 
-                        Text(content)
-                            .font(.system(size: 11))
-                            .foregroundColor(AppTheme.textSecondary)
-                            .lineLimit(2)
-                            .truncationMode(.tail)
+                        Spacer()
                     }
-
-                    Spacer()
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(AppTheme.accent.opacity(0.06))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(AppTheme.accent.opacity(0.15), lineWidth: 0.5)
+                    )
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(AppTheme.accent.opacity(0.06))
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8)
-                        .stroke(AppTheme.accent.opacity(0.15), lineWidth: 0.5)
-                )
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
             .accessibilityLabel("Replying to \(quotedMessageRole == .user ? "your" : "assistant") message")
         }
     }
