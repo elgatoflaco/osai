@@ -33,6 +33,7 @@ struct ChatView: View {
     @State private var scrollContentHeight: CGFloat = 0
     @State private var scrollViewHeight: CGFloat = 0
     @State private var showBookmarksPanel: Bool = false
+    @State private var bookmarkSearchText: String = ""
     @State private var shareMode: Bool = false
     @State private var selectedShareMessageIds: Set<String> = []
     @State private var showCodeBlocksSheet: Bool = false
@@ -521,12 +522,25 @@ struct ChatView: View {
 
                     if !focusMode {
                         Button(action: { withAnimation(.easeInOut(duration: 0.2)) { showBookmarksPanel.toggle() } }) {
-                            Image(systemName: appState.bookmarkedMessages.isEmpty ? "bookmark" : "bookmark.fill")
-                                .font(.system(size: 14))
-                                .foregroundColor(showBookmarksPanel ? AppTheme.accent : AppTheme.textSecondary)
+                            ZStack(alignment: .topTrailing) {
+                                Image(systemName: appState.bookmarkedMessages.isEmpty ? "bookmark" : "bookmark.fill")
+                                    .font(.system(size: 14))
+                                    .foregroundColor(showBookmarksPanel ? AppTheme.accent : AppTheme.textSecondary)
+
+                                if !appState.bookmarkedMessages.isEmpty {
+                                    Text("\(appState.bookmarkedMessages.count)")
+                                        .font(.system(size: 8, weight: .bold, design: .rounded))
+                                        .foregroundColor(.white)
+                                        .padding(.horizontal, 3)
+                                        .padding(.vertical, 1)
+                                        .background(AppTheme.accent)
+                                        .clipShape(Capsule())
+                                        .offset(x: 6, y: -6)
+                                }
+                            }
                         }
                         .buttonStyle(.plain)
-                        .help("Bookmarks")
+                        .help("Bookmarks (\(appState.bookmarkedMessages.count))")
                     }
 
                     if !focusMode, let conv = appState.activeConversation, !conv.messages.isEmpty {
@@ -1357,7 +1371,8 @@ struct ChatView: View {
             parentTitle: appState.parentConversationTitle(for: conv),
             tagColorProvider: { tag in appState.tagColor(for: tag) },
             onMerge: { appState.mergeTargetId = conv.id },
-            isMergeTarget: appState.mergeTargetId != nil && appState.mergeTargetId != conv.id
+            isMergeTarget: appState.mergeTargetId != nil && appState.mergeTargetId != conv.id,
+            onSetColor: { color in appState.setConversationColor(id: conv.id, color: color) }
         )
     }
 
@@ -2145,10 +2160,45 @@ struct ChatView: View {
 
     // MARK: - Bookmarks Panel
 
+    /// All bookmarked messages, optionally filtered by the bookmark search text
+    private var filteredBookmarks: [(conversation: Conversation, message: ChatMessage)] {
+        let all = appState.allBookmarkedMessages()
+        let query = bookmarkSearchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else { return all }
+        return all.filter { pair in
+            pair.1.content.lowercased().contains(query) ||
+            pair.0.title.lowercased().contains(query)
+        }
+    }
+
+    private func roleIcon(for role: MessageRole) -> String {
+        switch role {
+        case .user: return "person.fill"
+        case .assistant: return "cpu"
+        case .system: return "gearshape"
+        case .tool: return "wrench.and.screwdriver"
+        }
+    }
+
     @ViewBuilder
     private var bookmarksPanel: some View {
-        let grouped = Dictionary(grouping: appState.bookmarkedMessages, by: { $0.conversation.id })
+        let bookmarks = filteredBookmarks
+        let grouped = Dictionary(grouping: bookmarks, by: { $0.0.id })
+        // Preserve conversation ordering by first appearance
+        let orderedConvIds: [String] = {
+            var seen = Set<String>()
+            var ids: [String] = []
+            for item in bookmarks {
+                if !seen.contains(item.0.id) {
+                    seen.insert(item.0.id)
+                    ids.append(item.0.id)
+                }
+            }
+            return ids
+        }()
+
         VStack(alignment: .leading, spacing: 0) {
+            // Header
             HStack {
                 Image(systemName: "bookmark.fill")
                     .font(.system(size: 12))
@@ -2157,11 +2207,22 @@ struct ChatView: View {
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundColor(AppTheme.textPrimary)
 
+                if !appState.bookmarkedMessages.isEmpty {
+                    Text("\(appState.bookmarkedMessages.count)")
+                        .font(.system(size: 10, weight: .bold, design: .rounded))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1)
+                        .background(AppTheme.accent.opacity(0.8))
+                        .clipShape(Capsule())
+                }
+
                 Spacer()
 
                 if !appState.bookmarkedMessages.isEmpty {
                     Button(action: {
                         appState.clearAllBookmarks()
+                        bookmarkSearchText = ""
                     }) {
                         Text("Clear all")
                             .font(.system(size: 10, weight: .medium))
@@ -2170,7 +2231,10 @@ struct ChatView: View {
                     .buttonStyle(.plain)
                 }
 
-                Button(action: { withAnimation(.easeInOut(duration: 0.2)) { showBookmarksPanel = false } }) {
+                Button(action: {
+                    bookmarkSearchText = ""
+                    withAnimation(.easeInOut(duration: 0.2)) { showBookmarksPanel = false }
+                }) {
                     Image(systemName: "xmark")
                         .font(.system(size: 10, weight: .semibold))
                         .foregroundColor(AppTheme.textMuted)
@@ -2179,6 +2243,32 @@ struct ChatView: View {
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
+
+            // Search within bookmarks
+            if !appState.bookmarkedMessages.isEmpty {
+                HStack(spacing: 6) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 10))
+                        .foregroundColor(AppTheme.textMuted)
+                    TextField("Search bookmarks...", text: $bookmarkSearchText)
+                        .font(.system(size: 12))
+                        .textFieldStyle(.plain)
+                    if !bookmarkSearchText.isEmpty {
+                        Button(action: { bookmarkSearchText = "" }) {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 10))
+                                .foregroundColor(AppTheme.textMuted)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(AppTheme.bgSecondary.opacity(0.5))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .padding(.horizontal, 14)
+                .padding(.bottom, 6)
+            }
 
             Divider().background(AppTheme.borderGlass)
 
@@ -2192,6 +2282,26 @@ struct ChatView: View {
                         Text("No bookmarked messages")
                             .font(.system(size: 12))
                             .foregroundColor(AppTheme.textMuted)
+                        Text("Long-press a message or tap the bookmark icon to save messages here.")
+                            .font(.system(size: 10))
+                            .foregroundColor(AppTheme.textMuted.opacity(0.7))
+                            .multilineTextAlignment(.center)
+                            .frame(maxWidth: 200)
+                    }
+                    .padding(.vertical, 16)
+                    Spacer()
+                }
+            } else if bookmarks.isEmpty {
+                // Search returned no results
+                HStack {
+                    Spacer()
+                    VStack(spacing: 6) {
+                        Image(systemName: "magnifyingglass")
+                            .font(.system(size: 20))
+                            .foregroundColor(AppTheme.textMuted.opacity(0.5))
+                        Text("No matching bookmarks")
+                            .font(.system(size: 12))
+                            .foregroundColor(AppTheme.textMuted)
                     }
                     .padding(.vertical, 16)
                     Spacer()
@@ -2199,42 +2309,33 @@ struct ChatView: View {
             } else {
                 ScrollView(.vertical, showsIndicators: true) {
                     LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(Array(grouped.keys.sorted()), id: \.self) { convId in
-                            if let items = grouped[convId], let conv = items.first?.conversation {
+                        ForEach(orderedConvIds, id: \.self) { convId in
+                            if let items = grouped[convId], let conv = items.first?.0 {
                                 VStack(alignment: .leading, spacing: 0) {
-                                    Text(conv.title)
-                                        .font(.system(size: 11, weight: .semibold))
-                                        .foregroundColor(AppTheme.textSecondary)
-                                        .padding(.horizontal, 14)
-                                        .padding(.vertical, 6)
+                                    // Conversation group header
+                                    HStack(spacing: 6) {
+                                        Image(systemName: "bubble.left.and.bubble.right")
+                                            .font(.system(size: 9))
+                                            .foregroundColor(AppTheme.textMuted)
+                                        Text(conv.title)
+                                            .font(.system(size: 11, weight: .semibold))
+                                            .foregroundColor(AppTheme.textSecondary)
+                                            .lineLimit(1)
+                                        Spacer()
+                                        Text("\(items.count)")
+                                            .font(.system(size: 9, weight: .medium, design: .rounded))
+                                            .foregroundColor(AppTheme.textMuted)
+                                            .padding(.horizontal, 5)
+                                            .padding(.vertical, 1)
+                                            .background(AppTheme.bgSecondary.opacity(0.5))
+                                            .clipShape(Capsule())
+                                    }
+                                    .padding(.horizontal, 14)
+                                    .padding(.vertical, 6)
+                                    .background(AppTheme.bgSecondary.opacity(0.15))
 
-                                    ForEach(items, id: \.message.id) { item in
-                                        Button(action: {
-                                            appState.openConversation(item.conversation)
-                                            scrollToMessageId = item.message.id
-                                            withAnimation(.easeInOut(duration: 0.2)) { showBookmarksPanel = false }
-                                        }) {
-                                            HStack(spacing: 8) {
-                                                Image(systemName: "bookmark.fill")
-                                                    .font(.system(size: 9))
-                                                    .foregroundColor(AppTheme.accent.opacity(0.6))
-                                                VStack(alignment: .leading, spacing: 2) {
-                                                    Text(String(item.message.content.prefix(80)))
-                                                        .font(.system(size: 12))
-                                                        .foregroundColor(AppTheme.textPrimary)
-                                                        .lineLimit(2)
-                                                        .multilineTextAlignment(.leading)
-                                                    Text(bookmarkTimeString(item.message.timestamp))
-                                                        .font(.system(size: 10))
-                                                        .foregroundColor(AppTheme.textMuted)
-                                                }
-                                                Spacer()
-                                            }
-                                            .padding(.horizontal, 14)
-                                            .padding(.vertical, 6)
-                                            .contentShape(Rectangle())
-                                        }
-                                        .buttonStyle(.plain)
+                                    ForEach(items, id: \.1.id) { item in
+                                        bookmarkEntryRow(item: item)
                                     }
                                 }
 
@@ -2243,10 +2344,65 @@ struct ChatView: View {
                         }
                     }
                 }
-                .frame(maxHeight: 240)
+                .frame(maxHeight: 320)
             }
         }
         .background(AppTheme.bgSecondary.opacity(0.4))
+    }
+
+    @ViewBuilder
+    private func bookmarkEntryRow(item: (Conversation, ChatMessage)) -> some View {
+        let conv = item.0
+        let msg = item.1
+        HStack(spacing: 8) {
+            // Role icon
+            Image(systemName: roleIcon(for: msg.role))
+                .font(.system(size: 10))
+                .foregroundColor(msg.role == .user ? AppTheme.accent : AppTheme.success)
+                .frame(width: 16)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(String(msg.content.prefix(100)))
+                    .font(.system(size: 12))
+                    .foregroundColor(AppTheme.textPrimary)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                Text(bookmarkTimeString(msg.timestamp))
+                    .font(.system(size: 10))
+                    .foregroundColor(AppTheme.textMuted)
+            }
+
+            Spacer()
+
+            // Remove bookmark button
+            Button(action: {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    appState.removeBookmark(conversationId: conv.id, messageId: msg.id)
+                }
+            }) {
+                Image(systemName: "bookmark.slash.fill")
+                    .font(.system(size: 10))
+                    .foregroundColor(AppTheme.textMuted.opacity(0.5))
+            }
+            .buttonStyle(.plain)
+            .help("Remove bookmark")
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 6)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            appState.openConversation(conv)
+            scrollToMessageId = msg.id
+            withAnimation(.easeInOut(duration: 0.2)) { showBookmarksPanel = false }
+        }
+        .background(Color.clear)
+        .onHover { hovering in
+            if hovering {
+                NSCursor.pointingHand.push()
+            } else {
+                NSCursor.pop()
+            }
+        }
     }
 
     private func bookmarkTimeString(_ date: Date) -> String {
@@ -3260,6 +3416,7 @@ struct ConversationRow: View {
     var tagColorProvider: ((String) -> Color)? = nil
     var onMerge: (() -> Void)? = nil
     var isMergeTarget: Bool = false
+    var onSetColor: ((String?) -> Void)? = nil
     @State private var isHovered = false
 
     private static let tagColors: [Color] = [.red, .orange, .yellow, .green, .blue, .purple, .pink, .teal]
@@ -3286,6 +3443,11 @@ struct ConversationRow: View {
                 }
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 4) {
+                        if let labelColor = AppState.colorForLabel(conv.colorLabel) {
+                            Circle()
+                                .fill(labelColor)
+                                .frame(width: 8, height: 8)
+                        }
                         if conv.isPinned {
                             Image(systemName: "pin.fill")
                                 .font(.system(size: 8))
@@ -3439,6 +3601,8 @@ struct ConversationRow: View {
             Divider()
             tagContextMenu
             Divider()
+            colorLabelContextMenu
+            Divider()
             Button(role: .destructive, action: onDelete) {
                 Label("Delete", systemImage: "trash")
             }
@@ -3489,6 +3653,29 @@ struct ConversationRow: View {
             } label: {
                 Label("New Tag...", systemImage: "plus")
             }
+        }
+    }
+
+    @ViewBuilder
+    private var colorLabelContextMenu: some View {
+        Menu("Color Label") {
+            ForEach(AppState.conversationColors, id: \.name) { item in
+                Button {
+                    onSetColor?(item.name)
+                } label: {
+                    HStack {
+                        Image(systemName: conv.colorLabel == item.name ? "circle.inset.filled" : "circle.fill")
+                        Text(item.name.capitalized)
+                    }
+                }
+            }
+            Divider()
+            Button {
+                onSetColor?(nil)
+            } label: {
+                Label("None", systemImage: "xmark.circle")
+            }
+            .disabled(conv.colorLabel == nil)
         }
     }
 

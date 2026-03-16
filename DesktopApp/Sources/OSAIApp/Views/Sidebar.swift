@@ -583,6 +583,10 @@ struct MiniCalendarWidget: View {
         appState.conversationDatesForMonth(displayedMonth)
     }
 
+    private var conversationColorsByDay: [Int: Set<String>] {
+        appState.conversationColorsForMonth(displayedMonth)
+    }
+
     private var isCurrentMonth: Bool {
         calendar.isDate(displayedMonth, equalTo: Date(), toGranularity: .month)
     }
@@ -698,7 +702,8 @@ struct MiniCalendarWidget: View {
                                     day: cell.day,
                                     isToday: todayDay == cell.day,
                                     isSelected: selectedDay == cell.day,
-                                    hasConversations: conversationDays.contains(cell.day)
+                                    hasConversations: conversationDays.contains(cell.day),
+                                    colorLabels: Array(conversationColorsByDay[cell.day] ?? []).prefix(3).map { $0 }
                                 ) {
                                     selectDay(cell.day)
                                 }
@@ -775,6 +780,7 @@ private struct CalendarDayButton: View {
     let isToday: Bool
     let isSelected: Bool
     let hasConversations: Bool
+    var colorLabels: [String] = []
     let action: () -> Void
 
     var body: some View {
@@ -784,10 +790,21 @@ private struct CalendarDayButton: View {
                     .font(.system(size: 10, weight: isToday ? .bold : (isSelected ? .semibold : .regular)))
                     .foregroundColor(dayTextColor)
 
-                // Conversation indicator dot
-                Circle()
-                    .fill(hasConversations ? AppTheme.accent : Color.clear)
-                    .frame(width: 4, height: 4)
+                // Conversation indicator dots (color labels take priority)
+                if !colorLabels.isEmpty {
+                    HStack(spacing: 1) {
+                        ForEach(colorLabels, id: \.self) { label in
+                            Circle()
+                                .fill(AppState.colorForLabel(label) ?? AppTheme.accent)
+                                .frame(width: 3, height: 3)
+                        }
+                    }
+                    .frame(height: 4)
+                } else {
+                    Circle()
+                        .fill(hasConversations ? AppTheme.accent : Color.clear)
+                        .frame(width: 4, height: 4)
+                }
             }
             .frame(height: 24)
             .frame(maxWidth: .infinity)

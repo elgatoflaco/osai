@@ -1,6 +1,180 @@
 import SwiftUI
 import AppKit
 
+// MARK: - Smart Paste Detection
+
+enum SmartPasteSuggestion: Equatable {
+    case codeBlock(language: String, content: String)
+    case url(raw: String)
+    case json(raw: String)
+    case imageData
+
+    var label: String {
+        switch self {
+        case .codeBlock(let lang, _):
+            return "Paste as \(lang.isEmpty ? "code" : lang) block?"
+        case .url:
+            return "Format as link?"
+        case .json:
+            return "Paste as JSON block?"
+        case .imageData:
+            return "Image detected"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .codeBlock: return "chevron.left.forwardslash.chevron.right"
+        case .url: return "link"
+        case .json: return "curlybraces"
+        case .imageData: return "photo"
+        }
+    }
+
+    /// Apply the suggestion, returning the formatted text to replace the pasted content.
+    func apply(currentText: String, pastedText: String) -> String {
+        switch self {
+        case .codeBlock(let lang, let content):
+            let replacement = "```\(lang)\n\(content)\n```"
+            return currentText.replacingLastOccurrence(of: pastedText, with: replacement)
+        case .url(let raw):
+            let replacement = "[\(raw)](\(raw))"
+            return currentText.replacingLastOccurrence(of: raw, with: replacement)
+        case .json(let raw):
+            let replacement = "```json\n\(raw)\n```"
+            return currentText.replacingLastOccurrence(of: raw, with: replacement)
+        case .imageData:
+            return currentText
+        }
+    }
+}
+
+private extension String {
+    func replacingLastOccurrence(of target: String, with replacement: String) -> String {
+        guard let range = self.range(of: target, options: .backwards) else { return self }
+        var result = self
+        result.replaceSubrange(range, with: replacement)
+        return result
+    }
+}
+
+/// Analyzes pasted text and returns a suggestion if smart paste is applicable.
+func detectSmartPaste(_ text: String) -> SmartPasteSuggestion? {
+    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return nil }
+
+    // Check for URL (single line starting with http/https or common schemes)
+    if trimmed.components(separatedBy: .newlines).count == 1,
+       let url = URL(string: trimmed),
+       let scheme = url.scheme,
+       ["http", "https", "ftp"].contains(scheme.lowercased()),
+       url.host != nil {
+        return .url(raw: trimmed)
+    }
+
+    // Check for valid JSON (object or array)
+    if (trimmed.hasPrefix("{") && trimmed.hasSuffix("}")) ||
+       (trimmed.hasPrefix("[") && trimmed.hasSuffix("]")) {
+        if let data = trimmed.data(using: .utf8),
+           (try? JSONSerialization.jsonObject(with: data)) != nil {
+            return .json(raw: trimmed)
+        }
+    }
+
+    // Check for code patterns
+    let codePatterns: [(pattern: String, language: String)] = [
+        (#"^(import |from .+ import )"#, "python"),
+        (#"^(def |class .+:)"#, "python"),
+        (#"^(func |let |var |struct |enum |protocol |import )"#, "swift"),
+        (#"^(function |const |let |var |import |export |=>)"#, "javascript"),
+        (#"^(package |func |type |import \")"#, "go"),
+        (#"^(use |fn |let |mod |pub |impl )"#, "rust"),
+        (#"^(public |private |class |interface |void |int |String )"#, "java"),
+        (#"^#include |^using namespace"#, "cpp"),
+        (#"^\s*<[a-zA-Z][^>]*>"#, "html"),
+        (#"^\s*\{[\s\S]*[;{}]"#, ""),
+    ]
+
+    let lines = trimmed.components(separatedBy: .newlines)
+    let hasMultipleLines = lines.count > 1
+    let hasBraces = trimmed.contains("{") && trimmed.contains("}")
+    let hasSemicolons = trimmed.contains(";")
+    let hasArrows = trimmed.contains("->") || trimmed.contains("=>")
+
+    // Only suggest code block if it looks sufficiently code-like
+    let codeSignals = [hasMultipleLines, hasBraces, hasSemicolons, hasArrows].filter { $0 }.count
+
+    for (pattern, lang) in codePatterns {
+        for line in lines.prefix(5) {
+            if line.range(of: pattern, options: .regularExpression) != nil {
+                if codeSignals >= 1 || lines.count >= 3 {
+                    return .codeBlock(language: lang, content: trimmed)
+                }
+            }
+        }
+    }
+
+    // Generic code detection: multiple lines with indentation and braces
+    if hasMultipleLines && codeSignals >= 2 {
+        return .codeBlock(language: "", content: trimmed)
+    }
+
+    return nil
+}
+
+// MARK: - Smart Paste Suggestion Popup
+
+struct SmartPasteSuggestionView: View {
+    let suggestion: SmartPasteSuggestion
+    var onAccept: () -> Void
+    var onDismiss: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: suggestion.icon)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(AppTheme.accent)
+
+            Text(suggestion.label)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(AppTheme.textPrimary)
+
+            Spacer()
+
+            Button(action: onAccept) {
+                Text("Accept")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(AppTheme.accent)
+                    .clipShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Accept smart paste suggestion")
+
+            Button(action: onDismiss) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(AppTheme.textMuted)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Dismiss smart paste suggestion")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(.ultraThinMaterial)
+        .background(AppTheme.bgCard.opacity(0.95))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(AppTheme.accent.opacity(0.3), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.25), radius: 8, y: -2)
+        .transition(.move(edge: .bottom).combined(with: .opacity))
+    }
+}
+
 struct TaskInputField: View {
     @Binding var text: String
     var placeholder: String = "Ask anything..."
@@ -76,6 +250,7 @@ struct GrowingTextEditor: NSViewRepresentable {
     var onDownArrowHistory: (() -> Void)?
     var onEscapeKey: (() -> Void)?
     var onPasteImages: (([URL]) -> Void)?
+    var onPasteText: ((String) -> Void)?
     var onUserTyped: (() -> Void)?
     var isBrowsingHistory: Bool = false
 
@@ -102,6 +277,7 @@ struct GrowingTextEditor: NSViewRepresentable {
         textView.onDownArrowHistory = onDownArrowHistory
         textView.onEscapeKey = onEscapeKey
         textView.onPasteImages = onPasteImages
+        textView.onPasteText = onPasteText
         textView.isBrowsingHistory = isBrowsingHistory
         textView.font = font
         textView.textColor = textColor
@@ -136,6 +312,7 @@ struct GrowingTextEditor: NSViewRepresentable {
         textView.onDownArrowHistory = onDownArrowHistory
         textView.onEscapeKey = onEscapeKey
         textView.onPasteImages = onPasteImages
+        textView.onPasteText = onPasteText
         textView.isBrowsingHistory = isBrowsingHistory
 
         // Only update text if it differs (avoid cursor jumping)
@@ -244,6 +421,7 @@ class SubmittableTextView: NSTextView {
     var onDownArrowHistory: (() -> Void)?
     var onEscapeKey: (() -> Void)?
     var onPasteImages: (([URL]) -> Void)?
+    var onPasteText: ((String) -> Void)?
 
     /// Whether the user is currently browsing input history (enables down-arrow navigation)
     var isBrowsingHistory: Bool = false
@@ -319,6 +497,12 @@ class SubmittableTextView: NSTextView {
         }
 
         // Default paste behavior for text
+        // Capture pasted text for smart paste detection
+        if let pastedString = pb.string(forType: .string), !pastedString.isEmpty {
+            super.paste(sender)
+            onPasteText?(pastedString)
+            return
+        }
         super.paste(sender)
     }
 }
@@ -603,6 +787,9 @@ struct ChatInputBar: View {
     @State private var slashFilter = ""
     @State private var showTemplatePopover = false
     @State private var showTemplateManager = false
+    @State private var smartPasteSuggestion: SmartPasteSuggestion?
+    @State private var lastPastedText: String = ""
+    @State private var smartPasteDismissTask: Task<Void, Never>?
 
     private let slashCommands: [(command: String, icon: String, description: String)] = [
         ("/new", "plus.circle", "Start new conversation"),
@@ -615,6 +802,28 @@ struct ChatInputBar: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            // Smart paste suggestion popup
+            if let suggestion = smartPasteSuggestion {
+                SmartPasteSuggestionView(
+                    suggestion: suggestion,
+                    onAccept: {
+                        withAnimation(.easeOut(duration: 0.15)) {
+                            text = suggestion.apply(currentText: text, pastedText: lastPastedText)
+                            smartPasteSuggestion = nil
+                            smartPasteDismissTask?.cancel()
+                        }
+                    },
+                    onDismiss: {
+                        withAnimation(.easeOut(duration: 0.15)) {
+                            smartPasteSuggestion = nil
+                            smartPasteDismissTask?.cancel()
+                        }
+                    }
+                )
+                .padding(.bottom, 6)
+                .animation(.easeInOut(duration: 0.2), value: smartPasteSuggestion != nil)
+            }
+
             // Slash command menu
             if showSlashMenu {
                 let filtered = slashCommands.filter { cmd in
@@ -715,6 +924,24 @@ struct ChatInputBar: View {
                         }
                     },
                     onPasteImages: onPasteImages,
+                    onPasteText: { pastedText in
+                        guard appState.smartPasteEnabled else { return }
+                        if let suggestion = detectSmartPaste(pastedText) {
+                            lastPastedText = pastedText
+                            smartPasteDismissTask?.cancel()
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                smartPasteSuggestion = suggestion
+                            }
+                            // Auto-dismiss after 3 seconds
+                            smartPasteDismissTask = Task { @MainActor in
+                                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                                guard !Task.isCancelled else { return }
+                                withAnimation(.easeOut(duration: 0.2)) {
+                                    smartPasteSuggestion = nil
+                                }
+                            }
+                        }
+                    },
                     onUserTyped: {
                         appState.resetInputHistoryNavigation()
                     },

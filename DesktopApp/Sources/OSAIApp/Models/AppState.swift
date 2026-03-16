@@ -498,6 +498,24 @@ struct SearchResult: Identifiable {
 }
 
 class AppState: ObservableObject {
+    // MARK: - Conversation Color Labels
+    static let conversationColors: [(name: String, color: Color)] = [
+        ("red", .red),
+        ("orange", .orange),
+        ("yellow", .yellow),
+        ("green", .green),
+        ("blue", .blue),
+        ("purple", .purple),
+        ("pink", .pink),
+        ("teal", .teal)
+    ]
+
+    /// Returns the SwiftUI Color for a given color label name, or nil if not found.
+    static func colorForLabel(_ name: String?) -> Color? {
+        guard let name = name else { return nil }
+        return conversationColors.first(where: { $0.name == name })?.color
+    }
+
     @AppStorage("isDarkMode") var isDarkMode: Bool = true
     @AppStorage("sidebarCollapsed") var sidebarCollapsed: Bool = false
     @AppStorage("hasCompletedOnboarding") var hasCompletedOnboarding: Bool = false
@@ -508,6 +526,7 @@ class AppState: ObservableObject {
     @AppStorage("notifyOnAgentRoute") var notifyOnAgentRoute: Bool = false
     @AppStorage("notifySoundEnabled") var notifySoundEnabled: Bool = true
     @AppStorage("compactMode") var compactMode: Bool = false
+    @AppStorage("smartPasteEnabled") var smartPasteEnabled: Bool = true
     @AppStorage("displayDensity") var displayDensity: String = "comfortable"
 
     /// Message bubble padding based on display density
@@ -1258,6 +1277,27 @@ class AppState: ObservableObject {
             }
         }
         return days
+    }
+
+    /// Returns a mapping of day-of-month to the set of color labels for conversations on that day.
+    func conversationColorsForMonth(_ date: Date) -> [Int: Set<String>] {
+        let calendar = Calendar.current
+        guard let monthInterval = calendar.dateInterval(of: .month, for: date) else { return [:] }
+        var result: [Int: Set<String>] = [:]
+        for conversation in conversations {
+            guard let colorLabel = conversation.colorLabel else { continue }
+            let created = conversation.createdAt
+            if created >= monthInterval.start && created < monthInterval.end {
+                let day = calendar.component(.day, from: created)
+                result[day, default: []].insert(colorLabel)
+            }
+            if let lastMsg = conversation.messages.last?.timestamp,
+               lastMsg >= monthInterval.start && lastMsg < monthInterval.end {
+                let day = calendar.component(.day, from: lastMsg)
+                result[day, default: []].insert(colorLabel)
+            }
+        }
+        return result
     }
 
     /// Clears the calendar date filter.
@@ -2846,6 +2886,16 @@ class AppState: ObservableObject {
         }
     }
 
+    func setConversationColor(id: String, color: String?) {
+        if let idx = conversations.firstIndex(where: { $0.id == id }) {
+            conversations[idx].colorLabel = color
+            service.saveConversation(conversations[idx])
+        }
+        if activeConversation?.id == id {
+            activeConversation?.colorLabel = color
+        }
+    }
+
     func archiveConversation(id: String) {
         if let idx = conversations.firstIndex(where: { $0.id == id }) {
             conversations[idx].isArchived = true
@@ -2922,6 +2972,28 @@ class AppState: ObservableObject {
             conv.messages
                 .filter { $0.isBookmarked }
                 .map { (conversation: conv, message: $0) }
+        }
+    }
+
+    func allBookmarkedMessages() -> [(Conversation, ChatMessage)] {
+        conversations.flatMap { conv in
+            conv.messages
+                .filter { $0.isBookmarked }
+                .map { (conv, $0) }
+        }
+    }
+
+    func removeBookmark(conversationId: String, messageId: String) {
+        // Remove in conversations array
+        if let convIdx = conversations.firstIndex(where: { $0.id == conversationId }),
+           let msgIdx = conversations[convIdx].messages.firstIndex(where: { $0.id == messageId }) {
+            conversations[convIdx].messages[msgIdx].isBookmarked = false
+            service.saveConversation(conversations[convIdx])
+        }
+        // Remove in activeConversation if it matches
+        if activeConversation?.id == conversationId,
+           let msgIdx = activeConversation?.messages.firstIndex(where: { $0.id == messageId }) {
+            activeConversation?.messages[msgIdx].isBookmarked = false
         }
     }
 

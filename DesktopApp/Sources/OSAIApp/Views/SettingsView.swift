@@ -689,6 +689,25 @@ struct SettingsView: View {
                         .accessibilityValue(appState.sidebarCollapsed ? "On" : "Off")
                 }
 
+                // Smart Paste toggle
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Smart Paste")
+                            .font(AppTheme.fontBody)
+                            .foregroundColor(AppTheme.textPrimary)
+                        Text("Detect code, URLs, and JSON when pasting")
+                            .font(.system(size: 10))
+                            .foregroundColor(AppTheme.textMuted)
+                    }
+                    Spacer()
+                    Toggle("Smart Paste", isOn: $appState.smartPasteEnabled)
+                        .toggleStyle(.switch)
+                        .tint(AppTheme.accent)
+                        .labelsHidden()
+                        .accessibilityLabel("Smart Paste")
+                        .accessibilityValue(appState.smartPasteEnabled ? "On" : "Off")
+                }
+
                 // Text-to-Speech toggle
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {

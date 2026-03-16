@@ -358,6 +358,7 @@ class OSAIService {
         if !conv.tags.isEmpty { json["tags"] = conv.tags }
         if conv.titleManuallySet { json["titleManuallySet"] = true }
         if let summary = conv.summary { json["summary"] = summary }
+        if let colorLabel = conv.colorLabel { json["colorLabel"] = colorLabel }
 
         let path = "\(dir)/\(conv.id).json"
         if let data = try? JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted]) {
@@ -426,7 +427,8 @@ class OSAIService {
             branchedFromId: json["branchedFromId"] as? String,
             branchedAtMessageIndex: json["branchedAtMessageIndex"] as? Int,
             titleManuallySet: json["titleManuallySet"] as? Bool ?? false,
-            summary: json["summary"] as? String
+            summary: json["summary"] as? String,
+            colorLabel: json["colorLabel"] as? String
         )
     }
 
