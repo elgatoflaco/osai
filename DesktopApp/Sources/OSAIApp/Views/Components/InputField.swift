@@ -543,9 +543,44 @@ struct ModelSelectorButton: View {
     }
 }
 
+// MARK: - Model Metadata
+
+private struct ModelMeta {
+    let description: String
+    let speed: Int       // 1-3 lightning bolts
+    let capability: Int  // 1-3 stars
+    let price: String    // $ / $$ / $$$
+
+    static func forModel(_ id: String) -> ModelMeta {
+        switch id {
+        case let s where s.contains("haiku"):
+            return ModelMeta(description: "Fast and efficient", speed: 3, capability: 1, price: "$")
+        case let s where s.contains("sonnet"):
+            return ModelMeta(description: "Balanced speed and quality", speed: 2, capability: 2, price: "$$")
+        case let s where s.contains("opus"):
+            return ModelMeta(description: "Best for complex tasks", speed: 1, capability: 3, price: "$$$")
+        case let s where s.contains("gpt-4o-mini"):
+            return ModelMeta(description: "Lightweight and fast", speed: 3, capability: 1, price: "$")
+        case let s where s.contains("gpt-4o"):
+            return ModelMeta(description: "Multimodal with vision", speed: 2, capability: 2, price: "$$")
+        case let s where s.contains("o3"):
+            return ModelMeta(description: "Advanced reasoning", speed: 1, capability: 3, price: "$$$")
+        case let s where s.contains("gemini") && s.contains("flash"):
+            return ModelMeta(description: "Fast and affordable", speed: 3, capability: 1, price: "$")
+        case let s where s.contains("gemini") && s.contains("pro"):
+            return ModelMeta(description: "Strong general purpose", speed: 2, capability: 2, price: "$$")
+        case let s where s.contains("claude-code"):
+            return ModelMeta(description: "Local coding agent", speed: 2, capability: 3, price: "Free")
+        default:
+            return ModelMeta(description: "AI model", speed: 2, capability: 2, price: "$$")
+        }
+    }
+}
+
 struct ModelSelectorPopover: View {
     @EnvironmentObject var appState: AppState
     @Binding var isPresented: Bool
+    @State private var hoveredModel: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -577,6 +612,7 @@ struct ModelSelectorPopover: View {
                         ForEach(group.models) { model in
                             let isSelected = appState.selectedModel == model.id
                             let hasKey = appState.hasAPIKey(for: model.providerKey)
+                            let meta = ModelMeta.forModel(model.id)
 
                             Button(action: {
                                 if hasKey {
@@ -590,18 +626,55 @@ struct ModelSelectorPopover: View {
                                         .foregroundColor(hasKey ? AppTheme.accent : AppTheme.textMuted)
                                         .frame(width: 18)
 
-                                    VStack(alignment: .leading, spacing: 1) {
-                                        Text(model.displayName)
-                                            .font(.system(size: 12, weight: .medium))
-                                            .foregroundColor(hasKey ? AppTheme.textPrimary : AppTheme.textMuted)
-                                        if !hasKey {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        HStack(spacing: 6) {
+                                            Text(model.displayName)
+                                                .font(.system(size: 12, weight: .medium))
+                                                .foregroundColor(hasKey ? AppTheme.textPrimary : AppTheme.textMuted)
+
+                                            Text(meta.price)
+                                                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                                                .foregroundColor(hasKey ? AppTheme.textSecondary : AppTheme.textMuted)
+                                        }
+
+                                        if hasKey {
+                                            HStack(spacing: 8) {
+                                                Text(meta.description)
+                                                    .font(.system(size: 10))
+                                                    .foregroundColor(AppTheme.textSecondary)
+
+                                                Spacer()
+
+                                                // Speed indicator
+                                                HStack(spacing: 1) {
+                                                    ForEach(0..<3, id: \.self) { i in
+                                                        Image(systemName: "bolt.fill")
+                                                            .font(.system(size: 7))
+                                                            .foregroundColor(i < meta.speed ? AppTheme.warning : AppTheme.textMuted.opacity(0.3))
+                                                    }
+                                                }
+                                                .help("Speed")
+
+                                                // Capability indicator
+                                                HStack(spacing: 1) {
+                                                    ForEach(0..<3, id: \.self) { i in
+                                                        Image(systemName: "star.fill")
+                                                            .font(.system(size: 7))
+                                                            .foregroundColor(i < meta.capability ? AppTheme.accent : AppTheme.textMuted.opacity(0.3))
+                                                    }
+                                                }
+                                                .help("Capability")
+                                            }
+                                        } else {
                                             Text("No API key")
                                                 .font(.system(size: 10))
                                                 .foregroundColor(AppTheme.error.opacity(0.7))
                                         }
                                     }
 
-                                    Spacer()
+                                    if !hasKey {
+                                        Spacer()
+                                    }
 
                                     Text(model.tag)
                                         .font(.system(size: 9, weight: .medium))
@@ -618,19 +691,26 @@ struct ModelSelectorPopover: View {
                                     }
                                 }
                                 .padding(.horizontal, 14)
-                                .padding(.vertical, 6)
-                                .background(isSelected ? AppTheme.accent.opacity(0.08) : Color.clear)
+                                .padding(.vertical, 8)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 8)
+                                        .fill(isSelected ? AppTheme.accent.opacity(0.12) :
+                                              hoveredModel == model.id ? AppTheme.accent.opacity(0.05) : Color.clear)
+                                )
                                 .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
                             .disabled(!hasKey)
+                            .onHover { isHovered in
+                                hoveredModel = isHovered ? model.id : nil
+                            }
                         }
                     }
                 }
                 .padding(.bottom, 10)
             }
         }
-        .frame(width: 280, height: 360)
+        .frame(width: 340, height: 420)
         .background(.ultraThinMaterial)
         .background(AppTheme.bgGlass)
     }

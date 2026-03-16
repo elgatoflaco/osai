@@ -65,6 +65,7 @@ struct ChatView: View {
     @State private var readNotificationIds: Set<String> = []
     @State private var infoTagInput: String = ""
     @State private var infoTagFocused: Bool = false
+    @State private var budgetIndicatorDismissed: Bool = false
 
     private var filteredConversations: [Conversation] {
         var sorted = appState.workspaceFilteredConversations(appState.sortedConversations)
@@ -748,6 +749,43 @@ struct ChatView: View {
                 .background(AppTheme.bgSecondary.opacity(0.2))
 
                 Divider().background(AppTheme.borderGlass)
+
+                // Budget indicator
+                if appState.dailyBudget > 0 && !budgetIndicatorDismissed && !focusMode {
+                    let pct = min(appState.dailySpendingPercentage, 1.0)
+                    let displayPct = Int(appState.dailySpendingPercentage * 100)
+                    let barColor: Color = pct < 0.5 ? AppTheme.success : (pct < 0.8 ? AppTheme.warning : AppTheme.error)
+
+                    HStack(spacing: 8) {
+                        GeometryReader { geo in
+                            ZStack(alignment: .leading) {
+                                RoundedRectangle(cornerRadius: 1.5)
+                                    .fill(AppTheme.bgSecondary)
+                                    .frame(height: 3)
+                                RoundedRectangle(cornerRadius: 1.5)
+                                    .fill(barColor)
+                                    .frame(width: geo.size.width * pct, height: 3)
+                            }
+                        }
+                        .frame(height: 3)
+
+                        Text("\(displayPct)% of daily budget")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundColor(AppTheme.textMuted)
+                            .fixedSize()
+
+                        Button(action: { withAnimation(.easeOut(duration: 0.15)) { budgetIndicatorDismissed = true } }) {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 8, weight: .bold))
+                                .foregroundColor(AppTheme.textMuted)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.horizontal, AppTheme.paddingLg)
+                    .padding(.vertical, 4)
+                    .background(AppTheme.bgSecondary.opacity(0.15))
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+                }
 
                 // Bookmarks panel
                 if showBookmarksPanel {

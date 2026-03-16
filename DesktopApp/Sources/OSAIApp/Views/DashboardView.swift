@@ -216,6 +216,13 @@ struct DashboardView: View {
                     .environmentObject(appState)
             }
             .frame(maxWidth: 800)
+
+        case .productivity:
+            CollapsibleSection(section: .productivity) {
+                ProductivityWeatherContent()
+                    .environmentObject(appState)
+            }
+            .frame(maxWidth: 800)
         }
     }
 
@@ -4101,5 +4108,131 @@ struct QuickActionCard: View {
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
         .accessibilityLabel(label)
+    }
+}
+
+// MARK: - Productivity Weather Widget
+
+struct ProductivityWeatherContent: View {
+    @EnvironmentObject var appState: AppState
+
+    private var todayMessageCount: Int {
+        let calendar = Calendar.current
+        let startOfDay = calendar.startOfDay(for: Date())
+        return appState.conversations.reduce(0) { total, conv in
+            total + conv.messages.filter { $0.role == .user && $0.timestamp >= startOfDay }.count
+        }
+    }
+
+    private var last7DayCounts: [Int] {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        return (0..<7).reversed().map { daysAgo in
+            guard let dayStart = calendar.date(byAdding: .day, value: -daysAgo, to: today),
+                  let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) else { return 0 }
+            return appState.conversations.reduce(0) { total, conv in
+                total + conv.messages.filter { $0.role == .user && $0.timestamp >= dayStart && $0.timestamp < dayEnd }.count
+            }
+        }
+    }
+
+    private var weatherIcon: String {
+        switch todayMessageCount {
+        case 20...: return "sun.max.fill"
+        case 10..<20: return "cloud.sun.fill"
+        case 1..<10: return "cloud.fill"
+        default: return "moon.stars.fill"
+        }
+    }
+
+    private var weatherColor: Color {
+        switch todayMessageCount {
+        case 20...: return Color(red: 250/255, green: 204/255, blue: 21/255)
+        case 10..<20: return Color(red: 251/255, green: 146/255, blue: 60/255)
+        case 1..<10: return AppTheme.textSecondary
+        default: return Color(red: 148/255, green: 163/255, blue: 184/255)
+        }
+    }
+
+    private var forecastText: String {
+        switch todayMessageCount {
+        case 30...: return "On fire! You're in the zone."
+        case 20..<30: return "Productive day ahead!"
+        case 10..<20: return "Warming up nicely..."
+        case 1..<10: return "Getting started. Clouds clearing."
+        default: return "All quiet. Ready when you are."
+        }
+    }
+
+    var body: some View {
+        VStack(spacing: 16) {
+            HStack(spacing: 20) {
+                // Weather icon + temperature
+                VStack(spacing: 6) {
+                    Image(systemName: weatherIcon)
+                        .font(.system(size: 40))
+                        .foregroundColor(weatherColor)
+                        .shadow(color: weatherColor.opacity(0.4), radius: 8, x: 0, y: 2)
+
+                    Text("\(todayMessageCount)\u{00B0}")
+                        .font(.system(size: 32, weight: .bold, design: .rounded))
+                        .foregroundColor(AppTheme.textPrimary)
+
+                    Text("messages today")
+                        .font(AppTheme.fontCaption)
+                        .foregroundColor(AppTheme.textSecondary)
+                }
+                .frame(width: 120)
+
+                // Forecast + mini chart
+                VStack(alignment: .leading, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Forecast")
+                            .font(AppTheme.fontCaption)
+                            .foregroundColor(AppTheme.textSecondary)
+                            .textCase(.uppercase)
+
+                        Text(forecastText)
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundColor(AppTheme.textPrimary)
+                    }
+
+                    // 7-day mini chart
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Last 7 days")
+                            .font(AppTheme.fontCaption)
+                            .foregroundColor(AppTheme.textSecondary)
+
+                        HStack(alignment: .bottom, spacing: 6) {
+                            let maxCount = max(last7DayCounts.max() ?? 1, 1)
+                            ForEach(Array(last7DayCounts.enumerated()), id: \.offset) { index, count in
+                                VStack(spacing: 2) {
+                                    RoundedRectangle(cornerRadius: 3)
+                                        .fill(index == last7DayCounts.count - 1 ? weatherColor : AppTheme.textSecondary.opacity(0.4))
+                                        .frame(width: 12, height: max(4, CGFloat(count) / CGFloat(maxCount) * 28))
+
+                                    Text(dayLabel(daysAgo: last7DayCounts.count - 1 - index))
+                                        .font(.system(size: 8))
+                                        .foregroundColor(AppTheme.textSecondary)
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Spacer()
+            }
+            .padding(4)
+        }
+    }
+
+    private func dayLabel(daysAgo: Int) -> String {
+        if daysAgo == 0 { return "T" }
+        let calendar = Calendar.current
+        guard let date = calendar.date(byAdding: .day, value: -daysAgo, to: Date()) else { return "" }
+        let formatter = DateFormatter()
+        formatter.dateFormat = "E"
+        let s = formatter.string(from: date)
+        return String(s.prefix(1))
     }
 }

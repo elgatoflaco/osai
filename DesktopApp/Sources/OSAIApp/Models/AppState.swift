@@ -364,6 +364,7 @@ enum DashboardSection: String, Codable, CaseIterable, Identifiable {
     case modelUsage
     case tips
     case quickActions
+    case productivity
 
     var id: String { rawValue }
 
@@ -385,6 +386,7 @@ enum DashboardSection: String, Codable, CaseIterable, Identifiable {
         case .modelUsage: return "Model Usage"
         case .tips: return "Tips & Tricks"
         case .quickActions: return "Quick Actions"
+        case .productivity: return "Productivity"
         }
     }
 
@@ -406,11 +408,12 @@ enum DashboardSection: String, Codable, CaseIterable, Identifiable {
         case .modelUsage: return "chart.pie"
         case .tips: return "sparkles"
         case .quickActions: return "bolt.fill"
+        case .productivity: return "sun.max.fill"
         }
     }
 
     static let defaultOrder: [DashboardSection] = [
-        .quickStart, .quickActions, .tips, .activity, .gateway, .stats, .spending, .recentConversations, .tokenStats, .modelUsage, .analytics, .chatInsights, .performance, .recentActivity, .systemHealth, .systemStatus
+        .quickStart, .quickActions, .tips, .productivity, .activity, .gateway, .stats, .spending, .recentConversations, .tokenStats, .modelUsage, .analytics, .chatInsights, .performance, .recentActivity, .systemHealth, .systemStatus
     ]
 }
 
