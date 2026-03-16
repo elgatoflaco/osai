@@ -51,6 +51,96 @@ private func extractImagePaths(from text: String) -> [String] {
     return paths
 }
 
+// MARK: - Markdown Image Extraction
+
+/// Represents an image reference found in message content.
+enum InlineImageRef: Identifiable, Hashable {
+    case local(path: String)
+    case remote(url: URL, alt: String)
+
+    var id: String {
+        switch self {
+        case .local(let path): return "local:\(path)"
+        case .remote(let url, _): return "remote:\(url.absoluteString)"
+        }
+    }
+}
+
+/// Extracts all inline image references from message text:
+/// - Markdown syntax: ![alt](url)
+/// - Raw image URLs: https://...image.png
+/// - Local paths (via extractImagePaths)
+private func extractAllImageRefs(from text: String) -> [InlineImageRef] {
+    var refs: [InlineImageRef] = []
+    var seenIds = Set<String>()
+
+    // 1. Markdown image syntax: ![alt](url)
+    let mdPattern = #"!\[([^\]]*)\]\(([^)]+)\)"#
+    if let mdRegex = try? NSRegularExpression(pattern: mdPattern, options: []) {
+        let range = NSRange(text.startIndex..., in: text)
+        for match in mdRegex.matches(in: text, range: range) {
+            if let altRange = Range(match.range(at: 1), in: text),
+               let urlRange = Range(match.range(at: 2), in: text) {
+                let alt = String(text[altRange])
+                let urlStr = String(text[urlRange])
+                // Could be a local path or remote URL
+                if urlStr.hasPrefix("http://") || urlStr.hasPrefix("https://") {
+                    if let url = URL(string: urlStr) {
+                        let ref = InlineImageRef.remote(url: url, alt: alt)
+                        if !seenIds.contains(ref.id) {
+                            seenIds.insert(ref.id)
+                            refs.append(ref)
+                        }
+                    }
+                } else {
+                    // Treat as local path
+                    var path = urlStr
+                    if path.hasPrefix("~") {
+                        path = (path as NSString).expandingTildeInPath
+                    }
+                    let ref = InlineImageRef.local(path: path)
+                    if !seenIds.contains(ref.id) {
+                        seenIds.insert(ref.id)
+                        refs.append(ref)
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. Raw image URLs (not already captured by markdown syntax)
+    let rawURLPattern = #"(?<!\()https?://[^\s\"\]\)>',]+\.(?:png|jpg|jpeg|gif|webp)(?:\?[^\s\"\]\)>',]*)?"#
+    if let rawRegex = try? NSRegularExpression(pattern: rawURLPattern, options: [.caseInsensitive]) {
+        let range = NSRange(text.startIndex..., in: text)
+        for match in rawRegex.matches(in: text, range: range) {
+            if let r = Range(match.range, in: text) {
+                var raw = String(text[r])
+                while raw.last == "." || raw.last == "," || raw.last == ";" || raw.last == ":" {
+                    raw = String(raw.dropLast())
+                }
+                if let url = URL(string: raw) {
+                    let ref = InlineImageRef.remote(url: url, alt: "")
+                    if !seenIds.contains(ref.id) {
+                        seenIds.insert(ref.id)
+                        refs.append(ref)
+                    }
+                }
+            }
+        }
+    }
+
+    // 3. Local file paths
+    for path in extractImagePaths(from: text) {
+        let ref = InlineImageRef.local(path: path)
+        if !seenIds.contains(ref.id) {
+            seenIds.insert(ref.id)
+            refs.append(ref)
+        }
+    }
+
+    return refs
+}
+
 // MARK: - URL Detection for Link Previews
 
 /// Extracts unique http/https URLs from message text, skipping URLs inside code blocks
@@ -70,6 +160,15 @@ private func extractPreviewURLs(from text: String) -> [URL] {
     let inlineCodePattern = #"`[^`]+`"#
     if let inlineRegex = try? NSRegularExpression(pattern: inlineCodePattern, options: []) {
         strippedText = inlineRegex.stringByReplacingMatches(
+            in: strippedText,
+            range: NSRange(strippedText.startIndex..., in: strippedText),
+            withTemplate: ""
+        )
+    }
+    // Strip markdown image syntax so image URLs don't appear as link previews
+    let mdImagePattern = #"!\[[^\]]*\]\([^)]+\)"#
+    if let mdImageRegex = try? NSRegularExpression(pattern: mdImagePattern, options: []) {
+        strippedText = mdImageRegex.stringByReplacingMatches(
             in: strippedText,
             range: NSRange(strippedText.startIndex..., in: strippedText),
             withTemplate: ""
@@ -249,7 +348,79 @@ final class QLCoordinator: NSObject, QLPreviewPanelDataSource {
     }
 }
 
-// MARK: - Inline Image View
+// MARK: - Image Overlay Controls (shared)
+
+private struct ImageOverlayControls: View {
+    @Binding var zoomScale: CGFloat
+    @Binding var showFullSize: Bool
+
+    var body: some View {
+        VStack {
+            HStack {
+                Spacer()
+                HStack(spacing: 12) {
+                    Button(action: { zoomScale = max(0.5, zoomScale - 0.25) }) {
+                        Image(systemName: "minus.magnifyingglass")
+                            .font(.system(size: 14))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundColor(.white.opacity(0.8))
+
+                    Text("\(Int(zoomScale * 100))%")
+                        .font(.system(size: 12, weight: .medium, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.6))
+
+                    Button(action: { zoomScale = min(5.0, zoomScale + 0.25) }) {
+                        Image(systemName: "plus.magnifyingglass")
+                            .font(.system(size: 14))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundColor(.white.opacity(0.8))
+
+                    Divider().frame(height: 16)
+
+                    Button(action: { showFullSize = false }) {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 18))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundColor(.white.opacity(0.8))
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .background(.ultraThinMaterial)
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+                .padding()
+            }
+            Spacer()
+        }
+    }
+}
+
+// MARK: - Expand Button Overlay
+
+private struct ExpandButtonOverlay: View {
+    let isHovered: Bool
+    let action: () -> Void
+
+    var body: some View {
+        if isHovered {
+            Button(action: action) {
+                Image(systemName: "arrow.up.left.and.arrow.down.right")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(.white.opacity(0.9))
+                    .padding(6)
+                    .background(.black.opacity(0.5))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+            }
+            .buttonStyle(.plain)
+            .transition(.opacity)
+            .padding(6)
+        }
+    }
+}
+
+// MARK: - Inline Image View (local files)
 
 struct InlineImageView: View {
     let path: String
@@ -257,6 +428,7 @@ struct InlineImageView: View {
     @State private var showFullSize = false
     @State private var loadFailed = false
     @State private var zoomScale: CGFloat = 1.0
+    @State private var isHovered = false
 
     private static let qlCoordinator = QLCoordinator()
 
@@ -273,6 +445,14 @@ struct InlineImageView: View {
                             .stroke(AppTheme.borderGlass, lineWidth: 1)
                     )
                     .shadow(color: .black.opacity(0.1), radius: 4, y: 2)
+                    .overlay(alignment: .topTrailing) {
+                        ExpandButtonOverlay(isHovered: isHovered) {
+                            showFullSize = true
+                        }
+                    }
+                    .onHover { hovering in
+                        withAnimation(.easeInOut(duration: 0.15)) { isHovered = hovering }
+                    }
                     .onTapGesture {
                         showFullSize = true
                     }
@@ -308,7 +488,11 @@ struct InlineImageView: View {
     }
 
     private func loadImage() {
-        let url = URL(fileURLWithPath: path)
+        var resolvedPath = path
+        if resolvedPath.hasPrefix("~") {
+            resolvedPath = (resolvedPath as NSString).expandingTildeInPath
+        }
+        let url = URL(fileURLWithPath: resolvedPath)
         if let img = NSImage(contentsOf: url) {
             nsImage = img
         } else {
@@ -317,8 +501,12 @@ struct InlineImageView: View {
     }
 
     private func openQuickLook() {
-        let url = URL(fileURLWithPath: path)
-        guard FileManager.default.fileExists(atPath: path) else { return }
+        var resolvedPath = path
+        if resolvedPath.hasPrefix("~") {
+            resolvedPath = (resolvedPath as NSString).expandingTildeInPath
+        }
+        let url = URL(fileURLWithPath: resolvedPath)
+        guard FileManager.default.fileExists(atPath: resolvedPath) else { return }
         Self.qlCoordinator.url = url
         if let panel = QLPreviewPanel.shared() {
             panel.dataSource = Self.qlCoordinator
@@ -351,48 +539,175 @@ struct InlineImageView: View {
                 )
             }
 
-            // Controls overlay
-            VStack {
-                HStack {
-                    Spacer()
-                    HStack(spacing: 12) {
-                        Button(action: { zoomScale = max(0.5, zoomScale - 0.25) }) {
-                            Image(systemName: "minus.magnifyingglass")
-                                .font(.system(size: 14))
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundColor(.white.opacity(0.8))
-
-                        Text("\(Int(zoomScale * 100))%")
-                            .font(.system(size: 12, weight: .medium, design: .monospaced))
-                            .foregroundColor(.white.opacity(0.6))
-
-                        Button(action: { zoomScale = min(5.0, zoomScale + 0.25) }) {
-                            Image(systemName: "plus.magnifyingglass")
-                                .font(.system(size: 14))
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundColor(.white.opacity(0.8))
-
-                        Divider().frame(height: 16)
-
-                        Button(action: { showFullSize = false }) {
-                            Image(systemName: "xmark.circle.fill")
-                                .font(.system(size: 18))
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundColor(.white.opacity(0.8))
-                    }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
-                    .background(.ultraThinMaterial)
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
-                    .padding()
-                }
-                Spacer()
-            }
+            ImageOverlayControls(zoomScale: $zoomScale, showFullSize: $showFullSize)
         }
         .frame(minWidth: 500, minHeight: 400)
+    }
+}
+
+// MARK: - Remote Inline Image View (AsyncImage)
+
+struct RemoteInlineImageView: View {
+    let url: URL
+    let alt: String
+    @State private var showFullSize = false
+    @State private var zoomScale: CGFloat = 1.0
+    @State private var isHovered = false
+    @State private var loadedImage: NSImage?
+
+    var body: some View {
+        AsyncImage(url: url) { phase in
+            switch phase {
+            case .empty:
+                // Loading placeholder
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(AppTheme.bgSecondary)
+                    .frame(width: 200, height: 140)
+                    .overlay(
+                        ProgressView()
+                            .controlSize(.small)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(AppTheme.borderGlass, lineWidth: 0.5)
+                    )
+
+            case .success(let image):
+                image
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(maxWidth: 400)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(AppTheme.borderGlass, lineWidth: 1)
+                    )
+                    .shadow(color: .black.opacity(0.1), radius: 4, y: 2)
+                    .overlay(alignment: .topTrailing) {
+                        ExpandButtonOverlay(isHovered: isHovered) {
+                            showFullSize = true
+                        }
+                    }
+                    .onHover { hovering in
+                        withAnimation(.easeInOut(duration: 0.15)) { isHovered = hovering }
+                    }
+                    .onTapGesture {
+                        showFullSize = true
+                    }
+                    .help(alt.isEmpty ? "Click to enlarge" : alt)
+                    .onAppear {
+                        // Cache the NSImage for the full-size overlay
+                        loadRemoteImage()
+                    }
+
+            case .failure:
+                // Error state
+                HStack(spacing: 6) {
+                    Image(systemName: "photo.badge.exclamationmark")
+                        .font(.system(size: 14))
+                        .foregroundColor(AppTheme.textMuted)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Failed to load image")
+                            .font(.system(size: 12))
+                            .foregroundColor(AppTheme.textMuted)
+                        Text(url.lastPathComponent)
+                            .font(.system(size: 10))
+                            .foregroundColor(AppTheme.textMuted.opacity(0.7))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    Spacer(minLength: 0)
+                    Button(action: {
+                        // Open in browser as fallback
+                        NSWorkspace.shared.open(url)
+                    }) {
+                        Image(systemName: "arrow.up.right")
+                            .font(.system(size: 10))
+                            .foregroundColor(AppTheme.textMuted)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .frame(maxWidth: 300)
+                .background(AppTheme.bgCard.opacity(0.5))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(AppTheme.borderGlass, lineWidth: 0.5)
+                )
+
+            @unknown default:
+                EmptyView()
+            }
+        }
+        .sheet(isPresented: $showFullSize) {
+            remoteImageOverlay
+        }
+    }
+
+    private func loadRemoteImage() {
+        guard loadedImage == nil else { return }
+        DispatchQueue.global(qos: .userInitiated).async {
+            if let data = try? Data(contentsOf: url),
+               let img = NSImage(data: data) {
+                DispatchQueue.main.async {
+                    loadedImage = img
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var remoteImageOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.85).ignoresSafeArea()
+
+            if let nsImage = loadedImage {
+                ScrollView([.horizontal, .vertical], showsIndicators: true) {
+                    Image(nsImage: nsImage)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .scaleEffect(zoomScale)
+                        .frame(
+                            minWidth: 200, maxWidth: .infinity,
+                            minHeight: 200, maxHeight: .infinity
+                        )
+                }
+                .gesture(
+                    MagnificationGesture()
+                        .onChanged { value in
+                            zoomScale = max(0.5, min(5.0, value))
+                        }
+                )
+            } else {
+                ProgressView()
+                    .controlSize(.large)
+                    .foregroundColor(.white)
+            }
+
+            ImageOverlayControls(zoomScale: $zoomScale, showFullSize: $showFullSize)
+        }
+        .frame(minWidth: 500, minHeight: 400)
+    }
+}
+
+// MARK: - Inline Images Stack
+
+struct InlineImagesStack: View {
+    let refs: [InlineImageRef]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(refs) { ref in
+                switch ref {
+                case .local(let path):
+                    InlineImageView(path: path)
+                case .remote(let url, let alt):
+                    RemoteInlineImageView(url: url, alt: alt)
+                }
+            }
+        }
     }
 }
 
@@ -929,14 +1244,10 @@ struct MessageBubble: View {
                         }
 
                         // Inline images detected in message content
-                        let imagePaths = extractImagePaths(from: message.content)
-                        if !imagePaths.isEmpty {
-                            VStack(alignment: .leading, spacing: 8) {
-                                ForEach(imagePaths, id: \.self) { path in
-                                    InlineImageView(path: path)
-                                }
-                            }
-                            .padding(.top, 4)
+                        let imageRefs = extractAllImageRefs(from: message.content)
+                        if !imageRefs.isEmpty {
+                            InlineImagesStack(refs: imageRefs)
+                                .padding(.top, 4)
                         }
 
                         // Link preview cards for URLs in message

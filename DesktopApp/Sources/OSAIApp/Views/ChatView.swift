@@ -961,6 +961,21 @@ struct ChatView: View {
                 Button("") { appState.selectConversationByIndex(8) }
                     .keyboardShortcut("9", modifiers: .control)
                     .hidden()
+
+                // Cmd+Plus: Increase chat font size
+                Button("") { appState.increaseFontSize() }
+                    .keyboardShortcut("+", modifiers: .command)
+                    .hidden()
+
+                // Cmd+Minus: Decrease chat font size
+                Button("") { appState.decreaseFontSize() }
+                    .keyboardShortcut("-", modifiers: .command)
+                    .hidden()
+
+                // Cmd+0: Reset chat font size
+                Button("") { appState.resetFontSize() }
+                    .keyboardShortcut("0", modifiers: .command)
+                    .hidden()
             }
         )
         .sheet(isPresented: $appState.showExportSheet) {

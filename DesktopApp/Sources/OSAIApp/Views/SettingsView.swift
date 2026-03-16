@@ -568,6 +568,71 @@ struct SettingsView: View {
 
                 Divider().background(AppTheme.borderGlass)
 
+                // Chat Font Size
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack {
+                        Text("Chat Font Size")
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundColor(AppTheme.textPrimary)
+                        Spacer()
+                        Text("\(Int(appState.chatFontSize)) pt")
+                            .font(.system(size: 12, weight: .medium, design: .rounded))
+                            .foregroundColor(AppTheme.textSecondary)
+                    }
+
+                    HStack(spacing: 10) {
+                        Button(action: { appState.decreaseFontSize() }) {
+                            Image(systemName: "minus")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundColor(AppTheme.accent)
+                                .frame(width: 28, height: 28)
+                                .background(AppTheme.accent.opacity(0.1))
+                                .clipShape(Circle())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(appState.chatFontSize <= 10)
+
+                        Slider(value: $appState.chatFontSize, in: 10...24, step: 1)
+                            .tint(AppTheme.accent)
+                            .accessibilityLabel("Chat Font Size")
+                            .accessibilityValue("\(Int(appState.chatFontSize)) points")
+
+                        Button(action: { appState.increaseFontSize() }) {
+                            Image(systemName: "plus")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundColor(AppTheme.accent)
+                                .frame(width: 28, height: 28)
+                                .background(AppTheme.accent.opacity(0.1))
+                                .clipShape(Circle())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(appState.chatFontSize >= 24)
+
+                        Button(action: { appState.resetFontSize() }) {
+                            Text("Reset")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundColor(AppTheme.accent)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(AppTheme.accent.opacity(0.08))
+                                .clipShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+                    }
+
+                    // Live preview
+                    Text("Sample message text")
+                        .font(.system(size: CGFloat(appState.chatFontSize)))
+                        .foregroundColor(AppTheme.textSecondary)
+                        .padding(.vertical, 6)
+                        .padding(.horizontal, 10)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(AppTheme.bgPrimary.opacity(0.3))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                }
+
+                Divider().background(AppTheme.borderGlass)
+
                 // Accent Color
                 VStack(alignment: .leading, spacing: 10) {
                     Text("Accent Color")

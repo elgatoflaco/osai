@@ -102,6 +102,24 @@ enum ConversationSortOrder: String, CaseIterable, Identifiable {
     }
 }
 
+enum TaskFilter: String, CaseIterable, Identifiable {
+    case all = "All"
+    case active = "Active"
+    case completed = "Completed"
+    case failed = "Failed"
+
+    var id: String { rawValue }
+
+    var icon: String {
+        switch self {
+        case .all: return "tray.full"
+        case .active: return "bolt.circle"
+        case .completed: return "checkmark.circle"
+        case .failed: return "exclamationmark.triangle"
+        }
+    }
+}
+
 enum SidebarItem: String, CaseIterable, Identifiable {
     case home = "Home"
     case chat = "Chat"
@@ -377,6 +395,7 @@ class AppState: ObservableObject {
     @AppStorage("quickActionsCollapsed") var quickActionsCollapsed: Bool = false
     @AppStorage("textToSpeechEnabled") var textToSpeechEnabled: Bool = true
     @AppStorage("sidebarWidth") var sidebarWidth: Double = 280
+    @AppStorage("chatFontSize") var chatFontSize: Double = 13.0
 
     // MARK: - Dashboard Customization
 
@@ -629,9 +648,51 @@ class AppState: ObservableObject {
         compactMode.toggle()
     }
 
+    func increaseFontSize() {
+        chatFontSize = min(chatFontSize + 1, 24)
+    }
+
+    func decreaseFontSize() {
+        chatFontSize = max(chatFontSize - 1, 10)
+    }
+
+    func resetFontSize() {
+        chatFontSize = 13
+    }
+
     @Published var selectedTab: SidebarItem = .home
     @Published var agents: [AgentInfo] = []
     @Published var tasks: [TaskInfo] = []
+    @Published var taskFilter: TaskFilter = .all
+    @Published var taskSearchQuery: String = ""
+
+    var filteredTasks: [TaskInfo] {
+        var result = tasks
+
+        // Apply status filter
+        switch taskFilter {
+        case .all:
+            break
+        case .active:
+            result = result.filter { $0.enabled }
+        case .completed:
+            result = result.filter { !$0.enabled && $0.runCount > 0 }
+        case .failed:
+            result = result.filter { $0.isOverdue }
+        }
+
+        // Apply search query
+        let query = taskSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if !query.isEmpty {
+            result = result.filter {
+                $0.id.lowercased().contains(query) ||
+                $0.description.lowercased().contains(query) ||
+                $0.command.lowercased().contains(query)
+            }
+        }
+
+        return result
+    }
     @Published var conversations: [Conversation] = []
     @Published var activeConversation: Conversation?
     @Published var gatewayRunning: Bool = false

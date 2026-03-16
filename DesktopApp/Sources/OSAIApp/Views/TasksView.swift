@@ -6,6 +6,34 @@ struct TasksView: View {
     @State private var taskToDelete: TaskInfo?
     @State private var showDeleteConfirm = false
 
+    // Date grouping helpers
+    private enum DateGroup: String, CaseIterable {
+        case today = "Today"
+        case yesterday = "Yesterday"
+        case older = "Older"
+    }
+
+    private func dateGroup(for task: TaskInfo) -> DateGroup {
+        guard let lastRun = task.lastRun else { return .older }
+        let calendar = Calendar.current
+        if calendar.isDateInToday(lastRun) { return .today }
+        if calendar.isDateInYesterday(lastRun) { return .yesterday }
+        return .older
+    }
+
+    private func groupedTasks() -> [(DateGroup, [TaskInfo])] {
+        let tasks = appState.filteredTasks
+        var groups: [DateGroup: [TaskInfo]] = [:]
+        for task in tasks {
+            let group = dateGroup(for: task)
+            groups[group, default: []].append(task)
+        }
+        return DateGroup.allCases.compactMap { group in
+            guard let items = groups[group], !items.isEmpty else { return nil }
+            return (group, items)
+        }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             // Header
@@ -49,22 +77,181 @@ struct TasksView: View {
             .padding(.horizontal, AppTheme.paddingLg)
             .padding(.vertical, AppTheme.paddingMd)
 
+            // Search bar
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 12))
+                    .foregroundColor(AppTheme.textMuted)
+
+                TextField("Search tasks...", text: $appState.taskSearchQuery)
+                    .textFieldStyle(.plain)
+                    .font(AppTheme.fontBody)
+
+                if !appState.taskSearchQuery.isEmpty {
+                    Button(action: { appState.taskSearchQuery = "" }) {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 12))
+                            .foregroundColor(AppTheme.textMuted)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(AppTheme.bgPrimary.opacity(0.5))
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .padding(.horizontal, AppTheme.paddingLg)
+            .padding(.bottom, AppTheme.paddingSm)
+
+            // Filter tabs
+            HStack(spacing: 4) {
+                ForEach(TaskFilter.allCases) { filter in
+                    Button(action: { withAnimation(.easeInOut(duration: 0.15)) { appState.taskFilter = filter } }) {
+                        HStack(spacing: 5) {
+                            Image(systemName: filter.icon)
+                                .font(.system(size: 10))
+                            Text(filter.rawValue)
+                                .font(.system(size: 12, weight: .medium))
+                        }
+                        .foregroundColor(appState.taskFilter == filter ? .white : AppTheme.textSecondary)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(appState.taskFilter == filter ? AppTheme.accent : AppTheme.bgPrimary.opacity(0.4))
+                        .clipShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+                Spacer()
+            }
+            .padding(.horizontal, AppTheme.paddingLg)
+            .padding(.bottom, AppTheme.paddingSm)
+
             Divider().background(AppTheme.borderGlass)
 
             if appState.tasks.isEmpty {
                 TasksEmptyState(onCreateTapped: { showCreateSheet = true })
+            } else if appState.filteredTasks.isEmpty {
+                // Empty state for filters/search with no matches
+                VStack(spacing: 16) {
+                    Spacer()
+
+                    Image(systemName: "doc.text.magnifyingglass")
+                        .font(.system(size: 40))
+                        .foregroundColor(AppTheme.textMuted)
+
+                    VStack(spacing: 6) {
+                        Text("No Matching Tasks")
+                            .font(AppTheme.fontHeadline)
+                            .foregroundColor(AppTheme.textPrimary)
+
+                        if !appState.taskSearchQuery.isEmpty {
+                            Text("No tasks match \"\(appState.taskSearchQuery)\"")
+                                .font(AppTheme.fontBody)
+                                .foregroundColor(AppTheme.textSecondary)
+                        } else {
+                            Text("No tasks with status \"\(appState.taskFilter.rawValue)\"")
+                                .font(AppTheme.fontBody)
+                                .foregroundColor(AppTheme.textSecondary)
+                        }
+
+                        Text("Try adjusting your filter or search query.")
+                            .font(AppTheme.fontCaption)
+                            .foregroundColor(AppTheme.textMuted)
+                    }
+                    .multilineTextAlignment(.center)
+
+                    Button(action: {
+                        appState.taskFilter = .all
+                        appState.taskSearchQuery = ""
+                    }) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "arrow.counterclockwise")
+                            Text("Clear Filters")
+                        }
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(AppTheme.accent)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                        .background(AppTheme.accent.opacity(0.1))
+                        .clipShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+
+                    Spacer()
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(AppTheme.paddingXl)
             } else {
                 ScrollView(.vertical, showsIndicators: false) {
-                    LazyVStack(spacing: 12) {
-                        ForEach(appState.tasks) { task in
-                            TaskCardImproved(
-                                task: task,
-                                onToggle: { appState.toggleTask(task) },
-                                onDelete: {
-                                    taskToDelete = task
-                                    showDeleteConfirm = true
+                    LazyVStack(spacing: 0) {
+                        let grouped = groupedTasks()
+                        ForEach(Array(grouped.enumerated()), id: \.offset) { _, group in
+                            // Section header
+                            HStack {
+                                Text(group.0.rawValue)
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundColor(AppTheme.textMuted)
+                                    .textCase(.uppercase)
+
+                                Spacer()
+
+                                Text("\(group.1.count)")
+                                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                                    .foregroundColor(AppTheme.textMuted)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(AppTheme.bgPrimary.opacity(0.5))
+                                    .clipShape(Capsule())
+                            }
+                            .padding(.horizontal, 4)
+                            .padding(.top, 16)
+                            .padding(.bottom, 8)
+
+                            ForEach(group.1) { task in
+                                TaskCardImproved(
+                                    task: task,
+                                    onToggle: { appState.toggleTask(task) },
+                                    onDelete: {
+                                        taskToDelete = task
+                                        showDeleteConfirm = true
+                                    },
+                                    onRetry: {
+                                        // Re-enable and refresh the task
+                                        if !task.enabled {
+                                            appState.toggleTask(task)
+                                        }
+                                        appState.showToast("Task \"\(task.id)\" queued for retry", type: .info)
+                                    }
+                                )
+                                .contextMenu {
+                                    Button {
+                                        NSPasteboard.general.clearContents()
+                                        NSPasteboard.general.setString(task.id, forType: .string)
+                                        appState.showToast("Task ID copied", type: .success)
+                                    } label: {
+                                        Label("Copy Task ID", systemImage: "doc.on.doc")
+                                    }
+
+                                    Button {
+                                        if !task.enabled {
+                                            appState.toggleTask(task)
+                                        }
+                                        appState.showToast("Task \"\(task.id)\" queued for retry", type: .info)
+                                    } label: {
+                                        Label("Retry Task", systemImage: "arrow.clockwise")
+                                    }
+
+                                    Divider()
+
+                                    Button(role: .destructive) {
+                                        taskToDelete = task
+                                        showDeleteConfirm = true
+                                    } label: {
+                                        Label("Delete Task", systemImage: "trash")
+                                    }
                                 }
-                            )
+                                .padding(.bottom, 12)
+                            }
                         }
                     }
                     .padding(AppTheme.paddingLg)
@@ -146,10 +333,14 @@ struct TaskCardImproved: View {
     let task: TaskInfo
     let onToggle: () -> Void
     let onDelete: () -> Void
+    var onRetry: (() -> Void)? = nil
     @State private var isHovered = false
     @State private var showLog = false
     @State private var logContent = ""
+    @State private var elapsedTime: String = ""
     @EnvironmentObject var appState: AppState
+
+    private let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     var body: some View {
         GlassCard(padding: 0) {
@@ -187,6 +378,21 @@ struct TaskCardImproved: View {
                                 .background(AppTheme.bgPrimary.opacity(0.5))
                                 .clipShape(Capsule())
                             }
+
+                            // Status badge
+                            if task.isOverdue {
+                                HStack(spacing: 3) {
+                                    Image(systemName: "exclamationmark.triangle.fill")
+                                        .font(.system(size: 8))
+                                    Text("Overdue")
+                                        .font(.system(size: 9, weight: .medium))
+                                }
+                                .foregroundColor(AppTheme.error)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(AppTheme.error.opacity(0.1))
+                                .clipShape(Capsule())
+                            }
                         }
 
                         if !task.description.isEmpty {
@@ -199,6 +405,15 @@ struct TaskCardImproved: View {
                                 .font(.system(size: 12, design: .monospaced))
                                 .foregroundColor(AppTheme.textMuted)
                                 .lineLimit(1)
+                        }
+
+                        // Progress bar for active tasks
+                        if task.enabled {
+                            ProgressView()
+                                .progressViewStyle(.linear)
+                                .tint(AppTheme.accent)
+                                .scaleEffect(y: 0.5)
+                                .frame(maxWidth: 160)
                         }
 
                         // Schedule + stats row
@@ -230,6 +445,17 @@ struct TaskCardImproved: View {
                                         .font(.system(size: 11))
                                 }
                                 .foregroundColor(AppTheme.textMuted)
+                            }
+
+                            // Duration since last run (elapsed timer)
+                            if task.enabled, !elapsedTime.isEmpty {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "timer")
+                                        .font(.system(size: 10))
+                                    Text(elapsedTime)
+                                        .font(.system(size: 11, design: .monospaced))
+                                }
+                                .foregroundColor(AppTheme.accent.opacity(0.7))
                             }
                         }
                     }
@@ -288,6 +514,26 @@ struct TaskCardImproved: View {
         .accessibilityValue("\(task.enabled ? "Enabled" : "Disabled"), \(task.schedule.displayLabel), \(task.runCount) runs")
         .sheet(isPresented: $showLog) {
             TaskLogSheet(taskId: task.id, content: logContent)
+        }
+        .onAppear { updateElapsedTime() }
+        .onReceive(timer) { _ in updateElapsedTime() }
+    }
+
+    private func updateElapsedTime() {
+        guard task.enabled, let lastRun = task.lastRun else {
+            elapsedTime = ""
+            return
+        }
+        let interval = Date().timeIntervalSince(lastRun)
+        let hours = Int(interval) / 3600
+        let minutes = (Int(interval) % 3600) / 60
+        let seconds = Int(interval) % 60
+        if hours > 0 {
+            elapsedTime = String(format: "%dh %02dm", hours, minutes)
+        } else if minutes > 0 {
+            elapsedTime = String(format: "%dm %02ds", minutes, seconds)
+        } else {
+            elapsedTime = String(format: "%ds", seconds)
         }
     }
 
