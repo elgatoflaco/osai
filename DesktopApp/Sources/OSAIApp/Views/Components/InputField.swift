@@ -253,10 +253,11 @@ struct GrowingTextEditor: NSViewRepresentable {
     var onPasteText: ((String) -> Void)?
     var onUserTyped: (() -> Void)?
     var isBrowsingHistory: Bool = false
+    @Binding var dynamicHeight: CGFloat
 
     private let lineHeight: CGFloat = 20
-    private let maxLines: Int = 5
-    private let singleLineHeight: CGFloat = 22
+    private let maxLines: Int = 6
+    private let singleLineHeight: CGFloat = 24
 
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
@@ -408,6 +409,14 @@ struct GrowingTextEditor: NSViewRepresentable {
                 let c = scrollView.heightAnchor.constraint(equalToConstant: targetHeight)
                 c.priority = .defaultHigh
                 c.isActive = true
+            }
+
+            // Communicate height to SwiftUI
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                if self.parent.dynamicHeight != targetHeight {
+                    self.parent.dynamicHeight = targetHeight
+                }
             }
         }
     }
@@ -863,6 +872,7 @@ struct ChatInputBar: View {
     var onSubmit: () -> Void
 
     @State private var isFocused: Bool = false
+    @State private var editorHeight: CGFloat = 24
     @State private var showSlashMenu = false
     @State private var slashFilter = ""
     @State private var showTemplatePopover = false
@@ -1025,8 +1035,10 @@ struct ChatInputBar: View {
                     onUserTyped: {
                         appState.resetInputHistoryNavigation()
                     },
-                    isBrowsingHistory: appState.isBrowsingInputHistory
+                    isBrowsingHistory: appState.isBrowsingInputHistory,
+                    dynamicHeight: $editorHeight
                 )
+                .frame(height: editorHeight)
                 .accessibilityLabel("Message input")
                 .accessibilityHint("Type a message and press Enter to send. Shift+Enter for new line.")
 
