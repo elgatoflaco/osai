@@ -34,11 +34,13 @@ unzip -q osai-latest.zip
 echo "📦 Instalando CLI..."
 sudo cp osai-dist/osai /usr/local/bin/osai
 sudo chmod +x /usr/local/bin/osai
+sudo codesign --force --sign - /usr/local/bin/osai 2>/dev/null || true
 
 # Install Desktop App
 echo "📦 Instalando OSAI.app..."
 rm -rf /Applications/OSAI.app
 cp -R osai-dist/OSAI.app /Applications/OSAI.app
+codesign --force --sign - /Applications/OSAI.app/Contents/MacOS/OSAI 2>/dev/null || true
 
 # Create config
 mkdir -p "${HOME}/.desktop-agent"
