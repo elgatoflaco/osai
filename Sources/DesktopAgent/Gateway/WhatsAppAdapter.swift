@@ -110,6 +110,18 @@ final class WhatsAppAdapter: GatewayAdapter {
     }
 
     /// Kill orphaned wacli processes that hold the store lock
+    /// Check if a JID matches any entry in the allowed list (handles @lid ↔ @s.whatsapp.net mismatch)
+    static func jidMatchesAny(_ jid: String, allowed: [String]) -> Bool {
+        // Direct match already checked before calling this
+        // Try matching by the numeric prefix (phone number or LID number)
+        let jidNumber = jid.components(separatedBy: "@").first ?? ""
+        for entry in allowed {
+            let entryNumber = entry.components(separatedBy: "@").first ?? ""
+            if !jidNumber.isEmpty && jidNumber == entryNumber { return true }
+        }
+        return false
+    }
+
     private func killStaleWacli() {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
@@ -219,8 +231,10 @@ final class WhatsAppAdapter: GatewayAdapter {
                 // Skip if we're just initializing
                 if lastDate == Date.distantPast { continue }
 
-                // Check whitelist (skip if wildcard "*")
-                if let allowed = config.allowedJIDs, !allowed.isEmpty, !allowed.contains("*"), !allowed.contains(jid) { continue }
+                // Check whitelist (skip if wildcard "*"; match both full JID and @lid variants)
+                if let allowed = config.allowedJIDs, !allowed.isEmpty, !allowed.contains("*") {
+                    if !allowed.contains(jid) && !Self.jidMatchesAny(jid, allowed: allowed) { continue }
+                }
 
                 // Fetch the actual new messages
                 await processNewMessages(chatJID: jid, after: lastDate, chatName: chat["Name"] as? String ?? jid)
@@ -256,7 +270,35 @@ final class WhatsAppAdapter: GatewayAdapter {
             // For IsFromMe messages: allow them (user sending from phone)
             // but skip if they look like osai responses (no msgId tracked = old safety net)
 
-            let text = msg["Text"] as? String ?? msg["Body"] as? String ?? ""
+            var text = msg["Text"] as? String ?? msg["Body"] as? String ?? ""
+            let mediaType = msg["MediaType"] as? String ?? ""
+
+            // Handle media messages: download and provide path + instructions
+            let isAudio = mediaType == "audio" || mediaType == "ptt" || text == "[Audio]" || text.contains("Sent audio")
+            let isVideo = mediaType == "video" || text == "[Video]" || text.contains("Sent video")
+            let isImage = mediaType == "image" || text == "[Image]" || text.contains("Sent image")
+            let isDocument = mediaType == "document" || text == "[Document]"
+            let isMedia = isAudio || isVideo || isImage || isDocument
+
+            if isMedia && !msgId.isEmpty {
+                let mediaPath = downloadMedia(chatJID: chatJID, messageId: msgId)
+                if let path = mediaPath {
+                    let userText = text.hasPrefix("[") ? "" : " with message: \(text)"
+                    let mediaLabel = isAudio ? "voice/audio" : isVideo ? "video" : isImage ? "image" : "document"
+                    text = """
+                    [Media received: \(mediaLabel) file at \(path)]\(userText)
+                    IMPORTANT: Process this file autonomously. You have full shell access.
+                    - AUDIO: Transcribe with whisper. If not installed, run: pip3 install openai-whisper && whisper "\(path)" --language auto --model tiny --output_format txt. Then read the .txt output and respond to what the user said.
+                    - VIDEO: Extract audio with ffmpeg (brew install ffmpeg if needed), then transcribe. Or describe frames with: ffmpeg -i "\(path)" -vf fps=1 -frames:v 3 /tmp/frame_%d.jpg
+                    - IMAGE: Describe what you see. Use any vision tool available or tell the user what you observe.
+                    - DOCUMENT: Read it directly if text-based, or use appropriate tools.
+                    Install any missing tools yourself (brew install, pip3 install). Don't ask the user — just do it.
+                    """
+                } else {
+                    text = "[Media message received but download failed. Try using: wacli media download --chat \(chatJID) --id \(msgId) --output ~/.desktop-agent/media]"
+                }
+            }
+
             if text.isEmpty { continue }
 
             let isFromMe = msg["FromMe"] as? Bool ?? msg["IsFromMe"] as? Bool ?? false
@@ -270,7 +312,7 @@ final class WhatsAppAdapter: GatewayAdapter {
 
             // Check sender against whitelist (important for group chats, skip for own messages)
             if !isFromMe, let allowed = config.allowedJIDs, !allowed.isEmpty, !allowed.contains("*") {
-                if !allowed.contains(senderJID) && !allowed.contains(chatJID) {
+                if !allowed.contains(senderJID) && !allowed.contains(chatJID) && !Self.jidMatchesAny(senderJID, allowed: allowed) && !Self.jidMatchesAny(chatJID, allowed: allowed) {
                     printColored("  ⚠ WhatsApp: blocked message from \(senderName) (\(senderJID))", color: .yellow)
                     continue
                 }
@@ -293,6 +335,29 @@ final class WhatsAppAdapter: GatewayAdapter {
                 await handler(gwMessage)
             }
         }
+    }
+
+    // MARK: - Media Download
+
+    private func downloadMedia(chatJID: String, messageId: String) -> String? {
+        let mediaDir = NSHomeDirectory() + "/.desktop-agent/media"
+        try? FileManager.default.createDirectory(atPath: mediaDir, withIntermediateDirectories: true)
+        let result = runWacli(["media", "download", "--chat", chatJID, "--id", messageId, "--output", mediaDir, "--json"], timeout: 30)
+        if result.success, let json = parseJSON(result.output) {
+            // wacli returns the file path in the response
+            if let path = (json["data"] as? [String: Any])?["path"] as? String {
+                return path
+            }
+            // Fallback: look for most recent file in media dir
+            if let files = try? FileManager.default.contentsOfDirectory(atPath: mediaDir) {
+                let sorted = files.sorted().reversed()
+                if let latest = sorted.first {
+                    return (mediaDir as NSString).appendingPathComponent(latest)
+                }
+            }
+        }
+        printColored("  ⚠ WhatsApp: failed to download media \(messageId)", color: .yellow)
+        return nil
     }
 
     // MARK: - wacli execution

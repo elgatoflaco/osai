@@ -265,11 +265,10 @@ final class GatewayServer {
             }
         }
 
-        // Wire streaming callback — send each text block to the chat as it arrives
-        var didStream = false
-        agent.onStreamText = { [weak adapter] text in
-            didStream = true
-            await adapter?.sendMessage(chatId: message.chatId, text: text)
+        // Accumulate streamed text — only send the FINAL response, not intermediate tool output
+        var streamedChunks: [String] = []
+        agent.onStreamText = { text in
+            streamedChunks.append(text)
         }
 
         // Process message
@@ -284,21 +283,30 @@ final class GatewayServer {
                 - TASK SCHEDULING WORKS: When you schedule_task, results are automatically delivered back to this \(message.platform) chat. The delivery mechanism uses --deliver flag with the Discord/Telegram API. Tasks run via macOS launchd and ARE reliable.
                 - For "once" tasks, use schedule_type "once" with "minutes" (minutes from now) — this is the most reliable for short delays.
                 - Do NOT tell the user that scheduling has limitations or doesn't work. It works.
-                - Do NOT suggest running things "live" instead of scheduling — scheduling is a feature the user wants.
                 - You can manage scheduled tasks: use list_tasks to show active tasks, cancel_task to remove one, run_task to trigger one immediately.
                 - When creating tasks with schedule_task, the delivery to this chat is automatic — you don't need to mention Discord/Telegram in the command.
                 - IMPORTANT: Your text responses are automatically sent to the user via the gateway. NEVER use run_shell with wacli/telegram/discord to send messages — the gateway handles delivery. Just respond with text.
-                - NEVER use run_shell to run wacli commands — wacli has a lock that blocks concurrent access.]\n
+                - NEVER use run_shell to run wacli commands — wacli has a lock that blocks concurrent access.
+                - CRITICAL: Only your FINAL response text is sent to the user. Tool results, shell output, and intermediate data are NOT shown. So always summarize results in your response — don't rely on the user seeing raw tool output.
+                - AUTONOMY: When you receive media files (audio, video, images, documents), process them YOURSELF. Install any tools you need (whisper, ffmpeg, etc.) using brew install or pip3 install. Don't ask the user for permission — just install and use them. Create scripts if needed. You are a fully autonomous agent.
+                - AUDIO TRANSCRIPTION: For voice messages, use openai-whisper (pip3 install openai-whisper) or whisper-cpp (brew install whisper-cpp). Run it, read the output, and respond to what the user said.
+                - PROBLEM SOLVING: If you encounter a problem you can't solve with existing tools, create your own. Write a script, install a package, use an API. Be resourceful and autonomous.]\n
                 """
             }
             let response = try await agent.processUserInput(gatewayHint + contextPrefix + message.text)
             // Persist session history after each message
             SessionStore.save(sessionKey: sessionKey, messages: agent.currentHistory)
 
-            // If nothing was streamed (e.g. very short response), send the final response
-            if !didStream && !response.isEmpty {
+            // Send only the LAST streamed chunk (the final assistant text), not all intermediate output
+            if !streamedChunks.isEmpty {
+                // The last chunk is typically the final response; send it
+                let finalResponse = streamedChunks.last ?? response
+                if !finalResponse.isEmpty {
+                    await adapter.sendMessage(chatId: message.chatId, text: finalResponse)
+                }
+            } else if !response.isEmpty {
                 await adapter.sendMessage(chatId: message.chatId, text: response)
-            } else if !didStream {
+            } else {
                 await adapter.sendMessage(chatId: message.chatId, text: "Done.")
             }
         } catch {
