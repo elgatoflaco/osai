@@ -2816,7 +2816,6 @@ struct ChatInsightsSection: View {
                         GridItem(.flexible(), spacing: 14),
                         GridItem(.flexible(), spacing: 14),
                         GridItem(.flexible(), spacing: 14),
-                        GridItem(.flexible(), spacing: 14),
                     ], spacing: 14) {
                         QuickStatItem(
                             label: "Conversations",
@@ -2827,6 +2826,11 @@ struct ChatInsightsSection: View {
                             label: "Messages Sent",
                             value: formatLargeNumber(insightTotalMessages),
                             icon: "text.bubble"
+                        )
+                        QuickStatItem(
+                            label: "All-time Cost",
+                            value: formatCost(insightTotalCost),
+                            icon: "dollarsign.circle"
                         )
                         QuickStatItem(
                             label: "Avg / Conv",
@@ -2842,6 +2846,11 @@ struct ChatInsightsSection: View {
                             label: "Most Active Day",
                             value: insightMostActiveDay,
                             icon: "calendar.badge.clock"
+                        )
+                        QuickStatItem(
+                            label: "Peak Hour",
+                            value: insightPeakHour,
+                            icon: "clock.fill"
                         )
                     }
                 }
@@ -2931,6 +2940,35 @@ struct ChatInsightsSection: View {
         let index = topDay.key - 1 // weekday is 1-based
         guard index >= 0, index < names.count else { return "--" }
         return names[index]
+    }
+
+    private var insightTotalCost: Double {
+        conversations.reduce(0.0) { $0 + $1.estimatedCost }
+    }
+
+    private var insightPeakHour: String {
+        guard !conversations.isEmpty else { return "--" }
+        let calendar = Calendar.current
+        var hourCounts: [Int: Int] = [:]
+        for conv in conversations {
+            for msg in conv.messages {
+                let hour = calendar.component(.hour, from: msg.timestamp)
+                hourCounts[hour, default: 0] += 1
+            }
+        }
+        guard let topHour = hourCounts.max(by: { $0.value < $1.value }) else { return "--" }
+        let h = topHour.key
+        if h == 0 { return "12 AM" }
+        if h < 12 { return "\(h) AM" }
+        if h == 12 { return "12 PM" }
+        return "\(h - 12) PM"
+    }
+
+    private func formatCost(_ cost: Double) -> String {
+        if cost >= 1.0 {
+            return String(format: "$%.2f", cost)
+        }
+        return String(format: "$%.4f", cost)
     }
 
     /// Agent usage ranked by conversation count
