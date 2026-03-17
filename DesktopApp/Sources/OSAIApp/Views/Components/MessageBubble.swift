@@ -2399,32 +2399,66 @@ struct ActivityStrip: View {
             .accessibilityHint(expanded ? "Double tap to collapse" : "Double tap to expand")
             .accessibilityValue(expanded ? "expanded" : "collapsed")
 
-            // Expanded list
+            // Expanded list — grouped by agent
             if expanded {
                 Divider()
                     .background(AppTheme.borderGlass)
                     .padding(.horizontal, 8)
 
                 ScrollView(.vertical, showsIndicators: false) {
-                    VStack(spacing: 1) {
-                        ForEach(activities) { activity in
-                            ActivityRow(
-                                activity: activity,
-                                isOutputExpanded: expandedOutputId == activity.id,
-                                onToggleOutput: {
-                                    expandedOutputId = expandedOutputId == activity.id ? nil : activity.id
+                    VStack(spacing: 2) {
+                        let groups = groupedByAgent
+                        ForEach(Array(groups.enumerated()), id: \.offset) { idx, group in
+                            // Agent header (if there's an agent route)
+                            if let agentActivity = group.first(where: { $0.type == .agentRoute }) {
+                                HStack(spacing: 6) {
+                                    Image(systemName: "arrow.triangle.branch")
+                                        .font(.system(size: 9))
+                                        .foregroundColor(.orange)
+                                    Text(agentActivity.label)
+                                        .font(.system(size: 10, weight: .semibold))
+                                        .foregroundColor(.orange)
+                                    Rectangle()
+                                        .fill(AppTheme.borderGlass)
+                                        .frame(height: 0.5)
                                 }
-                            )
+                                .padding(.horizontal, 8)
+                                .padding(.top, idx > 0 ? 6 : 2)
+                            }
+                            // Tool calls under this agent
+                            ForEach(group.filter({ $0.type != .agentRoute })) { activity in
+                                ActivityRow(
+                                    activity: activity,
+                                    isOutputExpanded: expandedOutputId == activity.id,
+                                    onToggleOutput: {
+                                        expandedOutputId = expandedOutputId == activity.id ? nil : activity.id
+                                    }
+                                )
+                            }
                         }
                     }
                     .padding(.horizontal, 4).padding(.vertical, 6)
                 }
-                .frame(maxHeight: 260)
+                .frame(maxHeight: 300)
             }
         }
         .background(AppTheme.bgCard.opacity(0.5))
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(AppTheme.borderGlass, lineWidth: 0.5))
+    }
+
+    /// Group activities by agent route — activities before any agentRoute go in group 0,
+    /// then each agentRoute starts a new group
+    private var groupedByAgent: [[ActivityItem]] {
+        var groups: [[ActivityItem]] = [[]]
+        for activity in activities {
+            if activity.type == .agentRoute {
+                groups.append([activity])
+            } else {
+                groups[groups.count - 1].append(activity)
+            }
+        }
+        return groups.filter { !$0.isEmpty }
     }
 
     private var summaryText: String {
