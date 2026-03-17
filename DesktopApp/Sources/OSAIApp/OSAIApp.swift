@@ -1,9 +1,82 @@
 import SwiftUI
+import AppKit
 
 @main
 struct OSAIApp: App {
     @StateObject var appState = AppState()
     @Environment(\.openWindow) private var openWindow
+
+    init() {
+        setAppIcon()
+    }
+
+    private func setAppIcon() {
+        let size: CGFloat = 512
+        let pixelSize = size / 16
+        let ghostGrid: [[Int]] = [
+            [0,0,0,0,0,1,1,1,1,1,1,0,0,0,0,0],
+            [0,0,0,1,1,1,1,1,1,1,1,1,1,0,0,0],
+            [0,0,1,1,1,1,1,1,1,1,1,1,1,1,0,0],
+            [0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0],
+            [0,1,1,2,2,1,1,1,1,1,2,2,1,1,1,0],
+            [0,1,2,2,3,3,1,1,1,2,2,3,3,1,1,0],
+            [0,1,2,2,3,3,1,1,1,2,2,3,3,1,1,0],
+            [0,1,1,2,2,1,1,1,1,1,2,2,1,1,1,0],
+            [0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0],
+            [0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0],
+            [0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0],
+            [0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0],
+            [0,1,1,0,0,1,1,0,0,1,1,0,0,1,1,0],
+            [0,1,0,0,0,0,1,0,0,0,1,0,0,0,1,0],
+        ]
+
+        let image = NSImage(size: NSSize(width: size, height: size))
+        image.lockFocus()
+
+        let teal = NSColor(red: 80/255, green: 200/255, blue: 200/255, alpha: 1)
+        let white = NSColor.white
+        let darkBlue = NSColor(red: 20/255, green: 30/255, blue: 60/255, alpha: 1)
+
+        // Background with rounded rect
+        NSColor(red: 15/255, green: 15/255, blue: 20/255, alpha: 1).setFill()
+        let bgPath = NSBezierPath(roundedRect: NSRect(x: 0, y: 0, width: size, height: size), xRadius: size * 0.2, yRadius: size * 0.2)
+        bgPath.fill()
+
+        // Ghost centered with padding
+        let ghostWidth: CGFloat = 16 * pixelSize * 0.7
+        let ghostHeight: CGFloat = 14 * pixelSize * 0.7
+        let pSize = ghostWidth / 16
+        let offsetX = (size - ghostWidth) / 2
+        let offsetY = (size - ghostHeight) / 2
+
+        for row in 0..<14 {
+            for col in 0..<16 {
+                let value = ghostGrid[row][col]
+                guard value != 0 else { continue }
+
+                let color: NSColor
+                switch value {
+                case 1: color = teal
+                case 2: color = white
+                case 3: color = darkBlue
+                default: continue
+                }
+
+                color.setFill()
+                // Flip Y for AppKit coordinate system
+                let rect = NSRect(
+                    x: offsetX + CGFloat(col) * pSize,
+                    y: offsetY + ghostHeight - CGFloat(row + 1) * pSize,
+                    width: pSize + 0.5,
+                    height: pSize + 0.5
+                )
+                rect.fill()
+            }
+        }
+
+        image.unlockFocus()
+        NSApplication.shared.applicationIconImage = image
+    }
 
     var body: some Scene {
         WindowGroup {

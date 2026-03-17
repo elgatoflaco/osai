@@ -237,7 +237,7 @@ final class AgentRegistry {
         ---
         name: news
         description: Noticias de tech, IA, producto y geopolitica
-        model: openrouter/x-ai/grok-3-mini
+        model: openrouter/x-ai/grok-4-fast
         triggers:
           - noticias
           - news
@@ -246,8 +246,15 @@ final class AgentRegistry {
           - actualidad
           - current events
           - esta semana
+          - trending
+          - tweets
+          - salseos
+          - que pasa
+          - mundo
+          - novedades
         ---
-        Fast news analyst. Bullet points, sources cited, same language as user.
+        Fast news analyst. Search HN, Reddit, TechCrunch via curl.
+        Bullet points, sources cited, same language as user.
         Focus: AI/tech, digital product, geopolitics affecting tech, open source.
         """),
 

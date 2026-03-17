@@ -525,7 +525,7 @@ struct ModelSelectorButton: View {
     var body: some View {
         Button(action: { showPopover.toggle() }) {
             HStack(spacing: 4) {
-                Image(systemName: appState.modelDefinition(for: appState.selectedModel)?.icon ?? "cpu")
+                Image(systemName: appState.modelDefinition(for: appState.effectiveModel)?.icon ?? "cpu")
                     .font(.system(size: 10))
                 Text(appState.selectedModelShortName)
                     .font(.system(size: 11, weight: .medium))
@@ -619,13 +619,13 @@ struct ModelSelectorPopover: View {
                             .padding(.bottom, 4)
 
                         ForEach(group.models) { model in
-                            let isSelected = appState.selectedModel == model.id
+                            let isSelected = appState.effectiveModel == model.id
                             let hasKey = appState.hasAPIKey(for: model.providerKey)
                             let meta = ModelMeta.forModel(model.id)
 
                             Button(action: {
                                 if hasKey {
-                                    appState.selectedModel = model.id
+                                    appState.setEffectiveModel(model.id)
                                     isPresented = false
                                 }
                             }) {

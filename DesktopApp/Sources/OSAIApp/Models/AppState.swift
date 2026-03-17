@@ -254,6 +254,8 @@ let allModelDefinitions: [ModelDefinition] = [
     ModelDefinition(id: "openrouter/x-ai/grok-4.20-beta", displayName: "Grok 4.20", shortName: "Grok 4.20", provider: "xAI", providerKey: "openrouter", tag: "Best", icon: "brain"),
     ModelDefinition(id: "openrouter/x-ai/grok-4", displayName: "Grok 4", shortName: "Grok 4", provider: "xAI", providerKey: "openrouter", tag: "Powerful", icon: "bolt.circle"),
     ModelDefinition(id: "openrouter/x-ai/grok-4-fast", displayName: "Grok 4 Fast", shortName: "Grok 4 Fast", provider: "xAI", providerKey: "openrouter", tag: "Fast", icon: "bolt.circle.fill"),
+    ModelDefinition(id: "openrouter/x-ai/grok-4-1-fast-non-reasoning", displayName: "Grok 4.1 Flash", shortName: "Grok Flash", provider: "xAI", providerKey: "openrouter", tag: "Fast", icon: "bolt.circle.fill"),
+    ModelDefinition(id: "openrouter/x-ai/grok-4-1-fast-reasoning", displayName: "Grok 4.1 Flash Reasoning", shortName: "Grok Flash R", provider: "xAI", providerKey: "openrouter", tag: "Reasoning", icon: "lightbulb"),
     ModelDefinition(id: "openrouter/x-ai/grok-4.1-fast", displayName: "Grok 4.1 Fast", shortName: "Grok 4.1 Fast", provider: "xAI", providerKey: "openrouter", tag: "Fast", icon: "bolt.circle.fill"),
     ModelDefinition(id: "openrouter/x-ai/grok-code-fast-1", displayName: "Grok Code Fast", shortName: "Grok Code", provider: "xAI", providerKey: "openrouter", tag: "Code", icon: "terminal"),
     ModelDefinition(id: "openrouter/x-ai/grok-3", displayName: "Grok 3", shortName: "Grok 3", provider: "xAI", providerKey: "openrouter", tag: "Smart", icon: "bolt.circle"),
@@ -2332,9 +2334,46 @@ class AppState: ObservableObject {
         allModelDefinitions.first { $0.id == id }
     }
 
+    /// The model actually used for the current conversation (agent model takes priority).
+    var effectiveModel: String {
+        if let agentName = activeConversation?.agentName,
+           let agent = agents.first(where: { $0.name == agentName }),
+           !agent.model.isEmpty {
+            return agent.model
+        }
+        return selectedModel
+    }
+
+    /// Set the model: if an agent chat, update the agent's model; otherwise update the global model.
+    func setEffectiveModel(_ modelId: String) {
+        if let agentName = activeConversation?.agentName,
+           let idx = agents.firstIndex(where: { $0.name == agentName }) {
+            var updated = agents[idx]
+            // Update in-memory
+            agents[idx] = AgentInfo(
+                name: updated.name,
+                description: updated.description,
+                model: modelId,
+                backend: updated.backend,
+                triggers: updated.triggers,
+                systemPrompt: updated.systemPrompt
+            )
+            // Persist to disk
+            saveAgent(agents[idx], description: updated.description, model: modelId, systemPrompt: updated.systemPrompt, triggers: updated.triggers)
+        } else {
+            selectedModel = modelId
+        }
+    }
+
     /// Short display name for the currently selected model.
     var selectedModelShortName: String {
-        modelDefinition(for: selectedModel)?.shortName ?? selectedModel
+        let model = effectiveModel
+        if let def = modelDefinition(for: model) {
+            return def.shortName
+        }
+        // Fallback: extract last path component and clean up
+        let last = model.components(separatedBy: "/").last ?? model
+        return last.split(separator: "-").map { $0.capitalized }.joined(separator: " ")
     }
 
     var unreadNotificationCount: Int {

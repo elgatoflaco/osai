@@ -185,6 +185,8 @@ struct AIProvider {
                 "google/gemini-3.1-pro-preview",
                 "google/gemini-2.5-flash",
                 "x-ai/grok-4-0709",
+                "x-ai/grok-4-1-fast-non-reasoning",
+                "x-ai/grok-4-1-fast-reasoning",
                 "x-ai/grok-3",
                 "x-ai/grok-3-mini",
             ]

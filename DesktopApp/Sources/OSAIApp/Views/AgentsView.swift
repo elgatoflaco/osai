@@ -795,13 +795,7 @@ struct AgentCard: View {
             Text("Model")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundColor(AppTheme.textSecondary)
-            Picker("", selection: $editModel) {
-                ForEach(agentModelOptions, id: \.self) { m in
-                    Text(m).tag(m)
-                }
-            }
-            .pickerStyle(.menu)
-            .tint(AppTheme.accent)
+            AgentModelPicker(selection: $editModel)
         }
 
         // System Prompt
@@ -1723,6 +1717,37 @@ private var agentModelOptions: [String] {
     allModelDefinitions.map { $0.id }
 }
 
+private func agentModelDisplayName(_ id: String) -> String {
+    allModelDefinitions.first(where: { $0.id == id })?.displayName ?? id.components(separatedBy: "/").last ?? id
+}
+
+private var agentModelsByProvider: [(provider: String, models: [ModelDefinition])] {
+    let order = ["Anthropic", "OpenAI", "Google", "xAI", "DeepSeek", "Other", "Local"]
+    let grouped = Dictionary(grouping: allModelDefinitions) { $0.provider }
+    return order.compactMap { provider in
+        guard let models = grouped[provider] else { return nil }
+        return (provider: provider, models: models)
+    }
+}
+
+struct AgentModelPicker: View {
+    @Binding var selection: String
+
+    var body: some View {
+        Picker("", selection: $selection) {
+            ForEach(agentModelsByProvider, id: \.provider) { group in
+                Section(header: Text(group.provider)) {
+                    ForEach(group.models) { model in
+                        Text(model.displayName).tag(model.id)
+                    }
+                }
+            }
+        }
+        .pickerStyle(.menu)
+        .tint(AppTheme.accent)
+    }
+}
+
 // MARK: - Create Agent Sheet (5-Step Wizard)
 
 struct CreateAgentSheet: View {
@@ -2019,13 +2044,7 @@ struct CreateAgentSheet: View {
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundColor(AppTheme.accent)
 
-                Picker("", selection: $model) {
-                    ForEach(agentModelOptions, id: \.self) { m in
-                        Text(m).tag(m)
-                    }
-                }
-                .pickerStyle(.menu)
-                .tint(AppTheme.accent)
+                AgentModelPicker(selection: $model)
 
                 if let error = modelError {
                     Text(error)
@@ -2518,13 +2537,7 @@ struct AgentFormModel: View {
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundColor(AppTheme.accent)
 
-                Picker("", selection: $model) {
-                    ForEach(agentModelOptions, id: \.self) { m in
-                        Text(m).tag(m)
-                    }
-                }
-                .pickerStyle(.menu)
-                .tint(AppTheme.accent)
+                AgentModelPicker(selection: $model)
 
                 if model == "claude-code" {
                     HStack(spacing: 6) {
