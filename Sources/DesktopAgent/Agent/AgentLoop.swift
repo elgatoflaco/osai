@@ -191,8 +191,15 @@ final class AgentLoop {
 
         // --- Specialized Agent Routing ---
         // Only auto-route on first message or very early in conversation (not follow-ups)
+        // Strip conversation history prefix to only match against the actual user message
+        let routingInput: String
+        if let endMarker = userInput.range(of: "[END HISTORY]") {
+            routingInput = String(userInput[endMarker.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        } else {
+            routingInput = userInput
+        }
         let shouldRoute = conversationHistory.count <= 2
-        if shouldRoute, let specializedAgent = AgentRegistry.route(input: userInput) {
+        if shouldRoute, let specializedAgent = AgentRegistry.route(input: routingInput) {
             // Claude Code backend: delegate directly to CLI
             if specializedAgent.usesClaudeCode {
                 if let emitter = appModeEmitter {

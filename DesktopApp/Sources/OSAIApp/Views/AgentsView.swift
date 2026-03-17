@@ -1719,13 +1719,9 @@ struct FlowLayout: Layout {
 
 // MARK: - Shared Model Options
 
-private let agentModelOptions = [
-    "anthropic/claude-sonnet-4-20250514",
-    "anthropic/claude-haiku-4-5-20251001",
-    "google/gemini-2.5-flash",
-    "openrouter/x-ai/grok-3-mini",
-    "claude-code",
-]
+private var agentModelOptions: [String] {
+    allModelDefinitions.map { $0.id }
+}
 
 // MARK: - Create Agent Sheet (5-Step Wizard)
 
