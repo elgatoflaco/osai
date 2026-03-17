@@ -82,6 +82,29 @@ struct Toast: Identifiable, Equatable {
     }
 }
 
+// MARK: - Sound Effects
+
+enum AppSound {
+    case send      // Message sent
+    case receive   // Response complete
+    case error     // Error occurred
+    case notify    // Notification
+
+    func play() {
+        // Default is enabled; only skip if explicitly set to false
+        if UserDefaults.standard.object(forKey: "soundEffectsEnabled") != nil,
+           !UserDefaults.standard.bool(forKey: "soundEffectsEnabled") { return }
+        let soundName: String
+        switch self {
+        case .send: soundName = "Tink"
+        case .receive: soundName = "Pop"
+        case .error: soundName = "Basso"
+        case .notify: soundName = "Glass"
+        }
+        NSSound(named: NSSound.Name(soundName))?.play()
+    }
+}
+
 enum ConversationSortOption: String, CaseIterable, Identifiable {
     case lastUpdated = "lastUpdated"
     case created = "created"
@@ -694,6 +717,7 @@ class AppState: ObservableObject {
         return conversationColors.first(where: { $0.name == name })?.color
     }
 
+    @AppStorage("soundEffectsEnabled") var soundEffectsEnabled: Bool = true
     @AppStorage("isDarkMode") var isDarkMode: Bool = true
     @AppStorage("sidebarCollapsed") var sidebarCollapsed: Bool = false
     @AppStorage("hasCompletedOnboarding") var hasCompletedOnboarding: Bool = false
@@ -2633,6 +2657,7 @@ class AppState: ObservableObject {
     func addNotification(title: String, message: String, type: NotificationType) {
         let notification = AppNotification(timestamp: Date(), title: title, message: message, type: type)
         notifications.insert(notification, at: 0)
+        if type != .error { AppSound.notify.play() } // errors play their own sound
         // Auto-trim to 50
         if notifications.count > 50 {
             notifications = Array(notifications.prefix(50))
@@ -2930,6 +2955,7 @@ class AppState: ObservableObject {
         let userMsg = ChatMessage(id: UUID().uuidString, role: .user, content: fullText, timestamp: Date())
         activeConversation?.messages.append(userMsg)
         syncConversationToList()
+        AppSound.send.play()
 
         let assistantMsg = ChatMessage(id: UUID().uuidString, role: .assistant, content: "", timestamp: Date(), isStreaming: true)
         activeConversation?.messages.append(assistantMsg)
@@ -3148,6 +3174,7 @@ class AppState: ObservableObject {
 
         case .error(let message):
             ghostEmotion = .error
+            AppSound.error.play()
             if state.accumulatedText.isEmpty {
                 state.accumulatedText = "Error: \(message)"
             } else {
@@ -3166,6 +3193,7 @@ class AppState: ObservableObject {
             for i in 0..<(activeConversation?.messages[idx].activities.count ?? 0) {
                 activeConversation?.messages[idx].activities[i].isComplete = true
             }
+            AppSound.receive.play()
         }
 
         // Keep list in sync during streaming

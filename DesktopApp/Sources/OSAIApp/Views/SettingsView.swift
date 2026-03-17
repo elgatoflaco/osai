@@ -1410,6 +1410,20 @@ struct SettingsView: View {
                         .accessibilityValue(appState.notificationsEnabled ? "On" : "Off")
                 }
 
+                // UX sound effects (send, receive, error)
+                HStack {
+                    Text("UX sound effects")
+                        .font(AppTheme.fontBody)
+                        .foregroundColor(AppTheme.textPrimary)
+                    Spacer()
+                    Toggle("UX sound effects", isOn: $appState.soundEffectsEnabled)
+                        .toggleStyle(.switch)
+                        .tint(AppTheme.accent)
+                        .labelsHidden()
+                        .accessibilityLabel("UX sound effects")
+                        .accessibilityValue(appState.soundEffectsEnabled ? "On" : "Off")
+                }
+
                 // Sound on message received
                 HStack {
                     Text("Sound on message received")
