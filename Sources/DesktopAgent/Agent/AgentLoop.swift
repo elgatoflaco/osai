@@ -320,12 +320,27 @@ final class AgentLoop {
                 do {
                     let result = try await runSpecializedAgent(agent: specializedAgent, resolved: resolved, input: userInput)
                     if !result.isEmpty {
+                        // Emit text for desktop app (specialized agent doesn't go through normal emitter path)
+                        if let emitter = appModeEmitter {
+                            emitter.emitText(result)
+                        }
                         conversationHistory.append(ClaudeMessage(role: "assistant", content: [.text(result)]))
                         return result
+                    } else {
+                        let msg = "Agent '\(specializedAgent.name)' returned empty response. Falling back."
+                        appModeEmitter?.emitStatus(msg)
+                        printColored("  ⚠ \(msg)", color: .yellow)
                     }
                 } catch {
                     // Specialized agent failed — fall through to main model
-                    let msg = "Agent '\(specializedAgent.name)' failed: \(error is AgentError ? (error as! AgentError).description : error.localizedDescription). Falling back to main model."
+                    let msg = "Agent '\(specializedAgent.name)' failed: \(error). Falling back to main model."
+                    // Log to file for debugging
+                    let errorLog = "[AGENT-ERROR] \(specializedAgent.name) model=\(specializedAgent.model) error=\(error)\n"
+                    if let data = errorLog.data(using: .utf8) {
+                        let logPath = NSHomeDirectory() + "/.desktop-agent/routing.log"
+                        if let fh = FileHandle(forWritingAtPath: logPath) { fh.seekToEndOfFile(); fh.write(data); fh.closeFile() }
+                        else { FileManager.default.createFile(atPath: logPath, contents: data) }
+                    }
                     if let emitter = appModeEmitter {
                         emitter.emitStatus(msg)
                     } else {
@@ -1953,7 +1968,9 @@ final class AgentLoop {
                 case .toolUse(let id, let name, let toolInput, _):
                     hasToolUse = true
                     let icon = toolIcon(name)
+                    let detail = toolDetail(name: name, input: toolInput)
                     printColored("  \(icon) [\(agent.name)] \(name)", color: .gray)
+                    appModeEmitter?.emitToolStart(id: id, name: name, detail: "[\(agent.name)] \(detail)")
 
                     // Execute the tool
                     if mcpManager.canHandle(toolName: name) {
