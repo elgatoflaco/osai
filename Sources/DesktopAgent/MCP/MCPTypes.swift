@@ -173,23 +173,47 @@ struct AIProvider {
             defaultBaseURL: "https://openrouter.ai/api/v1/chat/completions",
             format: "openai",
             models: [
-                "deepseek/deepseek-chat-v3.2",
-                "deepseek/deepseek-r1",
-                "qwen/qwen3.5-coder",
-                "meta-llama/llama-4-maverick",
-                "meta-llama/llama-4-scout",
-                "anthropic/claude-sonnet-4.6",
+                // Anthropic
                 "anthropic/claude-opus-4.6",
+                "anthropic/claude-sonnet-4.6",
+                "anthropic/claude-opus-4.5",
+                "anthropic/claude-sonnet-4.5",
+                "anthropic/claude-sonnet-4",
+                "anthropic/claude-haiku-4.5",
+                // OpenAI
                 "openai/gpt-5",
                 "openai/gpt-4o",
+                // Google
                 "google/gemini-3.1-pro-preview",
+                "google/gemini-3.1-flash-lite-preview",
+                "google/gemini-3-pro-preview",
+                "google/gemini-3-flash-preview",
+                "google/gemini-2.5-pro",
                 "google/gemini-2.5-flash",
+                "google/gemini-2.5-flash-lite",
+                "google/gemini-2.0-flash",
+                // xAI
+                "x-ai/grok-4.20-beta",
                 "x-ai/grok-4-0709",
                 "x-ai/grok-4-fast",
                 "x-ai/grok-4-1-fast-non-reasoning",
                 "x-ai/grok-4-1-fast-reasoning",
+                "x-ai/grok-4.1-fast",
+                "x-ai/grok-code-fast-1",
                 "x-ai/grok-3",
                 "x-ai/grok-3-mini",
+                // DeepSeek
+                "deepseek/deepseek-r1",
+                "deepseek/deepseek-v3.2",
+                "deepseek/deepseek-chat-v3.2",
+                "deepseek/deepseek-chat-v3.1",
+                // Meta
+                "meta-llama/llama-4-maverick",
+                "meta-llama/llama-4-scout",
+                // Qwen
+                "qwen/qwen3.5-coder",
+                // Other
+                "minimax/minimax-m2.5",
             ]
         ),
         AIProvider(

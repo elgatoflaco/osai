@@ -661,22 +661,84 @@ private struct ModelMeta {
 
     static func forModel(_ id: String) -> ModelMeta {
         switch id {
+        // Anthropic
         case let s where s.contains("haiku"):
             return ModelMeta(description: "Fast and efficient", speed: 3, capability: 1, price: "$")
         case let s where s.contains("sonnet"):
             return ModelMeta(description: "Balanced speed and quality", speed: 2, capability: 2, price: "$$")
         case let s where s.contains("opus"):
             return ModelMeta(description: "Best for complex tasks", speed: 1, capability: 3, price: "$$$")
+        // OpenAI
+        case let s where s.contains("gpt-5-mini"):
+            return ModelMeta(description: "Fast next-gen model", speed: 3, capability: 2, price: "$")
+        case let s where s.contains("gpt-5"):
+            return ModelMeta(description: "Most capable GPT", speed: 1, capability: 3, price: "$$$")
         case let s where s.contains("gpt-4o-mini"):
             return ModelMeta(description: "Lightweight and fast", speed: 3, capability: 1, price: "$")
         case let s where s.contains("gpt-4o"):
             return ModelMeta(description: "Multimodal with vision", speed: 2, capability: 2, price: "$$")
+        case let s where s.contains("4.1-nano"):
+            return ModelMeta(description: "Ultra-cheap mini model", speed: 3, capability: 1, price: "$")
+        case let s where s.contains("4.1-mini"):
+            return ModelMeta(description: "Fast and affordable", speed: 3, capability: 1, price: "$")
+        case let s where s.contains("gpt-4.1"):
+            return ModelMeta(description: "Latest GPT model", speed: 2, capability: 2, price: "$$")
+        case let s where s.contains("o4-mini"):
+            return ModelMeta(description: "Efficient reasoning", speed: 2, capability: 2, price: "$$")
+        case let s where s.contains("o3-mini"):
+            return ModelMeta(description: "Compact reasoner", speed: 2, capability: 2, price: "$$")
         case let s where s.contains("o3"):
             return ModelMeta(description: "Advanced reasoning", speed: 1, capability: 3, price: "$$$")
+        // Google Gemini
+        case let s where s.contains("gemini") && s.contains("flash-lite"):
+            return ModelMeta(description: "Ultra-fast and cheap", speed: 3, capability: 1, price: "$")
         case let s where s.contains("gemini") && s.contains("flash"):
             return ModelMeta(description: "Fast and affordable", speed: 3, capability: 1, price: "$")
         case let s where s.contains("gemini") && s.contains("pro"):
             return ModelMeta(description: "Strong general purpose", speed: 2, capability: 2, price: "$$")
+        // xAI Grok
+        case let s where s.contains("grok-4.20"):
+            return ModelMeta(description: "Most capable Grok", speed: 1, capability: 3, price: "$$$")
+        case let s where s.contains("grok-4") && s.contains("fast"):
+            return ModelMeta(description: "Fast Grok model", speed: 3, capability: 2, price: "$")
+        case let s where s.contains("grok-code"):
+            return ModelMeta(description: "Coding specialist", speed: 3, capability: 2, price: "$")
+        case let s where s.contains("grok-4"):
+            return ModelMeta(description: "Powerful Grok model", speed: 1, capability: 3, price: "$$$")
+        case let s where s.contains("grok-3-mini"):
+            return ModelMeta(description: "Lightweight Grok", speed: 3, capability: 1, price: "$")
+        case let s where s.contains("grok-3"):
+            return ModelMeta(description: "Strong Grok model", speed: 2, capability: 2, price: "$$")
+        // DeepSeek
+        case let s where s.contains("deepseek-r1"):
+            return ModelMeta(description: "Deep reasoning model", speed: 1, capability: 3, price: "$$")
+        case let s where s.contains("deepseek"):
+            return ModelMeta(description: "Capable and affordable", speed: 2, capability: 2, price: "$")
+        // Meta Llama
+        case let s where s.contains("llama-4-maverick"):
+            return ModelMeta(description: "Powerful open model", speed: 2, capability: 3, price: "$")
+        case let s where s.contains("llama-4-scout"):
+            return ModelMeta(description: "Fast open model", speed: 3, capability: 2, price: "$")
+        case let s where s.contains("llama-3.3"):
+            return ModelMeta(description: "Fast on Groq infra", speed: 3, capability: 2, price: "$")
+        case let s where s.contains("llama-3.1"):
+            return ModelMeta(description: "Instant inference", speed: 3, capability: 1, price: "$")
+        // Qwen
+        case let s where s.contains("qwen"):
+            return ModelMeta(description: "Strong coding model", speed: 2, capability: 2, price: "$")
+        // Groq
+        case let s where s.contains("mixtral"):
+            return ModelMeta(description: "Fast mixture model", speed: 3, capability: 2, price: "$")
+        // Mistral
+        case let s where s.contains("codestral"):
+            return ModelMeta(description: "Code specialist", speed: 2, capability: 2, price: "$$")
+        case let s where s.contains("mistral-large"):
+            return ModelMeta(description: "Powerful Mistral model", speed: 2, capability: 3, price: "$$")
+        case let s where s.contains("mistral-small"):
+            return ModelMeta(description: "Fast Mistral model", speed: 3, capability: 1, price: "$")
+        // Other
+        case let s where s.contains("minimax"):
+            return ModelMeta(description: "Free tier model", speed: 2, capability: 1, price: "Free")
         case let s where s.contains("claude-code"):
             return ModelMeta(description: "Local coding agent", speed: 2, capability: 3, price: "Free")
         default:
@@ -688,7 +750,39 @@ private struct ModelMeta {
 struct ModelSelectorPopover: View {
     @EnvironmentObject var appState: AppState
     @Binding var isPresented: Bool
+    @State private var selectedProvider: String? = nil
     @State private var hoveredModel: String?
+    @State private var hoveredProvider: String?
+
+    private var providers: [(provider: String, models: [ModelDefinition])] {
+        appState.modelsGroupedByProvider
+    }
+
+    private var activeProvider: String {
+        selectedProvider ?? providers.first?.provider ?? "Anthropic"
+    }
+
+    private var activeModels: [ModelDefinition] {
+        providers.first(where: { $0.provider == activeProvider })?.models ?? []
+    }
+
+    private func providerIcon(_ name: String) -> String {
+        switch name {
+        case "OpenRouter": return "network"
+        case "Anthropic": return "brain"
+        case "OpenAI": return "sparkles"
+        case "Google": return "globe"
+        case "xAI": return "bolt.circle"
+        case "DeepSeek": return "magnifyingglass"
+        case "Meta": return "flame"
+        case "Qwen": return "terminal"
+        case "Groq": return "bolt"
+        case "Mistral": return "wind"
+        case "Other": return "ellipsis.circle"
+        case "Local": return "desktopcomputer"
+        default: return "cpu"
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -698,138 +792,179 @@ struct ModelSelectorPopover: View {
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundColor(AppTheme.textPrimary)
                 Spacer()
+                Text(activeProvider)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(AppTheme.accent)
             }
             .padding(.horizontal, 14)
             .padding(.top, 12)
             .padding(.bottom, 8)
 
+            // Provider tabs — horizontal scrollable pills
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(providers, id: \.provider) { group in
+                        let isActive = activeProvider == group.provider
+                        let hasKey = appState.hasAPIKey(for: group.models.first?.providerKey ?? "")
+                        let isHovered = hoveredProvider == group.provider
+
+                        Button(action: { selectedProvider = group.provider }) {
+                            HStack(spacing: 4) {
+                                Image(systemName: providerIcon(group.provider))
+                                    .font(.system(size: 9))
+                                Text(group.provider)
+                                    .font(.system(size: 10, weight: isActive ? .bold : .medium))
+                                Text("\(group.models.count)")
+                                    .font(.system(size: 8, weight: .bold, design: .monospaced))
+                                    .foregroundColor(isActive ? AppTheme.accent : AppTheme.textMuted)
+                            }
+                            .foregroundColor(
+                                !hasKey ? AppTheme.textMuted.opacity(0.5) :
+                                isActive ? AppTheme.textPrimary : AppTheme.textSecondary
+                            )
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .fill(isActive ? AppTheme.accent.opacity(0.15) :
+                                          isHovered ? AppTheme.accent.opacity(0.06) : Color.clear)
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .stroke(isActive ? AppTheme.accent.opacity(0.4) : Color.clear, lineWidth: 1)
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        .onHover { h in hoveredProvider = h ? group.provider : nil }
+                    }
+                }
+                .padding(.horizontal, 14)
+            }
+            .padding(.bottom, 6)
+
             Divider().background(AppTheme.borderGlass)
 
+            // Models for selected provider
             ScrollView(.vertical, showsIndicators: true) {
                 VStack(alignment: .leading, spacing: 2) {
-                    ForEach(appState.modelsGroupedByProvider, id: \.provider) { group in
-                        // Provider header
-                        Text(group.provider)
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundColor(AppTheme.textMuted)
-                            .textCase(.uppercase)
-                            .padding(.horizontal, 14)
-                            .padding(.top, 10)
-                            .padding(.bottom, 4)
+                    ForEach(activeModels) { model in
+                        let isSelected = appState.effectiveModel == model.id
+                        let hasKey = appState.hasAPIKey(for: model.providerKey)
+                        let meta = ModelMeta.forModel(model.id)
 
-                        ForEach(group.models) { model in
-                            let isSelected = appState.effectiveModel == model.id
-                            let hasKey = appState.hasAPIKey(for: model.providerKey)
-                            let meta = ModelMeta.forModel(model.id)
+                        Button(action: {
+                            if hasKey {
+                                appState.setEffectiveModel(model.id)
+                                isPresented = false
+                            }
+                        }) {
+                            HStack(spacing: 8) {
+                                Image(systemName: model.icon)
+                                    .font(.system(size: 12))
+                                    .foregroundColor(hasKey ? AppTheme.accent : AppTheme.textMuted)
+                                    .frame(width: 18)
 
-                            Button(action: {
-                                if hasKey {
-                                    appState.setEffectiveModel(model.id)
-                                    isPresented = false
-                                }
-                            }) {
-                                HStack(spacing: 8) {
-                                    Image(systemName: model.icon)
-                                        .font(.system(size: 12))
-                                        .foregroundColor(hasKey ? AppTheme.accent : AppTheme.textMuted)
-                                        .frame(width: 18)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    HStack(spacing: 6) {
+                                        Text(model.displayName)
+                                            .font(.system(size: 12, weight: .medium))
+                                            .foregroundColor(hasKey ? AppTheme.textPrimary : AppTheme.textMuted)
 
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        HStack(spacing: 6) {
-                                            Text(model.displayName)
-                                                .font(.system(size: 12, weight: .medium))
-                                                .foregroundColor(hasKey ? AppTheme.textPrimary : AppTheme.textMuted)
+                                        Text(meta.price)
+                                            .font(.system(size: 9, weight: .bold, design: .monospaced))
+                                            .foregroundColor(hasKey ? AppTheme.textSecondary : AppTheme.textMuted)
+                                    }
 
-                                            Text(meta.price)
-                                                .font(.system(size: 9, weight: .bold, design: .monospaced))
-                                                .foregroundColor(hasKey ? AppTheme.textSecondary : AppTheme.textMuted)
-                                        }
-
-                                        if hasKey {
-                                            HStack(spacing: 8) {
-                                                Text(meta.description)
-                                                    .font(.system(size: 10))
-                                                    .foregroundColor(AppTheme.textSecondary)
-
-                                                Spacer()
-
-                                                // Speed indicator
-                                                HStack(spacing: 1) {
-                                                    ForEach(0..<3, id: \.self) { i in
-                                                        Image(systemName: "bolt.fill")
-                                                            .font(.system(size: 7))
-                                                            .foregroundColor(i < meta.speed ? AppTheme.warning : AppTheme.textMuted.opacity(0.3))
-                                                    }
-                                                }
-                                                .help("Speed")
-
-                                                // Capability indicator
-                                                HStack(spacing: 1) {
-                                                    ForEach(0..<3, id: \.self) { i in
-                                                        Image(systemName: "star.fill")
-                                                            .font(.system(size: 7))
-                                                            .foregroundColor(i < meta.capability ? AppTheme.accent : AppTheme.textMuted.opacity(0.3))
-                                                    }
-                                                }
-                                                .help("Capability")
-                                            }
-                                        } else {
-                                            Text("No API key")
+                                    if hasKey {
+                                        HStack(spacing: 8) {
+                                            Text(meta.description)
                                                 .font(.system(size: 10))
-                                                .foregroundColor(AppTheme.error.opacity(0.7))
+                                                .foregroundColor(AppTheme.textSecondary)
+
+                                            Spacer()
+
+                                            HStack(spacing: 1) {
+                                                ForEach(0..<3, id: \.self) { i in
+                                                    Image(systemName: "bolt.fill")
+                                                        .font(.system(size: 7))
+                                                        .foregroundColor(i < meta.speed ? AppTheme.warning : AppTheme.textMuted.opacity(0.3))
+                                                }
+                                            }
+                                            .help("Speed")
+
+                                            HStack(spacing: 1) {
+                                                ForEach(0..<3, id: \.self) { i in
+                                                    Image(systemName: "star.fill")
+                                                        .font(.system(size: 7))
+                                                        .foregroundColor(i < meta.capability ? AppTheme.accent : AppTheme.textMuted.opacity(0.3))
+                                                }
+                                            }
+                                            .help("Capability")
                                         }
-                                    }
-
-                                    if !hasKey {
-                                        Spacer()
-                                    }
-
-                                    Text(model.tag)
-                                        .font(.system(size: 9, weight: .medium))
-                                        .foregroundColor(hasKey ? tagColor(model.tag) : AppTheme.textMuted)
-                                        .padding(.horizontal, 6)
-                                        .padding(.vertical, 2)
-                                        .background((hasKey ? tagColor(model.tag) : AppTheme.textMuted).opacity(0.12))
-                                        .clipShape(Capsule())
-
-                                    if isSelected {
-                                        Image(systemName: "checkmark")
-                                            .font(.system(size: 11, weight: .semibold))
-                                            .foregroundColor(AppTheme.accent)
+                                    } else {
+                                        Text("No API key — configure in Settings")
+                                            .font(.system(size: 10))
+                                            .foregroundColor(AppTheme.error.opacity(0.7))
                                     }
                                 }
-                                .padding(.horizontal, 14)
-                                .padding(.vertical, 8)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 8)
-                                        .fill(isSelected ? AppTheme.accent.opacity(0.12) :
-                                              hoveredModel == model.id ? AppTheme.accent.opacity(0.05) : Color.clear)
-                                )
-                                .contentShape(Rectangle())
+
+                                if !hasKey {
+                                    Spacer()
+                                }
+
+                                Text(model.tag)
+                                    .font(.system(size: 9, weight: .medium))
+                                    .foregroundColor(hasKey ? tagColor(model.tag) : AppTheme.textMuted)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background((hasKey ? tagColor(model.tag) : AppTheme.textMuted).opacity(0.12))
+                                    .clipShape(Capsule())
+
+                                if isSelected {
+                                    Image(systemName: "checkmark")
+                                        .font(.system(size: 11, weight: .semibold))
+                                        .foregroundColor(AppTheme.accent)
+                                }
                             }
-                            .buttonStyle(.plain)
-                            .disabled(!hasKey)
-                            .onHover { isHovered in
-                                hoveredModel = isHovered ? model.id : nil
-                            }
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
+                            .background(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .fill(isSelected ? AppTheme.accent.opacity(0.12) :
+                                          hoveredModel == model.id ? AppTheme.accent.opacity(0.05) : Color.clear)
+                            )
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(!hasKey)
+                        .onHover { isHovered in
+                            hoveredModel = isHovered ? model.id : nil
                         }
                     }
                 }
-                .padding(.bottom, 10)
+                .padding(.vertical, 6)
             }
         }
-        .frame(width: 340, height: 420)
+        .frame(width: 420, height: 480)
         .background(.ultraThinMaterial)
         .background(AppTheme.bgGlass)
+        .onAppear {
+            if let currentModel = allModelDefinitions.first(where: { $0.id == appState.effectiveModel }) {
+                selectedProvider = currentModel.provider
+            }
+        }
     }
 
     private func tagColor(_ tag: String) -> Color {
         switch tag {
-        case "Fast": return AppTheme.success
+        case "Fast", "Instant": return AppTheme.success
         case "Smart": return AppTheme.accent
-        case "Powerful": return Color.purple
+        case "Powerful", "Best": return Color.purple
         case "Vision": return Color.blue
         case "Reasoning": return Color.orange
+        case "Code": return Color.teal
+        case "Cheap", "Free": return Color.green
+        case "Latest": return Color.cyan
         case "Local": return AppTheme.textSecondary
         default: return AppTheme.textSecondary
         }

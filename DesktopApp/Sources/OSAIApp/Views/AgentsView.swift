@@ -1722,9 +1722,13 @@ private func agentModelDisplayName(_ id: String) -> String {
 }
 
 private var agentModelsByProvider: [(provider: String, models: [ModelDefinition])] {
-    let order = ["Anthropic", "OpenAI", "Google", "xAI", "DeepSeek", "Other", "Local"]
+    let order = ["OpenRouter", "Anthropic", "OpenAI", "Google", "xAI", "DeepSeek", "Meta", "Qwen", "Groq", "Mistral", "Other", "Local"]
     let grouped = Dictionary(grouping: allModelDefinitions) { $0.provider }
+    let openRouterModels = allModelDefinitions.filter { $0.providerKey == "openrouter" }
     return order.compactMap { provider in
+        if provider == "OpenRouter" {
+            return openRouterModels.isEmpty ? nil : (provider: "OpenRouter", models: openRouterModels)
+        }
         guard let models = grouped[provider] else { return nil }
         return (provider: provider, models: models)
     }

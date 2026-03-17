@@ -8,7 +8,7 @@ struct SettingsView: View {
     @State private var searchText = ""
 
     // Well-known providers to always show status for
-    private let knownProviders = ["anthropic", "openai", "google", "openrouter", "xai", "deepseek"]
+    private let knownProviders = ["anthropic", "openai", "google", "openrouter", "xai", "deepseek", "groq", "mistral"]
 
     // MARK: - Searchable Sections
 
@@ -273,7 +273,7 @@ struct SettingsView: View {
 
                 Divider().background(AppTheme.borderGlass)
 
-                // Model picker
+                // Model picker — uses shared allModelDefinitions
                 Picker("Model", selection: Binding(
                     get: { appState.config.activeModel },
                     set: { newVal in
@@ -281,23 +281,12 @@ struct SettingsView: View {
                         configService.saveActiveModel(newVal)
                     }
                 )) {
-                    Section("Anthropic") {
-                        Text("Claude Sonnet 4").tag("anthropic/claude-sonnet-4-20250514")
-                        Text("Claude Haiku 4.5").tag("anthropic/claude-haiku-4-5-20251001")
-                    }
-                    Section("Google") {
-                        Text("Gemini 2.5 Flash").tag("google/gemini-2.5-flash")
-                        Text("Gemini 2.5 Pro").tag("google/gemini-2.5-pro")
-                        Text("Gemini 3 Flash").tag("google/gemini-3-flash-preview")
-                    }
-                    Section("OpenAI") {
-                        Text("GPT-4.1").tag("openai/gpt-4.1")
-                        Text("o4-mini").tag("openai/o4-mini")
-                    }
-                    Section("Other") {
-                        Text("Grok 3").tag("xai/grok-3")
-                        Text("DeepSeek Chat").tag("deepseek/deepseek-chat")
-                        Text("Claude Code (local)").tag("claude-code")
+                    ForEach(appState.modelsGroupedByProvider, id: \.provider) { group in
+                        Section(header: Text(group.provider)) {
+                            ForEach(group.models) { model in
+                                Text(model.displayName).tag(model.id)
+                            }
+                        }
                     }
                 }
                 .pickerStyle(.menu)
@@ -1808,11 +1797,19 @@ struct SettingsView: View {
         case "openrouter": return "OpenRouter"
         case "xai": return "xAI"
         case "deepseek": return "DeepSeek"
+        case "groq": return "Groq"
+        case "mistral": return "Mistral"
+        case "meta": return "Meta"
+        case "qwen": return "Qwen"
         default: return provider.capitalized
         }
     }
 
     private func modelDisplayName(_ model: String) -> String {
+        // Use shared allModelDefinitions first
+        if let def = allModelDefinitions.first(where: { $0.id == model }) {
+            return def.displayName
+        }
         if model == "claude-code" { return "Claude Code" }
         if model.contains("/") {
             return String(model.split(separator: "/").last ?? Substring(model))
