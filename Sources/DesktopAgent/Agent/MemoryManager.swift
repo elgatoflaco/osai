@@ -19,17 +19,31 @@ final class MemoryManager {
     var coreMemoryPath: String { memoryDir + "/MEMORY.md" }
 
     func loadCoreMemory() -> String {
+        var parts = [String]()
+
+        // 1. Load MEMORY.md (index file)
         let path = coreMemoryPath
-        guard FileManager.default.fileExists(atPath: path),
-              let data = try? String(contentsOfFile: path, encoding: .utf8) else {
-            return ""
+        if FileManager.default.fileExists(atPath: path),
+           let data = try? String(contentsOfFile: path, encoding: .utf8), !data.isEmpty {
+            let lines = data.components(separatedBy: "\n")
+            if lines.count > 200 {
+                parts.append(lines.prefix(200).joined(separator: "\n") + "\n... [truncated]")
+            } else {
+                parts.append(data)
+            }
         }
-        // Limit to first 200 lines
-        let lines = data.components(separatedBy: "\n")
-        if lines.count > 200 {
-            return lines.prefix(200).joined(separator: "\n") + "\n... [truncated]"
+
+        // 2. Also load key memory files (user_info, preferences) for critical context
+        let keyFiles = ["user_info.md", "contact_info.md", "preferencias-usuario.md", "user_preferences.md"]
+        for filename in keyFiles {
+            let filePath = (memoryDir as NSString).appendingPathComponent(filename)
+            if FileManager.default.fileExists(atPath: filePath),
+               let content = try? String(contentsOfFile: filePath, encoding: .utf8), !content.isEmpty {
+                parts.append("[\(filename)]:\n\(String(content.prefix(500)))")
+            }
         }
-        return data
+
+        return parts.joined(separator: "\n\n")
     }
 
     func saveCoreMemory(_ content: String) throws {
