@@ -82,6 +82,39 @@ struct Toast: Identifiable, Equatable {
     }
 }
 
+// MARK: - Clipboard Context
+
+struct ClipboardContext: Equatable {
+    let content: String
+    let type: ClipboardType
+    let suggestion: String
+
+    enum ClipboardType: Equatable {
+        case code
+        case url
+        case email
+        case text
+    }
+
+    var icon: String {
+        switch type {
+        case .code: return "curlybraces"
+        case .url: return "link"
+        case .email: return "envelope"
+        case .text: return "doc.text"
+        }
+    }
+
+    var label: String {
+        switch type {
+        case .code: return "Code in clipboard"
+        case .url: return "URL in clipboard"
+        case .email: return "Email in clipboard"
+        case .text: return "Text in clipboard"
+        }
+    }
+}
+
 // MARK: - Sound Effects
 
 enum AppSound {
@@ -1780,6 +1813,7 @@ class AppState: ObservableObject {
     @Published var showSidebarOverlay: Bool = false
     @Published var contextPressurePercent: Int = 0
     @Published var suggestedReplies: [String] = []
+    @Published var clipboardContext: ClipboardContext?
     @Published var streamingStartTime: Date?
     /// Timestamp when the user pressed send, used to compute response time to first token
     private var messageSendTime: Date?
@@ -3263,6 +3297,46 @@ class AppState: ObservableObject {
     func startNewChat() {
         activeConversation = nil
         selectedTab = .chat
+        refreshClipboardContext()
+    }
+
+    func refreshClipboardContext() {
+        clipboardContext = detectClipboardContext()
+    }
+
+    func dismissClipboardContext() {
+        clipboardContext = nil
+    }
+
+    private func detectClipboardContext() -> ClipboardContext? {
+        guard let text = NSPasteboard.general.string(forType: .string),
+              !text.isEmpty,
+              text.count > 10,
+              text.count < 5000 else { return nil }
+
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        // Detect code
+        if trimmed.contains("func ") || trimmed.contains("class ") || trimmed.contains("def ") ||
+           trimmed.contains("const ") || trimmed.contains("import ") || trimmed.contains("var ") ||
+           (trimmed.contains("{") && trimmed.contains("}")) {
+            return ClipboardContext(content: trimmed, type: .code, suggestion: "Explain this code")
+        }
+        // Detect URL
+        if trimmed.hasPrefix("http://") || trimmed.hasPrefix("https://") {
+            return ClipboardContext(content: trimmed, type: .url, suggestion: "Summarize this URL")
+        }
+        // Detect email
+        if trimmed.contains("@") && trimmed.contains("Subject:") {
+            return ClipboardContext(content: trimmed, type: .email, suggestion: "Draft a reply")
+        }
+        // General text (must be substantial)
+        if trimmed.count > 50 {
+            return ClipboardContext(content: trimmed, type: .text, suggestion: "Analyze this text")
+        }
+
+        return nil
     }
 
     func closeCurrentConversation() {

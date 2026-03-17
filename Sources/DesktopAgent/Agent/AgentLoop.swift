@@ -158,7 +158,11 @@ final class AgentLoop {
                 format: resolved.provider.format
             )
 
-            printColored("  ⚠ Primary model failed, trying fallback: \(modelString)", color: .yellow)
+            if let emitter = appModeEmitter {
+                emitter.emitStatus("Switching to fallback: \(modelString)")
+            } else {
+                printColored("  ⚠ Primary model failed, trying fallback: \(modelString)", color: .yellow)
+            }
 
             do {
                 let response = try await fallbackClient.sendMessage(
@@ -166,15 +170,88 @@ final class AgentLoop {
                     system: system,
                     tools: tools
                 )
-                printColored("  ✓ Fallback \(modelString) succeeded", color: .green)
+                if let emitter = appModeEmitter {
+                    emitter.emitStatus("Fallback \(modelString) succeeded")
+                } else {
+                    printColored("  ✓ Fallback \(modelString) succeeded", color: .green)
+                }
                 return response
             } catch {
-                printColored("  ✗ Fallback \(modelString) also failed: \(error.localizedDescription)", color: .red)
+                if let emitter = appModeEmitter {
+                    emitter.emitStatus("Fallback \(modelString) failed: \(error.localizedDescription)")
+                } else {
+                    printColored("  ✗ Fallback \(modelString) also failed: \(error.localizedDescription)", color: .red)
+                }
                 continue
             }
         }
 
         return nil
+    }
+
+    // MARK: - Retry with Exponential Backoff + Fallback Models
+
+    /// Send an API request with automatic retry (exponential backoff) and fallback model chain.
+    /// 1. Try the primary model up to maxAttempts times for retryable errors
+    /// 2. If all retries fail, try each fallback model once
+    /// 3. If all fallbacks fail, throw the last error
+    private func sendWithRetry(
+        messages: [ClaudeMessage],
+        system: String?,
+        tools: [ClaudeTool]?,
+        maxRetries: Int = 2
+    ) async throws -> ClaudeResponse {
+        var lastError: Error?
+
+        // Try primary model with exponential backoff
+        for attempt in 0...maxRetries {
+            do {
+                return try await client.sendMessage(
+                    messages: messages,
+                    system: system,
+                    tools: tools
+                )
+            } catch {
+                lastError = error
+                let classified = errorRecovery.classify(error: error)
+                errorRecovery.recordError(classified)
+
+                // Only retry retryable errors
+                guard classified.isRetryable, attempt < maxRetries else {
+                    // Non-retryable or last attempt — break to try fallbacks
+                    if !classified.isRetryable {
+                        // Non-retryable errors skip directly to fallbacks
+                        break
+                    }
+                    // Last retry attempt failed
+                    break
+                }
+
+                // Exponential backoff: 2s, 4s, 8s...
+                let delaySeconds = pow(2.0, Double(attempt + 1))
+                let delayNs = UInt64(delaySeconds * 1_000_000_000)
+
+                if let emitter = appModeEmitter {
+                    emitter.emitStatus("Retrying (attempt \(attempt + 2)/\(maxRetries + 1))...")
+                } else {
+                    printColored("  🔄 \(classified.category) — retrying in \(Int(delaySeconds))s (attempt \(attempt + 2)/\(maxRetries + 1))...", color: .yellow)
+                }
+
+                try await Task.sleep(nanoseconds: delayNs)
+            }
+        }
+
+        // All retries exhausted — try fallback models
+        if let fallbackResponse = try await tryFallbackModels(
+            messages: messages,
+            system: system,
+            tools: tools,
+            originalError: lastError ?? NSError(domain: "OSAI", code: -1, userInfo: [NSLocalizedDescriptionKey: "Unknown error"])
+        ) {
+            return fallbackResponse
+        }
+
+        throw lastError ?? NSError(domain: "OSAI", code: -1, userInfo: [NSLocalizedDescriptionKey: "All models failed"])
     }
 
     private func processUserContent(_ content: [ClaudeContent]) async throws -> String {
@@ -344,11 +421,11 @@ final class AgentLoop {
                 }
             }
 
-            // API call with automatic retry for transient errors + fallback models
+            // API call with automatic retry (exponential backoff) + fallback models
             let apiStartTime = DispatchTime.now()
             let response: ClaudeResponse
             do {
-                response = try await client.sendMessage(
+                response = try await sendWithRetry(
                     messages: conversationHistory,
                     system: fullSystemPrompt,
                     tools: allTools
@@ -356,47 +433,7 @@ final class AgentLoop {
                 let apiElapsed = Int((DispatchTime.now().uptimeNanoseconds - apiStartTime.uptimeNanoseconds) / 1_000_000)
                 performanceAnalyzer.recordApiCall(durationMs: apiElapsed)
             } catch {
-                let classified = errorRecovery.classify(error: error)
-                errorRecovery.recordError(classified)
-                if classified.isRetryable, case .retry(let delayMs, _) = classified.suggestedAction {
-                    if let emitter = appModeEmitter {
-                        emitter.emitStatus("\(classified.category) — retrying in \(delayMs)ms...")
-                    } else {
-                        printColored("  🔄 \(classified.category) — retrying in \(delayMs)ms...", color: .yellow)
-                    }
-                    try await Task.sleep(nanoseconds: UInt64(delayMs) * 1_000_000)
-                    do {
-                        response = try await client.sendMessage(
-                            messages: conversationHistory,
-                            system: fullSystemPrompt,
-                            tools: allTools
-                        )
-                    } catch {
-                        // Primary model retry failed — try fallback models
-                        if let fallbackResponse = try await tryFallbackModels(
-                            messages: conversationHistory,
-                            system: fullSystemPrompt,
-                            tools: allTools,
-                            originalError: error
-                        ) {
-                            response = fallbackResponse
-                        } else {
-                            throw error
-                        }
-                    }
-                } else {
-                    // Non-retryable on primary — try fallback models directly
-                    if let fallbackResponse = try await tryFallbackModels(
-                        messages: conversationHistory,
-                        system: fullSystemPrompt,
-                        tools: allTools,
-                        originalError: error
-                    ) {
-                        response = fallbackResponse
-                    } else {
-                        throw error
-                    }
-                }
+                throw error
             }
 
             // Track token usage and spending

@@ -319,6 +319,16 @@ struct ChatView: View {
                         .animation(.easeOut(duration: 0.5).delay(0.18), value: welcomeAnimateIn)
                 }
 
+                // Clipboard context suggestion
+                if let ctx = appState.clipboardContext {
+                    clipboardSuggestionBanner(ctx)
+                        .opacity(welcomeAnimateIn ? 1 : 0)
+                        .offset(y: welcomeAnimateIn ? 0 : 10)
+                        .animation(.easeOut(duration: 0.45).delay(0.20), value: welcomeAnimateIn)
+                        .frame(maxWidth: 520)
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                }
+
                 // Dynamic suggestion cards 2x2
                 LazyVGrid(columns: [
                     GridItem(.flexible(), spacing: 12),
@@ -406,6 +416,7 @@ struct ChatView: View {
         }
         .onAppear {
             welcomeAnimateIn = false
+            appState.refreshClipboardContext()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
                 welcomeAnimateIn = true
             }
@@ -413,6 +424,65 @@ struct ChatView: View {
         .onDisappear {
             welcomeAnimateIn = false
         }
+    }
+
+    @ViewBuilder
+    private func clipboardSuggestionBanner(_ ctx: ClipboardContext) -> some View {
+        Button(action: {
+            // Paste clipboard content and send with suggestion
+            let prompt = ctx.suggestion + ":\n\n" + ctx.content
+            messageText = prompt
+            appState.sendMessage(prompt)
+            messageText = ""
+            appState.dismissClipboardContext()
+        }) {
+            HStack(spacing: 8) {
+                Image(systemName: "clipboard")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(AppTheme.accent)
+
+                Image(systemName: ctx.icon)
+                    .font(.system(size: 11))
+                    .foregroundColor(AppTheme.textMuted)
+
+                Text(ctx.label)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(AppTheme.textSecondary)
+
+                Image(systemName: "arrow.right")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(AppTheme.textMuted)
+
+                Text(ctx.suggestion)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(AppTheme.accent)
+
+                Spacer()
+
+                // Dismiss button
+                Button(action: {
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        appState.dismissClipboardContext()
+                    }
+                }) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundColor(AppTheme.textMuted)
+                        .padding(4)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(.ultraThinMaterial)
+            .background(AppTheme.accent.opacity(0.06))
+            .clipShape(Capsule())
+            .overlay(
+                Capsule()
+                    .stroke(AppTheme.accent.opacity(0.2), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
     }
 
     private func welcomeShortcutHint(keys: String, label: String) -> some View {
