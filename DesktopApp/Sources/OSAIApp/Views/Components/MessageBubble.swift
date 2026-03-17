@@ -911,11 +911,8 @@ struct MessageBubble: View {
     @State private var isHovered = false
     @State private var copyToastText: String?
     @State private var copyToastOpacity: Double = 0
-    @State private var reactionBounce: MessageReaction?
-    @State private var showReactionPicker = false
     @State private var reactionAppeared = false
     @State private var reactionPulse = false
-    @State private var hoveredReaction: MessageReaction?
     @State private var isEditing = false
     @State private var editText = ""
     @State private var speakerPulse = false
@@ -1078,6 +1075,16 @@ struct MessageBubble: View {
 
             Button(action: shareMessage) {
                 Label("Share", systemImage: "square.and.arrow.up")
+            }
+
+            if message.role == .assistant {
+                Divider()
+                Button(action: {
+                    let source = appState.activeConversation?.title ?? "Untitled"
+                    appState.saveSnippet(content: message.content, source: source)
+                }) {
+                    Label("Save to Snippets", systemImage: "bookmark")
+                }
             }
         }
     }
@@ -2193,92 +2200,48 @@ struct MessageBubble: View {
         }
     }
 
-    // MARK: - Reaction Picker
+    // MARK: - Reaction Buttons
 
     private var reactionPickerButton: some View {
-        Button(action: {
-            showReactionPicker.toggle()
-        }) {
-            HStack(spacing: 3) {
-                if let reaction = message.reaction {
-                    Text(reaction.emoji)
-                        .font(.system(size: 12))
-                } else {
-                    Image(systemName: "face.smiling")
-                        .font(.system(size: 11))
-                }
-            }
-            .foregroundColor(message.reaction != nil ? AppTheme.accent : AppTheme.textMuted.opacity(0.6))
-            .frame(width: 24, height: 22)
+        HStack(spacing: 2) {
+            reactionButton(.thumbsUp)
+            reactionButton(.thumbsDown)
         }
-        .buttonStyle(.plain)
-        .popover(isPresented: $showReactionPicker, arrowEdge: .top) {
-            reactionPickerPopover
-        }
-        .accessibilityLabel(message.reaction != nil ? "Change reaction, currently \(reactionAccessibilityName(message.reaction!))" : "Add reaction")
-        .accessibilityHint("Double tap to open reaction picker")
     }
 
-    private var reactionPickerPopover: some View {
-        HStack(spacing: 4) {
-            ForEach(MessageReaction.allReactions, id: \.self) { reaction in
-                let isSelected = message.reaction == reaction
-                let isHoveredReaction = hoveredReaction == reaction
-                Button(action: {
-                    let newReaction: MessageReaction? = isSelected ? nil : reaction
-                    reactionBounce = reaction
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { reactionBounce = nil }
-                    onReaction?(newReaction)
-                    showReactionPicker = false
-                }) {
-                    Text(reaction.emoji)
-                        .font(.system(size: 22))
-                        .scaleEffect(reactionBounce == reaction ? 1.5 : (isHoveredReaction ? 1.25 : (isSelected ? 1.15 : 1.0)))
-                        .animation(.spring(response: 0.25, dampingFraction: 0.5), value: reactionBounce)
-                        .animation(.spring(response: 0.3, dampingFraction: 0.65), value: hoveredReaction)
-                        .frame(width: 36, height: 36)
-                        .background(
-                            RoundedRectangle(cornerRadius: 8)
-                                .fill(isSelected ? AppTheme.accent.opacity(0.2) : (isHoveredReaction ? AppTheme.textMuted.opacity(0.1) : Color.clear))
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 8)
-                                .stroke(isSelected ? AppTheme.accent.opacity(0.4) : Color.clear, lineWidth: 1)
-                        )
-                }
-                .buttonStyle(.plain)
-                .onHover { hovering in
-                    hoveredReaction = hovering ? reaction : nil
-                }
-                .accessibilityLabel("\(reactionAccessibilityName(reaction)) reaction\(isSelected ? ", selected" : "")")
-                .accessibilityHint(isSelected ? "Double tap to remove reaction" : "Double tap to react")
-            }
+    private func reactionButton(_ reaction: MessageReaction) -> some View {
+        let isSelected = message.reaction == reaction
+        return Button(action: {
+            let newReaction: MessageReaction? = isSelected ? nil : reaction
+            onReaction?(newReaction)
+        }) {
+            Image(systemName: isSelected ? reaction.sfSymbolFilled : reaction.sfSymbol)
+                .font(.system(size: 10))
+                .foregroundColor(isSelected ? reaction.accentColor : AppTheme.textMuted.opacity(0.45))
+                .frame(width: 22, height: 20)
+                .contentShape(Rectangle())
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .background(AppTheme.bgCard.opacity(0.95))
-        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(reactionAccessibilityName(reaction)) reaction\(isSelected ? ", selected" : "")")
+        .accessibilityHint(isSelected ? "Double tap to remove reaction" : "Double tap to react")
     }
 
     private func reactionAccessibilityName(_ reaction: MessageReaction) -> String {
         switch reaction {
         case .thumbsUp: return "thumbs up"
         case .thumbsDown: return "thumbs down"
-        case .heart: return "heart"
-        case .laugh: return "laughing"
-        case .thinking: return "thinking"
-        case .party: return "party"
         }
     }
 
     private func reactionBadge(_ reaction: MessageReaction) -> some View {
-        Text(reaction.emoji)
-            .font(.system(size: 14))
+        Image(systemName: reaction.sfSymbolFilled)
+            .font(.system(size: 11))
+            .foregroundColor(reaction.accentColor)
             .padding(4)
             .background(AppTheme.bgCard)
             .clipShape(Circle())
             .overlay(Circle().stroke(AppTheme.borderGlass, lineWidth: 0.5))
-            .shadow(color: AppTheme.accent.opacity(reactionPulse ? 0.3 : 0.0), radius: reactionPulse ? 6 : 0)
+            .shadow(color: reaction.accentColor.opacity(reactionPulse ? 0.3 : 0.0), radius: reactionPulse ? 6 : 0)
             .shadow(color: .black.opacity(0.1), radius: 2, y: 1)
             .scaleEffect(reactionAppeared ? (reactionPulse ? 1.15 : 1.0) : 0.0)
             .opacity(reactionAppeared ? 1.0 : 0.0)

@@ -2825,6 +2825,7 @@ class AppState: ObservableObject {
         gatewayPID = status.pid
         loadSpending()
         loadUserTemplates()
+        loadSnippets()
         updateStreak()
         isLoading = false
 
@@ -3774,6 +3775,46 @@ class AppState: ObservableObject {
         if let updated = conversations.first(where: { $0.id == convId }) {
             service.saveConversation(updated)
         }
+    }
+
+    // MARK: - Snippets
+
+    struct SavedSnippet: Identifiable, Codable {
+        let id: UUID
+        let content: String
+        let source: String
+        let savedAt: Date
+        var tags: [String]
+    }
+
+    @Published var savedSnippets: [SavedSnippet] = []
+
+    private var snippetsFilePath: String {
+        NSHomeDirectory() + "/.desktop-agent/snippets.json"
+    }
+
+    func loadSnippets() {
+        let path = snippetsFilePath
+        guard FileManager.default.fileExists(atPath: path),
+              let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
+              let decoded = try? JSONDecoder().decode([SavedSnippet].self, from: data) else { return }
+        savedSnippets = decoded
+    }
+
+    private func saveSnippetsToDisk() {
+        let path = snippetsFilePath
+        let dir = (path as NSString).deletingLastPathComponent
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        if let data = try? JSONEncoder().encode(savedSnippets) {
+            try? data.write(to: URL(fileURLWithPath: path))
+        }
+    }
+
+    func saveSnippet(content: String, source: String) {
+        let snippet = SavedSnippet(id: UUID(), content: content, source: source, savedAt: Date(), tags: [])
+        savedSnippets.append(snippet)
+        saveSnippetsToDisk()
+        showToast("Snippet saved!", type: .success)
     }
 
     // MARK: - Bookmarks
