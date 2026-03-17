@@ -1730,10 +1730,11 @@ struct MessageBubble: View {
     }
 
     private var assistantBubble: some View {
-        HStack(alignment: .top, spacing: appState.messageSpacing + 2) {
+        HStack(alignment: .top, spacing: appState.messageSpacing + 8) {
             if showAvatar {
                 GhostIcon(size: appState.avatarSize, animate: message.isStreaming, isProcessing: message.isStreaming)
-                    .padding(.top, 2)
+                    .padding(.top, 6)
+                    .padding(.leading, 4)
                     .accessibilityHidden(true)
             } else {
                 Color.clear.frame(width: appState.avatarSize, height: appState.avatarSize)
