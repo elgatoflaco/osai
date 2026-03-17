@@ -228,17 +228,33 @@ struct ModelDefinition: Identifiable, Equatable {
 
 let allModelDefinitions: [ModelDefinition] = [
     // Anthropic
+    ModelDefinition(id: "anthropic/claude-opus-4-6", displayName: "Claude Opus 4.6", shortName: "Opus 4.6", provider: "Anthropic", providerKey: "anthropic", tag: "Best", icon: "brain"),
+    ModelDefinition(id: "anthropic/claude-sonnet-4-6", displayName: "Claude Sonnet 4.6", shortName: "Sonnet 4.6", provider: "Anthropic", providerKey: "anthropic", tag: "Smart", icon: "brain.head.profile"),
     ModelDefinition(id: "anthropic/claude-sonnet-4-20250514", displayName: "Claude Sonnet 4", shortName: "Sonnet 4", provider: "Anthropic", providerKey: "anthropic", tag: "Smart", icon: "brain.head.profile"),
     ModelDefinition(id: "anthropic/claude-opus-4-20250514", displayName: "Claude Opus 4", shortName: "Opus 4", provider: "Anthropic", providerKey: "anthropic", tag: "Powerful", icon: "brain"),
-    ModelDefinition(id: "anthropic/claude-haiku-4-5-20251001", displayName: "Claude Haiku 3.5", shortName: "Haiku 3.5", provider: "Anthropic", providerKey: "anthropic", tag: "Fast", icon: "hare"),
+    ModelDefinition(id: "anthropic/claude-haiku-4-5-20251001", displayName: "Claude Haiku 4.5", shortName: "Haiku 4.5", provider: "Anthropic", providerKey: "anthropic", tag: "Fast", icon: "hare"),
     // OpenAI
     ModelDefinition(id: "openai/gpt-4o", displayName: "GPT-4o", shortName: "GPT-4o", provider: "OpenAI", providerKey: "openai", tag: "Vision", icon: "eye"),
     ModelDefinition(id: "openai/gpt-4o-mini", displayName: "GPT-4o Mini", shortName: "4o Mini", provider: "OpenAI", providerKey: "openai", tag: "Fast", icon: "hare"),
+    ModelDefinition(id: "openai/gpt-4.1", displayName: "GPT-4.1", shortName: "GPT-4.1", provider: "OpenAI", providerKey: "openai", tag: "Latest", icon: "sparkles"),
+    ModelDefinition(id: "openai/gpt-4.1-mini", displayName: "GPT-4.1 Mini", shortName: "4.1 Mini", provider: "OpenAI", providerKey: "openai", tag: "Fast", icon: "hare"),
+    ModelDefinition(id: "openai/gpt-4.1-nano", displayName: "GPT-4.1 Nano", shortName: "4.1 Nano", provider: "OpenAI", providerKey: "openai", tag: "Cheap", icon: "leaf"),
     ModelDefinition(id: "openai/o3", displayName: "o3", shortName: "o3", provider: "OpenAI", providerKey: "openai", tag: "Reasoning", icon: "lightbulb"),
+    ModelDefinition(id: "openai/o3-mini", displayName: "o3 Mini", shortName: "o3 Mini", provider: "OpenAI", providerKey: "openai", tag: "Reasoning", icon: "lightbulb"),
+    ModelDefinition(id: "openai/o4-mini", displayName: "o4 Mini", shortName: "o4 Mini", provider: "OpenAI", providerKey: "openai", tag: "Reasoning", icon: "lightbulb"),
     // Google
-    ModelDefinition(id: "google/gemini-2.5-pro", displayName: "Gemini 2.5 Pro", shortName: "Gemini Pro", provider: "Google", providerKey: "google", tag: "Smart", icon: "brain.head.profile"),
-    ModelDefinition(id: "google/gemini-2.5-flash", displayName: "Gemini 2.5 Flash", shortName: "Gemini Flash", provider: "Google", providerKey: "google", tag: "Fast", icon: "bolt"),
-    // Other
+    ModelDefinition(id: "google/gemini-2.5-pro", displayName: "Gemini 2.5 Pro", shortName: "Gemini 2.5 Pro", provider: "Google", providerKey: "google", tag: "Smart", icon: "brain.head.profile"),
+    ModelDefinition(id: "google/gemini-2.5-flash", displayName: "Gemini 2.5 Flash", shortName: "Gemini 2.5 Flash", provider: "Google", providerKey: "google", tag: "Fast", icon: "bolt"),
+    ModelDefinition(id: "google/gemini-3-flash-preview", displayName: "Gemini 3 Flash", shortName: "Gemini 3 Flash", provider: "Google", providerKey: "google", tag: "Fast", icon: "bolt"),
+    ModelDefinition(id: "google/gemini-3-flash", displayName: "Gemini 3 Flash", shortName: "Gemini 3", provider: "Google", providerKey: "google", tag: "Fast", icon: "bolt"),
+    // xAI
+    ModelDefinition(id: "xai/grok-3", displayName: "Grok 3", shortName: "Grok 3", provider: "xAI", providerKey: "openrouter", tag: "Fast", icon: "bolt.circle"),
+    ModelDefinition(id: "xai/grok-3-fast", displayName: "Grok 3 Fast", shortName: "Grok Fast", provider: "xAI", providerKey: "openrouter", tag: "Fastest", icon: "bolt.circle.fill"),
+    // OpenRouter (multi-provider)
+    ModelDefinition(id: "openrouter/deepseek/deepseek-r1", displayName: "DeepSeek R1", shortName: "DeepSeek R1", provider: "OpenRouter", providerKey: "openrouter", tag: "Reasoning", icon: "magnifyingglass"),
+    ModelDefinition(id: "openrouter/deepseek/deepseek-chat-v3", displayName: "DeepSeek V3", shortName: "DeepSeek V3", provider: "OpenRouter", providerKey: "openrouter", tag: "Cheap", icon: "leaf"),
+    ModelDefinition(id: "openrouter/minimax/minimax-m2.5", displayName: "MiniMax M2.5", shortName: "MiniMax", provider: "OpenRouter", providerKey: "openrouter", tag: "Free", icon: "gift"),
+    // Local
     ModelDefinition(id: "claude-code", displayName: "Claude Code", shortName: "Claude Code", provider: "Local", providerKey: "claude-code", tag: "Local", icon: "terminal"),
 ]
 
@@ -2288,7 +2304,7 @@ class AppState: ObservableObject {
     /// Models grouped by provider name for display in the selector.
     var modelsGroupedByProvider: [(provider: String, models: [ModelDefinition])] {
         let grouped = Dictionary(grouping: allModelDefinitions) { $0.provider }
-        let order = ["Anthropic", "OpenAI", "Google", "Local"]
+        let order = ["Anthropic", "OpenAI", "Google", "xAI", "OpenRouter", "Local"]
         return order.compactMap { provider in
             guard let models = grouped[provider] else { return nil }
             return (provider: provider, models: models)
