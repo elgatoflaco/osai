@@ -65,7 +65,7 @@ struct ChatView: View {
     @State private var multiSelectTagText: String = ""
     @State private var showMultiSelectTagPopover: Bool = false
     @State private var scrollToMessageId: String? = nil
-    @State private var searchIncludesMessages = false
+    @State private var searchIncludesMessages = true
     @State private var renamingConversationId: String? = nil
     @State private var renamingText: String = ""
     @State private var deleteConfirmConversation: Conversation? = nil
@@ -149,8 +149,8 @@ struct ChatView: View {
             (conv.agentName?.localizedCaseInsensitiveContains(query) ?? false)
         }
 
-        // When searching messages or no title matches found, include content matches
-        if searchIncludesMessages || titleMatches.isEmpty {
+        // Always include content matches for queries with 3+ characters
+        if query.count >= 3 {
             let contentResults = appState.searchAllConversations(query: query)
             let titleIds = Set(titleMatches.map { $0.id })
             let extraConvs = contentResults
@@ -194,8 +194,8 @@ struct ChatView: View {
             (conv.agentName?.localizedCaseInsensitiveContains(query) ?? false)
         }
 
-        // Auto-enable message search when no title matches
-        if searchIncludesMessages || titleMatches.isEmpty {
+        // Always search message content for queries with 3+ characters
+        if query.count >= 3 {
             return appState.searchAllConversations(query: query)
         }
         return []
@@ -3737,8 +3737,8 @@ struct ChatView: View {
                 .padding(.horizontal, 12)
                 .padding(.bottom, 2)
 
-                // "Search in messages" toggle when there's a query
-                if !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                // "Search in messages" indicator when query is 3+ characters
+                if searchText.trimmingCharacters(in: .whitespacesAndNewlines).count >= 3 {
                     HStack(spacing: 4) {
                         Toggle(isOn: $searchIncludesMessages) {
                             Text("Search in messages")

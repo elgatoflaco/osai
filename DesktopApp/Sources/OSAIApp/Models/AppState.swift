@@ -449,6 +449,7 @@ enum DashboardSection: String, Codable, CaseIterable, Identifiable {
     case tips
     case quickActions
     case productivity
+    case agentAnalytics
 
     var id: String { rawValue }
 
@@ -471,6 +472,7 @@ enum DashboardSection: String, Codable, CaseIterable, Identifiable {
         case .tips: return "Tips & Tricks"
         case .quickActions: return "Quick Actions"
         case .productivity: return "Productivity"
+        case .agentAnalytics: return "Agent Analytics"
         }
     }
 
@@ -493,11 +495,12 @@ enum DashboardSection: String, Codable, CaseIterable, Identifiable {
         case .tips: return "sparkles"
         case .quickActions: return "bolt.fill"
         case .productivity: return "sun.max.fill"
+        case .agentAnalytics: return "person.3.fill"
         }
     }
 
     static let defaultOrder: [DashboardSection] = [
-        .quickStart, .quickActions, .tips, .productivity, .activity, .gateway, .stats, .spending, .recentConversations, .tokenStats, .modelUsage, .analytics, .chatInsights, .performance, .recentActivity, .systemHealth, .systemStatus
+        .quickStart, .quickActions, .tips, .productivity, .activity, .gateway, .stats, .spending, .recentConversations, .agentAnalytics, .tokenStats, .modelUsage, .analytics, .chatInsights, .performance, .recentActivity, .systemHealth, .systemStatus
     ]
 }
 
@@ -5439,19 +5442,23 @@ class AppState: ObservableObject {
         }
     }
 
-    func searchAllConversations(query: String) -> [ConversationSearchResult] {
+    func searchAllConversations(query: String, limit: Int = 20) -> [ConversationSearchResult] {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return [] }
+        guard trimmed.count >= 3 else { return [] }
         let lower = trimmed.lowercased()
 
-        return conversations.compactMap { conv in
+        var results: [ConversationSearchResult] = []
+        for conv in conversations {
             let matchingMessages = conv.messages.filter { msg in
                 (msg.role == .user || msg.role == .assistant) &&
                 msg.content.lowercased().contains(lower)
             }
-            guard !matchingMessages.isEmpty else { return nil }
-            return ConversationSearchResult(conversation: conv, matches: matchingMessages)
+            if !matchingMessages.isEmpty {
+                results.append(ConversationSearchResult(conversation: conv, matches: matchingMessages))
+                if results.count >= limit { break }
+            }
         }
+        return results
     }
 
     func exportConversation(_ conv: Conversation) -> String {

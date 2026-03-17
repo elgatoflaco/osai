@@ -233,6 +233,13 @@ struct DashboardView: View {
                     .environmentObject(appState)
             }
             .frame(maxWidth: 800)
+
+        case .agentAnalytics:
+            CollapsibleSection(section: .agentAnalytics) {
+                AgentAnalyticsSection()
+                    .environmentObject(appState)
+            }
+            .frame(maxWidth: 800)
         }
     }
 
@@ -4424,5 +4431,87 @@ struct MorningBriefingBanner: View {
                 .stroke(AppTheme.accent.opacity(0.2), lineWidth: 1)
         )
         .onAppear { appeared = true }
+    }
+}
+
+// MARK: - Agent Analytics Section
+
+struct AgentAnalyticsSection: View {
+    @EnvironmentObject var appState: AppState
+
+    private var topAgents: [(name: String, count: Int)] {
+        appState.agentUsageCounts
+            .sorted { $0.value > $1.value }
+            .prefix(5)
+            .map { (name: $0.key, count: $0.value) }
+    }
+
+    private var totalUsage: Int {
+        appState.agentUsageCounts.values.reduce(0, +)
+    }
+
+    var body: some View {
+        if appState.agentUsageCounts.isEmpty {
+            GlassCard {
+                HStack {
+                    Image(systemName: "person.3")
+                        .foregroundColor(AppTheme.textMuted)
+                    Text("No agent usage data yet. Start a conversation with an agent!")
+                        .font(AppTheme.fontBody)
+                        .foregroundColor(AppTheme.textMuted)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 20)
+            }
+        } else {
+            GlassCard {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        Text("Top Agents")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundColor(AppTheme.textPrimary)
+                        Spacer()
+                        Text("\(totalUsage) total")
+                            .font(.system(size: 11, weight: .medium, design: .monospaced))
+                            .foregroundColor(AppTheme.textMuted)
+                    }
+
+                    let maxCount = topAgents.first?.count ?? 1
+
+                    ForEach(Array(topAgents.enumerated()), id: \.element.name) { _, entry in
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                GhostIcon(size: 16, animate: false, tint: agentColor(entry.name))
+                                Text(entry.name)
+                                    .font(.system(size: 12, weight: .medium))
+                                    .foregroundColor(AppTheme.textPrimary)
+                                    .lineLimit(1)
+                                Spacer()
+                                Text("\(entry.count)")
+                                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                                    .foregroundColor(AppTheme.textSecondary)
+                                if let label = appState.agentLastUsedLabel(for: entry.name) {
+                                    Text(label)
+                                        .font(.system(size: 10))
+                                        .foregroundColor(AppTheme.textMuted)
+                                }
+                            }
+
+                            GeometryReader { geo in
+                                ZStack(alignment: .leading) {
+                                    RoundedRectangle(cornerRadius: 3)
+                                        .fill(AppTheme.bgCard.opacity(0.3))
+                                        .frame(height: 6)
+                                    RoundedRectangle(cornerRadius: 3)
+                                        .fill(agentColor(entry.name))
+                                        .frame(width: geo.size.width * CGFloat(entry.count) / CGFloat(maxCount), height: 6)
+                                }
+                            }
+                            .frame(height: 6)
+                        }
+                    }
+                }
+            }
+        }
     }
 }
