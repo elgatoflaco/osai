@@ -65,7 +65,7 @@ struct ChatView: View {
     @State private var readNotificationIds: Set<String> = []
     @State private var infoTagInput: String = ""
     @State private var infoTagFocused: Bool = false
-    @State private var budgetIndicatorDismissed: Bool = false
+    // budgetIndicatorDismissed removed — TokenBudgetBar is always visible
     @State private var showConversationList: Bool = true
 
     private var filteredConversations: [Conversation] {
@@ -765,41 +765,10 @@ struct ChatView: View {
 
                 Divider().background(AppTheme.borderGlass)
 
-                // Budget indicator
-                if appState.dailyBudget > 0 && !budgetIndicatorDismissed && !focusMode {
-                    let pct = min(appState.dailySpendingPercentage, 1.0)
-                    let displayPct = Int(appState.dailySpendingPercentage * 100)
-                    let barColor: Color = pct < 0.5 ? AppTheme.success : (pct < 0.8 ? AppTheme.warning : AppTheme.error)
-
-                    HStack(spacing: 8) {
-                        GeometryReader { geo in
-                            ZStack(alignment: .leading) {
-                                RoundedRectangle(cornerRadius: 1.5)
-                                    .fill(AppTheme.bgSecondary)
-                                    .frame(height: 3)
-                                RoundedRectangle(cornerRadius: 1.5)
-                                    .fill(barColor)
-                                    .frame(width: geo.size.width * pct, height: 3)
-                            }
-                        }
-                        .frame(height: 3)
-
-                        Text("\(displayPct)% of daily budget")
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundColor(AppTheme.textMuted)
-                            .fixedSize()
-
-                        Button(action: { withAnimation(.easeOut(duration: 0.15)) { budgetIndicatorDismissed = true } }) {
-                            Image(systemName: "xmark")
-                                .font(.system(size: 8, weight: .bold))
-                                .foregroundColor(AppTheme.textMuted)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                    .padding(.horizontal, AppTheme.paddingLg)
-                    .padding(.vertical, 4)
-                    .background(AppTheme.bgSecondary.opacity(0.15))
-                    .transition(.opacity.combined(with: .move(edge: .top)))
+                // Budget indicator — always-visible thin progress bar
+                if appState.dailyBudget > 0 && !focusMode {
+                    TokenBudgetBar()
+                        .environmentObject(appState)
                 }
 
                 // Bookmarks panel
@@ -1551,6 +1520,12 @@ struct ChatView: View {
             },
             onDelete: { deleteConfirmConversation = conv },
             onExport: { appState.presentExportSheet(for: conv) },
+            onCopyMarkdown: {
+                let markdown = appState.exportAsMarkdown(conversation: conv)
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(markdown, forType: .string)
+                appState.showToast("Copied as Markdown", type: .success)
+            },
             onTogglePin: { appState.togglePin(conv) },
             onRename: {
                 renamingText = conv.title
@@ -2293,6 +2268,11 @@ struct ChatView: View {
                     selectedShareMessageIds.insert(msg.id)
                 }
             },
+            onSuggestionTap: msg.role == .assistant && !msg.suggestions.isEmpty ? { suggestion in
+                messageText = suggestion
+                appState.sendMessage(suggestion)
+                messageText = ""
+            } : nil,
             showAvatar: showAvatar,
             showTimestamp: showTimestamp
         )
@@ -2316,6 +2296,20 @@ struct ChatView: View {
             Button(action: { togglePinMessage(msg.id) }) {
                 Label(msg.isPinned ? "Unpin Message" : "Pin Message",
                       systemImage: msg.isPinned ? "pin.slash" : "pin")
+            }
+            Button(action: {
+                let role = msg.role == .user ? "**You**" : "**Assistant**"
+                let md = "### \(role)\n\n\(msg.content.trimmingCharacters(in: .whitespacesAndNewlines))\n"
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(md, forType: .string)
+                appState.showToast("Message copied as Markdown", type: .success)
+            }) {
+                Label("Copy as Markdown", systemImage: "doc.on.doc")
+            }
+            if let conv = appState.activeConversation {
+                Button(action: { appState.presentExportSheet(for: conv) }) {
+                    Label("Export Conversation", systemImage: "square.and.arrow.up")
+                }
             }
         }
     }
@@ -4478,6 +4472,7 @@ struct ConversationRow: View {
     let onSelect: () -> Void
     let onDelete: () -> Void
     var onExport: (() -> Void)? = nil
+    var onCopyMarkdown: (() -> Void)? = nil
     var onTogglePin: (() -> Void)? = nil
     var onRename: (() -> Void)? = nil
     var onCommitRename: (() -> Void)? = nil
@@ -4707,6 +4702,10 @@ struct ConversationRow: View {
             }
             Button(action: { onExport?() }) {
                 Label("Export", systemImage: "square.and.arrow.up")
+            }
+            .disabled(conv.messages.isEmpty)
+            Button(action: { onCopyMarkdown?() }) {
+                Label("Copy as Markdown", systemImage: "doc.on.doc")
             }
             .disabled(conv.messages.isEmpty)
             Button(action: { onSaveSnapshot?() }) {

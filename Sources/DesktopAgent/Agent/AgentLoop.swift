@@ -301,31 +301,34 @@ final class AgentLoop {
             }
 
             // Strip old images from history to save tokens (images are ~85K tokens each)
-            // Keep only the 2 most recent screenshots; older ones are replaced with text placeholders
-            if conversationHistory.count > 6 {
-                conversationHistory = context.stripOldImages(from: conversationHistory, keepLast: 2)
-            }
-
-            // Check if compaction needed before sending
-            if context.needsCompaction && conversationHistory.count > 10 {
+            // Progressive context compaction: apply the appropriate tier based on usage
+            if context.compactionTier > 0 && conversationHistory.count > 6 {
                 let preCount = conversationHistory.count
                 let preTokens = context.estimateMessageTokens(conversationHistory)
-                if let emitter = appModeEmitter {
-                    emitter.emitStatus("Compacting context (\(preCount) messages, ~\(context.fmtTokens(preTokens)) tokens)...")
-                } else {
-                    printColored("  🗜 Compacting context (\(preCount) messages, ~\(context.fmtTokens(preTokens)) tokens)...", color: .magenta)
+                let tier = context.compactionTier
+                if tier >= 2 {
+                    if let emitter = appModeEmitter {
+                        emitter.emitStatus("Compacting context T\(tier) (\(preCount) messages, ~\(context.fmtTokens(preTokens)) tokens)...")
+                    } else {
+                        printColored("  🗜 Compacting context T\(tier) (\(preCount) messages, ~\(context.fmtTokens(preTokens)) tokens)...", color: .magenta)
+                    }
                 }
-                conversationHistory = try await context.compactHistory(
+                let (compacted, description) = try await context.progressiveCompact(
                     messages: conversationHistory,
                     client: client,
                     systemPrompt: fullSystemPrompt
                 )
-                let postTokens = context.estimateMessageTokens(conversationHistory)
-                let saved = max(preTokens - postTokens, 0)
-                if let emitter = appModeEmitter {
-                    emitter.emitStatus("Compacted: \(preCount) → \(conversationHistory.count) messages, saved ~\(context.fmtTokens(saved)) tokens")
-                } else {
-                    printColored("  ✓ Compacted: \(preCount) → \(conversationHistory.count) messages, saved ~\(context.fmtTokens(saved)) tokens", color: .green)
+                conversationHistory = compacted
+                if let desc = description {
+                    let postTokens = context.estimateMessageTokens(conversationHistory)
+                    let saved = max(preTokens - postTokens, 0)
+                    if tier >= 2 {
+                        if let emitter = appModeEmitter {
+                            emitter.emitStatus("\(desc): \(preCount) → \(conversationHistory.count) messages, saved ~\(context.fmtTokens(saved)) tokens")
+                        } else {
+                            printColored("  ✓ \(desc): \(preCount) → \(conversationHistory.count) messages, saved ~\(context.fmtTokens(saved)) tokens", color: .green)
+                        }
+                    }
                 }
             }
 
@@ -812,6 +815,9 @@ final class AgentLoop {
         // Save orchestrator patterns and adaptive learning data
         orchestrator.savePatterns()
         adaptive.saveSession()
+
+        // Save session digest for future memory reference
+        memory.saveSessionDigest(messages: conversationHistory, model: config.model)
 
         if iterations >= maxIterations {
             printColored("  ⚠ Reached maximum iterations (\(maxIterations)).", color: .yellow)
@@ -1966,6 +1972,56 @@ final class AgentLoop {
         case "discover_tools": return "🔧"
         default: return "⚡"
         }
+    }
+
+    // MARK: - Follow-up Suggestion Generator
+
+    /// Generates 2-3 contextual follow-up suggestions from the response text
+    /// using simple keyword/pattern matching (no API calls).
+    func generateFollowUpSuggestions(from response: String) -> [String] {
+        var suggestions: [String] = []
+        let lower = response.lowercased()
+
+        // If response mentions a file path
+        if response.contains("/") && (response.contains(".swift") || response.contains(".py") || response.contains(".js") || response.contains(".ts")) {
+            suggestions.append("Show me the code")
+        }
+
+        // If response mentions a URL
+        if response.contains("http://") || response.contains("https://") {
+            suggestions.append("Open in browser")
+        }
+
+        // If response mentions TODO or next steps
+        if lower.contains("todo") || lower.contains("next step") || lower.contains("siguiente") {
+            suggestions.append("Let's do it")
+        }
+
+        // If response mentions an error or issue
+        if lower.contains("error") || lower.contains("failed") || lower.contains("bug") {
+            suggestions.append("Fix it")
+            suggestions.append("Explain the error")
+        }
+
+        // If response is about news/information
+        if lower.contains("noticias") || lower.contains("news") || lower.contains("article") {
+            suggestions.append("Go deeper")
+            suggestions.append("More sources")
+        }
+
+        // If response has code blocks
+        if response.contains("```") {
+            suggestions.append("Run this code")
+            suggestions.append("Explain line by line")
+        }
+
+        // Generic useful suggestions
+        if suggestions.isEmpty {
+            suggestions.append("Tell me more")
+            suggestions.append("Summarize")
+        }
+
+        return Array(suggestions.prefix(3))
     }
 }
 

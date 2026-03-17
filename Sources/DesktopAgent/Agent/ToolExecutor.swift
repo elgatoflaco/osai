@@ -344,6 +344,75 @@ final class ToolExecutor {
             return (exe.file.fileInfo(path: path), nil)
         }
 
+        // --- System ---
+        handlers["system_info"] = { exe, input in
+            let commands: [(String, String)] = [
+                ("macOS", "sw_vers -productVersion"),
+                ("Build", "sw_vers -buildVersion"),
+                ("Hostname", "hostname"),
+                ("Username", "whoami"),
+                ("CPU", "sysctl -n machdep.cpu.brand_string"),
+                ("CPU Usage", "ps -A -o %cpu | awk '{s+=$1} END {printf \"%.1f%%\", s}'"),
+                ("Memory", "vm_stat | awk '/Pages free/ {free=$3} /Pages active/ {active=$3} /Pages inactive/ {inactive=$3} /Pages speculative/ {spec=$3} /page size of/ {pagesize=$8} END {printf \"Free: %.0f MB, Active: %.0f MB\", (free+spec)*pagesize/1048576, active*pagesize/1048576}'"),
+                ("Disk", "df -h / | tail -1 | awk '{print $4 \" available of \" $2}'"),
+                ("WiFi", "networksetup -getairportnetwork en0 2>/dev/null | sed 's/Current Wi-Fi Network: //' || echo 'N/A'"),
+                ("Battery", "pmset -g batt 2>/dev/null | grep -o '[0-9]*%' || echo 'N/A'"),
+                ("Uptime", "uptime | sed 's/.*up /up /' | sed 's/,.*//'"),
+            ]
+            var lines: [String] = []
+            for (label, cmd) in commands {
+                let result = exe.shell.execute(command: cmd, timeout: 5)
+                let value = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
+                lines.append("\(label): \(value)")
+            }
+            return (ToolResult(success: true, output: lines.joined(separator: "\n"), screenshot: nil), nil)
+        }
+
+        handlers["notify"] = { exe, input in
+            let title = input["title"]?.stringValue ?? ""
+            let body = input["body"]?.stringValue ?? ""
+            let safeTitle = title.replacingOccurrences(of: "\"", with: "\\\"")
+            let safeBody = body.replacingOccurrences(of: "\"", with: "\\\"")
+            let script = "display notification \"\(safeBody)\" with title \"\(safeTitle)\""
+            let result = exe.shell.execute(command: "osascript -e '\(script.replacingOccurrences(of: "'", with: "'\\''"))'", timeout: 5)
+            if result.success {
+                return (ToolResult(success: true, output: "Notification sent: \(title)", screenshot: nil), nil)
+            }
+            return (result, nil)
+        }
+
+        handlers["web_search"] = { exe, input in
+            let query = input["query"]?.stringValue ?? ""
+            let maxResults = input["max_results"]?.intValue ?? 10
+            guard !query.isEmpty else {
+                return (ToolResult(success: false, output: "Missing required field: query", screenshot: nil), nil)
+            }
+            // URL-encode the query
+            let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query
+            // Use sed-based parsing (portable across macOS)
+            let macCmd = """
+            curl -sL -A 'Mozilla/5.0' 'https://html.duckduckgo.com/html/?q=\(encoded)' 2>/dev/null | \
+            sed -n 's/.*class="result__a" href="\\([^"]*\\)".*/URL: \\1/p; s/.*class="result__a"[^>]*>\\([^<]*\\).*/Title: \\1/p' | \
+            head -\(maxResults * 2)
+            """
+            let result = exe.shell.execute(command: macCmd, timeout: 15)
+            if result.success && !result.output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return (ToolResult(success: true, output: result.output, screenshot: nil), nil)
+            }
+            // Fallback: simpler parsing
+            let fallbackCmd = """
+            curl -sL -A 'Mozilla/5.0' 'https://html.duckduckgo.com/html/?q=\(encoded)' 2>/dev/null | \
+            grep -o 'href="//duckduckgo.com/l/[^"]*"' | \
+            sed 's/href="//;s/"$//' | \
+            head -\(maxResults)
+            """
+            let fallback = exe.shell.execute(command: fallbackCmd, timeout: 15)
+            if fallback.success && !fallback.output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return (ToolResult(success: true, output: fallback.output, screenshot: nil), nil)
+            }
+            return (ToolResult(success: true, output: "No results found for: \(query)", screenshot: nil), nil)
+        }
+
         // --- Email (via gws CLI) ---
         handlers["send_email"] = { exe, input in
             let to = input["to"]?.stringValue ?? ""

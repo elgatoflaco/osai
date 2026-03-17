@@ -1747,6 +1747,7 @@ class AppState: ObservableObject {
     @Published var errorMessage: String?
     @Published var toastMessage: Toast?
     @Published var isProcessing: Bool = false
+    @Published var ghostEmotion: GhostEmotion = .idle
     @Published var shouldFocusInput: Bool = false
     @Published var focusModeEnabled: Bool = false
     /// Set by GeometryReader when window is too narrow for sidebar
@@ -1836,6 +1837,26 @@ class AppState: ObservableObject {
     @Published var showNotificationPanel: Bool = false
     @Published var selectedModel: String = "anthropic/claude-sonnet-4-20250514"
     @Published var showConversationInfo: Bool = false
+
+    // MARK: - Proactive Morning Briefing
+
+    @Published var showMorningBriefing: Bool = false
+    @Published var lastActivityTime: Date = Date()
+
+    /// Check if proactive triggers should fire (e.g. morning briefing).
+    /// Called when the app becomes active or ContentView appears.
+    func checkProactiveTriggers() {
+        let now = Date()
+        let hour = Calendar.current.component(.hour, from: now)
+        let timeSinceLastActivity = now.timeIntervalSince(lastActivityTime)
+
+        // Morning briefing: before 11 AM and no activity in 6+ hours
+        if hour < 11 && timeSinceLastActivity > 6 * 3600 {
+            showMorningBriefing = true
+        }
+
+        lastActivityTime = now
+    }
 
     // MARK: - System Status
 
@@ -2916,6 +2937,7 @@ class AppState: ObservableObject {
 
         let streamingId = assistantMsg.id
         isProcessing = true
+        ghostEmotion = .thinking
         streamingStartTime = Date()
         messageSendTime = Date()
 
@@ -2991,14 +3013,25 @@ class AppState: ObservableObject {
                     service.saveConversation(conv)
                 }
 
-                // Generate quick reply suggestions
-                if let lastAssistant = self.activeConversation?.messages.last(where: { $0.role == .assistant }) {
-                    self.generateSuggestedReplies(from: lastAssistant.content)
+                // Generate quick reply suggestions and store in message
+                if let lastIdx = self.activeConversation?.messages.lastIndex(where: { $0.role == .assistant }) {
+                    let content = self.activeConversation?.messages[lastIdx].content ?? ""
+                    self.generateSuggestedReplies(from: content)
+                    // Also store in the message if CLI didn't provide them
+                    if self.activeConversation?.messages[lastIdx].suggestions.isEmpty ?? true {
+                        self.activeConversation?.messages[lastIdx].suggestions = self.suggestedReplies
+                    }
                 }
 
                 // Add in-app notification for completed response
                 let agentLabel = activeConversation?.agentName ?? "Chat"
                 addNotification(title: "Response Complete", message: "\(agentLabel) finished responding", type: .success)
+
+                // Flash success emotion briefly, then idle
+                ghostEmotion = .success
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+                    if self?.ghostEmotion == .success { self?.ghostEmotion = .idle }
+                }
 
                 // Send notification if app is in the background
                 if let app = NSApp, !app.isActive {
@@ -3013,6 +3046,10 @@ class AppState: ObservableObject {
                     activeConversation?.messages[idx].isStreaming = false
                 }
                 syncConversationToList()
+                ghostEmotion = .error
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+                    if self?.ghostEmotion == .error { self?.ghostEmotion = .idle }
+                }
             }
             isProcessing = false
             streamingStartTime = nil
@@ -3048,6 +3085,7 @@ class AppState: ObservableObject {
             activeConversation?.messages[idx].content = state.accumulatedText
 
         case .toolStart(let id, let name, let detail):
+            ghostEmotion = .working
             let activity = ActivityItem(
                 id: id,
                 type: .toolCall,
@@ -3105,7 +3143,11 @@ class AppState: ObservableObject {
         case .contextPressure(let percent):
             contextPressurePercent = percent
 
+        case .suggestions(let items):
+            activeConversation?.messages[idx].suggestions = items
+
         case .error(let message):
+            ghostEmotion = .error
             if state.accumulatedText.isEmpty {
                 state.accumulatedText = "Error: \(message)"
             } else {
@@ -3114,6 +3156,10 @@ class AppState: ObservableObject {
             activeConversation?.messages[idx].content = state.accumulatedText
             showToast(message, type: .error)
             addNotification(title: "Error", message: message, type: .error)
+            // Return to idle after brief error display
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+                if self?.ghostEmotion == .error { self?.ghostEmotion = .idle }
+            }
 
         case .done:
             activeConversation?.messages[idx].isStreaming = false
@@ -3132,6 +3178,7 @@ class AppState: ObservableObject {
         }
         runningProcess = nil
         isProcessing = false
+        ghostEmotion = .idle
         streamingStartTime = nil
         messageSendTime = nil
 
@@ -3896,7 +3943,46 @@ class AppState: ObservableObject {
 
     /// Generate a clean, readable title from the user's first message.
     private func smartTitle(from text: String) -> String {
-        return generateSmartTitle(from: text)
+        return generateAutoTitle(from: text)
+    }
+
+    /// Generate a short auto-title (3-5 words max) from the first user message, locally.
+    /// Capitalizes the first letter for a polished appearance.
+    func generateAutoTitle(from message: String) -> String {
+        let cleaned = message
+            .replacingOccurrences(of: "File: [^\n]*```[\\s\\S]*?```", with: "", options: .regularExpression)
+            .replacingOccurrences(of: "\\[Attached: [^\\]]*\\]", with: "", options: .regularExpression)
+            .replacingOccurrences(of: "\\[Image: [^\\]]*\\]", with: "", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !cleaned.isEmpty else { return "New Chat" }
+
+        // If short enough, use as-is
+        if cleaned.count <= 40 {
+            return capitalizeFirst(String(cleaned.prefix(40)))
+        }
+
+        // Extract first meaningful phrase — split by punctuation, take first clause
+        let separators = CharacterSet(charactersIn: ".!?,;:-")
+        let firstClause = cleaned.components(separatedBy: separators).first ?? cleaned
+
+        if firstClause.count <= 50 {
+            return capitalizeFirst(firstClause.trimmingCharacters(in: .whitespaces))
+        }
+
+        // Take first 5 words
+        let words = firstClause.split(separator: " ")
+        let title = words.prefix(5).joined(separator: " ")
+        return capitalizeFirst(title + (words.count > 5 ? "..." : ""))
+    }
+
+    /// Capitalize the first letter of a string while preserving the rest.
+    private func capitalizeFirst(_ text: String) -> String {
+        guard let first = text.first else { return text }
+        return first.uppercased() + text.dropFirst()
     }
 
     /// Generate a meaningful title (max 50 chars) from the first user message.
@@ -4083,8 +4169,10 @@ class AppState: ObservableObject {
         let assistantMessages = conv.messages.filter { $0.role == .assistant && !$0.isStreaming }
         guard assistantMessages.count == 1 else { return }
 
-        let newTitle = generateSmartTitle(from: conv.messages)
-        guard newTitle != conv.title else { return }
+        // Use first user message for auto-title
+        guard let firstUserMsg = conv.messages.first(where: { $0.role == .user }) else { return }
+        let newTitle = generateAutoTitle(from: firstUserMsg.content)
+        guard newTitle != "New Chat", newTitle != conv.title else { return }
 
         if let idx = conversations.firstIndex(where: { $0.id == conv.id }) {
             conversations[idx].title = newTitle
@@ -4655,6 +4743,7 @@ class AppState: ObservableObject {
 
     @Published var showExportSheet: Bool = false
     @Published var showKeyboardShortcuts: Bool = false
+    @Published var showShortcutsOverlay: Bool = false
     @Published var exportConversationTarget: Conversation?
 
     func presentExportSheet(for conv: Conversation) {

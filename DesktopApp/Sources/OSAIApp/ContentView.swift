@@ -1501,22 +1501,27 @@ struct KeyboardShortcutsView: View {
                 ShortcutEntry(keys: "\u{2318}N", label: "New chat"),
                 ShortcutEntry(keys: "\u{2318}W", label: "Close conversation"),
                 ShortcutEntry(keys: "\u{2318}[ / ]", label: "Prev / next conversation"),
+                ShortcutEntry(keys: "\u{2318}L", label: "Focus input"),
             ]),
             ShortcutCategory(name: "Chat", icon: "bubble.left.and.bubble.right", shortcuts: [
                 ShortcutEntry(keys: "Return", label: "Send message"),
                 ShortcutEntry(keys: "\u{21E7}Return", label: "New line"),
                 ShortcutEntry(keys: "\u{2191}", label: "Input history"),
                 ShortcutEntry(keys: "\u{21E7}\u{2318}C", label: "Copy last response"),
-            ]),
-            ShortcutCategory(name: "Editing", icon: "pencil", shortcuts: [
-                ShortcutEntry(keys: "\u{2318}B", label: "Bold"),
-                ShortcutEntry(keys: "\u{2318}I", label: "Italic"),
+                ShortcutEntry(keys: "Esc", label: "Cancel"),
             ]),
             ShortcutCategory(name: "Window", icon: "macwindow", shortcuts: [
                 ShortcutEntry(keys: "\u{2318}\\", label: "Toggle sidebar"),
                 ShortcutEntry(keys: "\u{2318}K", label: "Command palette"),
-                ShortcutEntry(keys: "\u{2318}/", label: "This cheat sheet"),
+                ShortcutEntry(keys: "\u{21E7}\u{2318}F", label: "Focus mode"),
+                ShortcutEntry(keys: "\u{21E7}\u{2318}M", label: "Compact mode"),
+                ShortcutEntry(keys: "\u{21E7}\u{2318}T", label: "Float on top"),
                 ShortcutEntry(keys: "\u{21E7}\u{2318}Space", label: "Summon OSAI"),
+            ]),
+            ShortcutCategory(name: "Help", icon: "questionmark.circle", shortcuts: [
+                ShortcutEntry(keys: "\u{2318}/", label: "This help"),
+                ShortcutEntry(keys: "\u{2318}B", label: "Bold"),
+                ShortcutEntry(keys: "\u{2318}I", label: "Italic"),
             ]),
         ]
     }
@@ -1538,7 +1543,7 @@ struct KeyboardShortcutsView: View {
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundColor(AppTheme.textPrimary)
                     Spacer()
-                    Text("esc")
+                    Text("\u{2318}/")
                         .font(.system(size: 10, weight: .medium, design: .rounded))
                         .foregroundColor(AppTheme.textMuted)
                         .padding(.horizontal, 5)
@@ -1590,16 +1595,14 @@ struct KeyboardShortcutsView: View {
                 .padding(20)
             }
             .frame(maxWidth: 520)
-            .background(
-                RoundedRectangle(cornerRadius: 16)
-                    .fill(.ultraThinMaterial)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 16)
-                            .strokeBorder(AppTheme.borderGlass, lineWidth: 1)
-                    )
-                    .shadow(color: .black.opacity(0.5), radius: 40, x: 0, y: 12)
+            .background(.ultraThinMaterial)
+            .background(AppTheme.bgGlass)
+            .clipShape(RoundedRectangle(cornerRadius: AppTheme.cornerRadius))
+            .overlay(
+                RoundedRectangle(cornerRadius: AppTheme.cornerRadius)
+                    .stroke(AppTheme.borderGlass, lineWidth: 1)
             )
-            .clipShape(RoundedRectangle(cornerRadius: 16))
+            .shadow(color: .black.opacity(0.5), radius: 40, x: 0, y: 12)
             .padding(.horizontal, 40)
         }
         .onKeyPress(.escape) {
@@ -1688,7 +1691,7 @@ struct CompactModeHeader: View {
             .buttonStyle(.plain)
             .help("Navigation menu")
 
-            GhostIcon(size: 20, isProcessing: appState.isProcessing)
+            GhostIcon(size: 20, isProcessing: appState.isProcessing, emotion: appState.ghostEmotion)
 
             Text("osai")
                 .font(.system(size: 14, weight: .bold, design: .rounded))
@@ -1877,11 +1880,11 @@ struct ContentView: View {
     @State private var showCommandPalette = false
     @State private var commandSearch = ""
     @State private var showCompactMenu = false
-    @State private var showKeyboardShortcuts = false
     @State private var focusMode: Bool = false
     @State private var focusExitHover: Bool = false
     @State private var sessionSaveTimer: Timer?
     @State private var terminationObserver: NSObjectProtocol?
+    @State private var activationObserver: NSObjectProtocol?
 
     var body: some View {
         GeometryReader { geo in
@@ -2164,12 +2167,12 @@ struct ContentView: View {
         .animation(.easeOut(duration: 0.15), value: showCommandPalette)
         // Keyboard shortcuts overlay
         .overlay {
-            if showKeyboardShortcuts {
-                KeyboardShortcutsView(isPresented: $showKeyboardShortcuts)
+            if appState.showShortcutsOverlay {
+                KeyboardShortcutsView(isPresented: $appState.showShortcutsOverlay)
                     .transition(.opacity.combined(with: .scale(scale: 0.97)))
             }
         }
-        .animation(.easeOut(duration: 0.15), value: showKeyboardShortcuts)
+        .animation(.easeOut(duration: 0.15), value: appState.showShortcutsOverlay)
         .overlay(alignment: .top) {
             if let toast = appState.toastMessage {
                 ToastView(toast: toast)
@@ -2186,6 +2189,7 @@ struct ContentView: View {
         .onAppear {
             appState.loadAll()
             appState.restoreSessionState()
+            appState.checkProactiveTriggers()
             if appState.globalHotkeyEnabled {
                 installHotkey()
             }
@@ -2205,6 +2209,15 @@ struct ContentView: View {
                     appState.saveSessionState()
                 }
             }
+
+            // Check proactive triggers when app becomes active
+            activationObserver = NotificationCenter.default.addObserver(
+                forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
+            ) { _ in
+                Task { @MainActor in
+                    appState.checkProactiveTriggers()
+                }
+            }
         }
         .onDisappear {
             hotkeyManager.uninstall()
@@ -2214,6 +2227,10 @@ struct ContentView: View {
             if let obs = terminationObserver {
                 NotificationCenter.default.removeObserver(obs)
                 terminationObserver = nil
+            }
+            if let obs = activationObserver {
+                NotificationCenter.default.removeObserver(obs)
+                activationObserver = nil
             }
         }
         .onChange(of: appState.globalHotkeyEnabled) {
@@ -2278,7 +2295,7 @@ struct ContentView: View {
                 Button("") { appState.navigateConversation(direction: 1) }
                     .keyboardShortcut("]", modifiers: .command)
                     .hidden()
-                Button("") { showKeyboardShortcuts.toggle() }
+                Button("") { appState.showShortcutsOverlay.toggle() }
                     .keyboardShortcut("/", modifiers: .command)
                     .hidden()
                 Button("") { appState.toggleSidebarCollapse() }

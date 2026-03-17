@@ -122,6 +122,63 @@ func detectSmartPaste(_ text: String) -> SmartPasteSuggestion? {
     return nil
 }
 
+// MARK: - Slash Command Model
+
+struct SlashCommand: Identifiable {
+    let id: String
+    let name: String
+    let description: String
+    let icon: String
+    let action: String
+}
+
+// MARK: - Slash Command Popup
+
+struct SlashCommandPopup: View {
+    let commands: [SlashCommand]
+    @Binding var selectedIndex: Int
+    var onSelect: (SlashCommand) -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ForEach(Array(commands.enumerated()), id: \.element.id) { index, cmd in
+                Button(action: { onSelect(cmd) }) {
+                    HStack(spacing: 10) {
+                        Image(systemName: cmd.icon)
+                            .font(.system(size: 12))
+                            .foregroundColor(index == selectedIndex ? .white : AppTheme.accent)
+                            .frame(width: 20)
+                        Text(cmd.name)
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundColor(index == selectedIndex ? .white : AppTheme.textPrimary)
+                        Text(cmd.description)
+                            .font(.system(size: 11))
+                            .foregroundColor(index == selectedIndex ? .white.opacity(0.8) : AppTheme.textMuted)
+                        Spacer()
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 7)
+                    .background(
+                        index == selectedIndex
+                            ? AnyShapeStyle(AppTheme.accent)
+                            : AnyShapeStyle(.clear)
+                    )
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("\(cmd.name), \(cmd.description)")
+            }
+        }
+        .accessibilityLabel("Slash commands menu")
+        .background(.ultraThinMaterial)
+        .background(AppTheme.bgCard.opacity(0.8))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(AppTheme.borderGlass, lineWidth: 1))
+        .shadow(color: .black.opacity(0.3), radius: 10, y: -4)
+        .frame(maxWidth: 350)
+    }
+}
+
 // MARK: - Smart Paste Suggestion Popup
 
 struct SmartPasteSuggestionView: View {
@@ -253,6 +310,11 @@ struct GrowingTextEditor: NSViewRepresentable {
     var onPasteText: ((String) -> Void)?
     var onUserTyped: (() -> Void)?
     var isBrowsingHistory: Bool = false
+    var isSlashMenuVisible: Bool = false
+    var onSlashArrowUp: (() -> Void)?
+    var onSlashArrowDown: (() -> Void)?
+    var onSlashSelect: (() -> Void)?
+    var onSlashDismiss: (() -> Void)?
     @Binding var dynamicHeight: CGFloat
 
     private let lineHeight: CGFloat = 20
@@ -280,6 +342,11 @@ struct GrowingTextEditor: NSViewRepresentable {
         textView.onPasteImages = onPasteImages
         textView.onPasteText = onPasteText
         textView.isBrowsingHistory = isBrowsingHistory
+        textView.isSlashMenuVisible = isSlashMenuVisible
+        textView.onSlashArrowUp = onSlashArrowUp
+        textView.onSlashArrowDown = onSlashArrowDown
+        textView.onSlashSelect = onSlashSelect
+        textView.onSlashDismiss = onSlashDismiss
         textView.font = font
         textView.textColor = textColor
         textView.backgroundColor = .clear
@@ -315,6 +382,11 @@ struct GrowingTextEditor: NSViewRepresentable {
         textView.onPasteImages = onPasteImages
         textView.onPasteText = onPasteText
         textView.isBrowsingHistory = isBrowsingHistory
+        textView.isSlashMenuVisible = isSlashMenuVisible
+        textView.onSlashArrowUp = onSlashArrowUp
+        textView.onSlashArrowDown = onSlashArrowDown
+        textView.onSlashSelect = onSlashSelect
+        textView.onSlashDismiss = onSlashDismiss
 
         // Only update text if it differs (avoid cursor jumping)
         if textView.string != text {
@@ -431,11 +503,38 @@ class SubmittableTextView: NSTextView {
     var onEscapeKey: (() -> Void)?
     var onPasteImages: (([URL]) -> Void)?
     var onPasteText: ((String) -> Void)?
+    var isSlashMenuVisible: Bool = false
+    var onSlashArrowUp: (() -> Void)?
+    var onSlashArrowDown: (() -> Void)?
+    var onSlashSelect: (() -> Void)?
+    var onSlashDismiss: (() -> Void)?
 
     /// Whether the user is currently browsing input history (enables down-arrow navigation)
     var isBrowsingHistory: Bool = false
 
     override func keyDown(with event: NSEvent) {
+        // Slash menu takes priority for navigation keys
+        if isSlashMenuVisible {
+            switch event.keyCode {
+            case 126: // Up arrow
+                onSlashArrowUp?()
+                return
+            case 125: // Down arrow
+                onSlashArrowDown?()
+                return
+            case 36: // Return
+                if !event.modifierFlags.contains(.shift) {
+                    onSlashSelect?()
+                    return
+                }
+            case 53: // Escape
+                onSlashDismiss?()
+                return
+            default:
+                break
+            }
+        }
+
         // Return key without Shift modifier -> submit
         if event.keyCode == 36 && !event.modifierFlags.contains(.shift) {
             onSubmit?()
@@ -875,20 +974,28 @@ struct ChatInputBar: View {
     @State private var editorHeight: CGFloat = 24
     @State private var showSlashMenu = false
     @State private var slashFilter = ""
+    @State private var slashSelectedIndex = 0
     @State private var showTemplatePopover = false
     @State private var showTemplateManager = false
     @State private var smartPasteSuggestion: SmartPasteSuggestion?
     @State private var lastPastedText: String = ""
     @State private var smartPasteDismissTask: Task<Void, Never>?
 
-    private let slashCommands: [(command: String, icon: String, description: String)] = [
-        ("/new", "plus.circle", "Start new conversation"),
-        ("/clear", "trash", "Clear current chat"),
-        ("/compact", "arrow.down.right.and.arrow.up.left", "Compact context window"),
-        ("/model", "cpu", "Change model"),
-        ("/agent", "person.circle", "Select agent"),
-        ("/help", "questionmark.circle", "Show help"),
+    private let slashCommands: [SlashCommand] = [
+        SlashCommand(id: "news", name: "/news", description: "Latest news briefing", icon: "newspaper", action: "Give me the latest news"),
+        SlashCommand(id: "calendar", name: "/calendar", description: "Today's schedule", icon: "calendar", action: "What's on my calendar today?"),
+        SlashCommand(id: "email", name: "/email", description: "Check inbox", icon: "envelope", action: "Check my email inbox"),
+        SlashCommand(id: "tasks", name: "/tasks", description: "My pending tasks", icon: "checklist", action: "List my pending tasks"),
+        SlashCommand(id: "system", name: "/system", description: "System info", icon: "desktopcomputer", action: "Show me system info"),
+        SlashCommand(id: "search", name: "/search", description: "Web search", icon: "magnifyingglass", action: "Search the web for "),
+        SlashCommand(id: "clear", name: "/clear", description: "New conversation", icon: "trash", action: "__clear__"),
     ]
+
+    private var filteredSlashCommands: [SlashCommand] {
+        slashCommands.filter { cmd in
+            slashFilter.isEmpty || cmd.name.lowercased().contains("/" + slashFilter.lowercased())
+        }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -915,46 +1022,18 @@ struct ChatInputBar: View {
             }
 
             // Slash command menu
-            if showSlashMenu {
-                let filtered = slashCommands.filter { cmd in
-                    slashFilter.isEmpty || cmd.command.contains(slashFilter.lowercased())
-                }
-                if !filtered.isEmpty {
-                    VStack(spacing: 0) {
-                        ForEach(Array(filtered.enumerated()), id: \.offset) { _, cmd in
-                            Button(action: {
-                                text = cmd.command + " "
-                                showSlashMenu = false
-                            }) {
-                                HStack(spacing: 8) {
-                                    Image(systemName: cmd.icon)
-                                        .font(.system(size: 11))
-                                        .foregroundColor(AppTheme.accent)
-                                        .frame(width: 16)
-                                    Text(cmd.command)
-                                        .font(.system(size: 12, weight: .medium))
-                                        .foregroundColor(AppTheme.textPrimary)
-                                    Text(cmd.description)
-                                        .font(.system(size: 11))
-                                        .foregroundColor(AppTheme.textMuted)
-                                    Spacer()
-                                }
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 8)
-                                .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel("\(cmd.command), \(cmd.description)")
-                        }
-                    }
-                    .accessibilityLabel("Slash commands menu")
-                    .background(AppTheme.bgCard)
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
-                    .overlay(RoundedRectangle(cornerRadius: 10).stroke(AppTheme.borderGlass, lineWidth: 1))
-                    .shadow(color: .black.opacity(0.3), radius: 10, y: -4)
-                    .frame(maxWidth: 350)
-                    .padding(.bottom, 6)
-                }
+            if showSlashMenu && !filteredSlashCommands.isEmpty {
+                SlashCommandPopup(
+                    commands: filteredSlashCommands,
+                    selectedIndex: $slashSelectedIndex,
+                    onSelect: { cmd in selectSlashCommand(cmd) }
+                )
+                .padding(.bottom, 6)
+                .transition(.asymmetric(
+                    insertion: .move(edge: .bottom).combined(with: .opacity),
+                    removal: .opacity
+                ))
+                .animation(.easeOut(duration: 0.15), value: showSlashMenu)
             }
 
             // Markdown formatting toolbar
@@ -996,48 +1075,7 @@ struct ChatInputBar: View {
                     .environmentObject(appState)
                 }
 
-                GrowingTextEditor(
-                    text: $text,
-                    font: NSFont.systemFont(ofSize: 14),
-                    textColor: NSColor(AppTheme.textPrimary),
-                    placeholderText: "Message...",
-                    isDisabled: isDisabled,
-                    isFocused: $isFocused,
-                    onSubmit: submitIfValid,
-                    onUpArrowInEmptyInput: onUpArrowInEmptyInput,
-                    onDownArrowHistory: onDownArrowHistory,
-                    onEscapeKey: {
-                        if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                            text = ""
-                        } else {
-                            appState.closeCurrentConversation()
-                        }
-                    },
-                    onPasteImages: onPasteImages,
-                    onPasteText: { pastedText in
-                        guard appState.smartPasteEnabled else { return }
-                        if let suggestion = detectSmartPaste(pastedText) {
-                            lastPastedText = pastedText
-                            smartPasteDismissTask?.cancel()
-                            withAnimation(.easeInOut(duration: 0.2)) {
-                                smartPasteSuggestion = suggestion
-                            }
-                            // Auto-dismiss after 3 seconds
-                            smartPasteDismissTask = Task { @MainActor in
-                                try? await Task.sleep(nanoseconds: 3_000_000_000)
-                                guard !Task.isCancelled else { return }
-                                withAnimation(.easeOut(duration: 0.2)) {
-                                    smartPasteSuggestion = nil
-                                }
-                            }
-                        }
-                    },
-                    onUserTyped: {
-                        appState.resetInputHistoryNavigation()
-                    },
-                    isBrowsingHistory: appState.isBrowsingInputHistory,
-                    dynamicHeight: $editorHeight
-                )
+                textEditorView
                 .frame(height: editorHeight)
                 .accessibilityLabel("Message input")
                 .accessibilityHint("Type a message and press Enter to send. Shift+Enter for new line.")
@@ -1104,9 +1142,10 @@ struct ChatInputBar: View {
             }
         }
         .onChange(of: text) { _, newValue in
-            if newValue.hasPrefix("/") {
+            if newValue.hasPrefix("/") && !newValue.contains(" ") {
                 showSlashMenu = true
                 slashFilter = String(newValue.dropFirst())
+                slashSelectedIndex = 0
             } else {
                 showSlashMenu = false
             }
@@ -1199,6 +1238,86 @@ struct ChatInputBar: View {
             return AppTheme.warning
         }
         return AppTheme.textMuted
+    }
+
+    private var textEditorView: some View {
+        GrowingTextEditor(
+            text: $text,
+            font: NSFont.systemFont(ofSize: 14),
+            textColor: NSColor(AppTheme.textPrimary),
+            placeholderText: "Message...",
+            isDisabled: isDisabled,
+            isFocused: $isFocused,
+            onSubmit: submitIfValid,
+            onUpArrowInEmptyInput: onUpArrowInEmptyInput,
+            onDownArrowHistory: onDownArrowHistory,
+            onEscapeKey: {
+                if showSlashMenu {
+                    showSlashMenu = false
+                    text = ""
+                } else if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    text = ""
+                } else {
+                    appState.closeCurrentConversation()
+                }
+            },
+            onPasteImages: onPasteImages,
+            onPasteText: { pastedText in
+                guard appState.smartPasteEnabled else { return }
+                if let suggestion = detectSmartPaste(pastedText) {
+                    lastPastedText = pastedText
+                    smartPasteDismissTask?.cancel()
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        smartPasteSuggestion = suggestion
+                    }
+                    smartPasteDismissTask = Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: 3_000_000_000)
+                        guard !Task.isCancelled else { return }
+                        withAnimation(.easeOut(duration: 0.2)) {
+                            smartPasteSuggestion = nil
+                        }
+                    }
+                }
+            },
+            onUserTyped: {
+                appState.resetInputHistoryNavigation()
+            },
+            isBrowsingHistory: appState.isBrowsingInputHistory,
+            isSlashMenuVisible: showSlashMenu && !filteredSlashCommands.isEmpty,
+            onSlashArrowUp: {
+                let count = filteredSlashCommands.count
+                guard count > 0 else { return }
+                slashSelectedIndex = (slashSelectedIndex - 1 + count) % count
+            },
+            onSlashArrowDown: {
+                let count = filteredSlashCommands.count
+                guard count > 0 else { return }
+                slashSelectedIndex = (slashSelectedIndex + 1) % count
+            },
+            onSlashSelect: {
+                let filtered = filteredSlashCommands
+                guard slashSelectedIndex < filtered.count else { return }
+                selectSlashCommand(filtered[slashSelectedIndex])
+            },
+            onSlashDismiss: {
+                showSlashMenu = false
+                text = ""
+            },
+            dynamicHeight: $editorHeight
+        )
+    }
+
+    private func selectSlashCommand(_ cmd: SlashCommand) {
+        showSlashMenu = false
+        if cmd.action == "__clear__" {
+            text = ""
+            appState.startNewChat()
+        } else if cmd.action.hasSuffix(" ") {
+            text = cmd.action
+        } else {
+            text = cmd.action
+            onSubmit()
+        }
     }
 
     private func submitIfValid() {

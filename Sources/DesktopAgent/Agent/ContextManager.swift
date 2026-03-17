@@ -187,6 +187,21 @@ final class ContextManager {
 
     var needsCompaction: Bool { isNearLimit }
 
+    // MARK: - Progressive Compaction Tiers
+
+    /// Returns 0/1/2/3 based on current context usage percentage.
+    /// - Tier 0: < 40% — no action needed
+    /// - Tier 1: 40-59% — strip images from old messages, truncate tool results to 200 chars
+    /// - Tier 2: 60-74% — summarize oldest 50% of conversation into bullet points
+    /// - Tier 3: >= 75% — deep compaction (existing behavior)
+    var compactionTier: Int {
+        let pct = Double(lastInputTokens) / Double(contextWindow)
+        if pct >= ContextManager.compactionThreshold { return 3 }
+        if pct >= 0.60 { return 2 }
+        if pct >= 0.40 { return 1 }
+        return 0
+    }
+
     var sessionDuration: TimeInterval {
         Date().timeIntervalSince(sessionStart)
     }
@@ -293,7 +308,162 @@ final class ContextManager {
         return stripped
     }
 
-    // MARK: - Compaction
+    // MARK: - Tier 1: Truncate Tool Results
+
+    /// Truncate tool result text blocks to maxChars, keeping only the beginning.
+    func truncateToolResults(in messages: [ClaudeMessage], maxChars: Int = 200, keepLast: Int = 4) -> [ClaudeMessage] {
+        guard messages.count > keepLast else { return messages }
+        let boundary = messages.count - keepLast
+        var result = messages
+        for i in 0..<boundary {
+            let msg = result[i]
+            let newContent: [ClaudeContent] = msg.content.map { content in
+                switch content {
+                case .toolResult(let id, let blocks):
+                    let truncatedBlocks: [ToolResultContentBlock] = blocks.map { block in
+                        if let text = block.text, text.count > maxChars {
+                            return .textBlock(String(text.prefix(maxChars)) + "...[truncated]")
+                        }
+                        return block
+                    }
+                    return .toolResult(toolUseId: id, content: truncatedBlocks)
+                default:
+                    return content
+                }
+            }
+            result[i] = ClaudeMessage(role: msg.role, content: newContent)
+        }
+        return result
+    }
+
+    // MARK: - Tier 2: Summarize Oldest 50%
+
+    /// Summarize the oldest half of the conversation into bullet points using a cheap model call.
+    func summarizeOldestHalf(
+        messages: [ClaudeMessage],
+        client: AIClient
+    ) async throws -> [ClaudeMessage] {
+        let halfPoint = messages.count / 2
+        guard halfPoint > 2 else { return messages }
+
+        let oldMessages = Array(messages.prefix(halfPoint))
+        let recentMessages = Array(messages.suffix(messages.count - halfPoint))
+
+        // Preserve the first user message
+        let firstUserMessage = oldMessages.first { $0.role == "user" }
+
+        // Build text summary of old messages
+        var summaryParts: [String] = []
+        for msg in oldMessages {
+            for content in msg.content {
+                switch content {
+                case .text(let text):
+                    if !text.isEmpty {
+                        let role = msg.role == "user" ? "User" : "Assistant"
+                        let truncated = text.count > 300 ? String(text.prefix(300)) + "..." : text
+                        summaryParts.append("[\(role)] \(truncated)")
+                    }
+                case .toolUse(_, let name, let input, _):
+                    let args = input.map { "\($0.key)" }.joined(separator: ", ")
+                    summaryParts.append("[Tool] \(name)(\(args))")
+                case .toolResult(_, let blocks):
+                    let text = blocks.compactMap { $0.text }.joined(separator: " ")
+                    if !text.isEmpty {
+                        let truncated = text.count > 100 ? String(text.prefix(100)) + "..." : text
+                        summaryParts.append("[Result] \(truncated)")
+                    }
+                default:
+                    break
+                }
+            }
+        }
+
+        let rawSummary = summaryParts.joined(separator: "\n")
+        let summaryRequest = """
+        Condense this conversation into bullet points. Keep file paths, commands, and error messages verbatim. Under 300 words.
+
+        \(String(rawSummary.prefix(6000)))
+        """
+
+        let summaryMessages = [ClaudeMessage(role: "user", content: [.text(summaryRequest)])]
+
+        let preTokenEstimate = estimateMessageTokens(oldMessages)
+
+        do {
+            let response = try await client.sendMessage(
+                messages: summaryMessages,
+                system: "You are a conversation summarizer. Output only bullet points, no preamble.",
+                tools: nil
+            )
+            if let usage = response.usage { recordUsage(usage) }
+
+            let summaryText = response.content.compactMap { c -> String? in
+                if case .text(let t) = c { return t }; return nil
+            }.joined(separator: "\n")
+
+            var compacted: [ClaudeMessage] = []
+
+            if let firstMsg = firstUserMessage {
+                compacted.append(firstMsg)
+                compacted.append(ClaudeMessage(role: "assistant", content: [.text("Understood. Working on this.")]))
+            }
+
+            compacted.append(ClaudeMessage(role: "user", content: [.text("[CONTEXT SUMMARY — \(oldMessages.count) messages condensed]\n\(summaryText)\n[END SUMMARY]")]))
+            compacted.append(ClaudeMessage(role: "assistant", content: [.text("Understood. Continuing with full awareness of prior work.")]))
+            compacted.append(contentsOf: recentMessages)
+
+            let postTokenEstimate = estimateMessageTokens(compacted)
+            let saved = max(preTokenEstimate - postTokenEstimate, 0)
+            tokensSavedByCompaction += saved
+            lastCompactionSaved = saved
+            compactionCount += 1
+
+            return compacted
+        } catch {
+            // On failure, return messages unchanged
+            return messages
+        }
+    }
+
+    // MARK: - Progressive Compaction Entry Point
+
+    /// Apply the appropriate compaction tier based on current context usage.
+    /// Returns the (possibly compacted) messages and a human-readable description of what was done, or nil if nothing.
+    func progressiveCompact(
+        messages: [ClaudeMessage],
+        client: AIClient,
+        systemPrompt: String
+    ) async throws -> (messages: [ClaudeMessage], description: String?) {
+        let tier = compactionTier
+        guard tier > 0, messages.count > 6 else {
+            return (messages, nil)
+        }
+
+        switch tier {
+        case 1:
+            // Tier 1: strip old images + truncate tool results
+            var result = stripOldImages(from: messages, keepLast: 2)
+            result = truncateToolResults(in: result, maxChars: 200, keepLast: 8)
+            return (result, "Tier 1: stripped old images, truncated tool results")
+
+        case 2:
+            // Tier 2: summarize oldest 50%
+            var result = stripOldImages(from: messages, keepLast: 2)
+            result = truncateToolResults(in: result, maxChars: 200, keepLast: 8)
+            if result.count > 10 {
+                result = try await summarizeOldestHalf(messages: result, client: client)
+                return (result, "Tier 2: summarized oldest 50% of conversation")
+            }
+            return (result, "Tier 2: stripped images and truncated results")
+
+        default:
+            // Tier 3: full deep compaction (existing behavior)
+            let result = try await compactHistory(messages: messages, client: client, systemPrompt: systemPrompt)
+            return (result, "Tier 3: deep compaction")
+        }
+    }
+
+    // MARK: - Deep Compaction (Tier 3)
 
     func compactHistory(
         messages: [ClaudeMessage],
@@ -301,7 +471,7 @@ final class ContextManager {
         systemPrompt: String
     ) async throws -> [ClaudeMessage] {
         compactionCount += 1
-        let preCompactionCount = messages.count
+        _ = messages.count
 
         // Step 1: Strip old images first (biggest win — can free 100K+ tokens instantly)
         let imageStripped = stripOldImages(from: messages, keepLast: 2)

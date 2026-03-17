@@ -903,6 +903,7 @@ struct MessageBubble: View {
     var isSelectedForShare: Bool = false
     var onToggleShareSelection: (() -> Void)?
     var onAnnotate: ((String?) -> Void)?
+    var onSuggestionTap: ((String) -> Void)?
     var showAvatar: Bool = true
     var showTimestamp: Bool = true
     @State private var appeared = false
@@ -1965,6 +1966,38 @@ struct MessageBubble: View {
 
                 // Annotation card
                 annotationView
+
+                // Follow-up suggestion pills
+                if !message.suggestions.isEmpty && !message.isStreaming && isLastAssistantMessage {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(message.suggestions, id: \.self) { suggestion in
+                                Button(action: {
+                                    onSuggestionTap?(suggestion)
+                                }) {
+                                    HStack(spacing: 4) {
+                                        Image(systemName: "arrow.turn.down.right")
+                                            .font(.system(size: 9))
+                                        Text(suggestion)
+                                            .font(.system(size: 12, weight: .medium))
+                                    }
+                                    .foregroundColor(AppTheme.accent)
+                                    .padding(.horizontal, 14)
+                                    .padding(.vertical, 7)
+                                    .background(AppTheme.accent.opacity(0.08))
+                                    .clipShape(Capsule())
+                                    .overlay(
+                                        Capsule()
+                                            .stroke(AppTheme.accent.opacity(0.2), lineWidth: 1)
+                                    )
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("Suggestion: \(suggestion)")
+                            }
+                        }
+                        .padding(.top, 6)
+                    }
+                }
 
                 // Footer
                 HStack(spacing: 10) {
@@ -4497,8 +4530,8 @@ struct StreamingPlaceholder: View {
             .accessibilityElement(children: .combine)
             .accessibilityLabel("Working on tasks")
         } else {
-            VStack(alignment: .leading, spacing: 6) {
-                TypingIndicator()
+            VStack(alignment: .leading, spacing: 8) {
+                ShimmerSkeleton()
                 Text("Agent is thinking...")
                     .font(.system(size: 11))
                     .foregroundColor(AppTheme.textMuted)
@@ -4507,6 +4540,95 @@ struct StreamingPlaceholder: View {
             .accessibilityElement(children: .combine)
             .accessibilityLabel("Agent is thinking")
         }
+    }
+}
+
+// MARK: - Shimmer Loading Effect
+
+/// Animated shimmer gradient that moves across a skeleton placeholder
+struct ShimmerSkeleton: View {
+    @State private var phase: CGFloat = -1.0
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            shimmerLine(width: 180)
+            shimmerLine(width: 140)
+            shimmerLine(width: 100)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .background(.ultraThinMaterial)
+        .background(AppTheme.bgGlass)
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(AppTheme.borderGlass, lineWidth: 0.5))
+        .onAppear {
+            withAnimation(.linear(duration: 1.4).repeatForever(autoreverses: false)) {
+                phase = 1.0
+            }
+        }
+    }
+
+    private func shimmerLine(width: CGFloat) -> some View {
+        RoundedRectangle(cornerRadius: 4)
+            .fill(AppTheme.textMuted.opacity(0.12))
+            .frame(width: width, height: 10)
+            .overlay(
+                GeometryReader { geo in
+                    let gradientWidth = geo.size.width * 0.6
+                    let offset = phase * (geo.size.width + gradientWidth)
+                    LinearGradient(
+                        colors: [
+                            .clear,
+                            AppTheme.accent.opacity(0.18),
+                            .clear
+                        ],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                    .frame(width: gradientWidth)
+                    .offset(x: offset)
+                }
+                .clipped()
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 4))
+    }
+}
+
+/// A view modifier that applies a shimmer effect to any view
+struct ShimmerModifier: ViewModifier {
+    @State private var phase: CGFloat = -1.0
+
+    func body(content: Content) -> some View {
+        content
+            .overlay(
+                GeometryReader { geo in
+                    let gradientWidth = geo.size.width * 0.5
+                    let offset = phase * (geo.size.width + gradientWidth)
+                    LinearGradient(
+                        colors: [
+                            .clear,
+                            .white.opacity(0.12),
+                            .clear
+                        ],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                    .frame(width: gradientWidth)
+                    .offset(x: offset)
+                }
+                .clipped()
+            )
+            .onAppear {
+                withAnimation(.linear(duration: 1.4).repeatForever(autoreverses: false)) {
+                    phase = 1.0
+                }
+            }
+    }
+}
+
+extension View {
+    func shimmer() -> some View {
+        modifier(ShimmerModifier())
     }
 }
 

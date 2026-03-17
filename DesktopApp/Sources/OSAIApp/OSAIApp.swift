@@ -135,6 +135,13 @@ struct OSAIApp: App {
                     appState.toggleFloatOnTop()
                 }
                 .keyboardShortcut("t", modifiers: [.command, .shift])
+
+                Divider()
+
+                Button("Keyboard Shortcuts") {
+                    appState.showShortcutsOverlay.toggle()
+                }
+                .keyboardShortcut("/", modifiers: .command)
             }
 
             // Chat menu

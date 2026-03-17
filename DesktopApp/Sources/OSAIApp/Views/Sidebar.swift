@@ -35,7 +35,7 @@ struct Sidebar: View {
         VStack(spacing: 0) {
             // Ghost branding
             VStack(spacing: 8) {
-                GhostIcon(size: appState.sidebarCollapsed ? 32 : 44, isProcessing: appState.isProcessing)
+                GhostIcon(size: appState.sidebarCollapsed ? 32 : 44, isProcessing: appState.isProcessing, emotion: appState.ghostEmotion)
 
                 if !appState.sidebarCollapsed {
                     Text("osai")

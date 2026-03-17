@@ -51,31 +51,114 @@ final class AgentRegistry {
         return parseAgent(content: content, filePath: path)
     }
 
-    /// Find the best matching agent for a user input
+    /// Find the best matching agent for a user input using fuzzy matching
     static func route(input: String) -> SpecializedAgentDef? {
         let agents = loadAll()
         if agents.isEmpty { return nil }
 
-        let lower = input.lowercased()
+        let normalized = normalizeText(input)
+        let inputWords = normalized.split(separator: " ").map(String.init)
 
         // Score each agent by trigger match count
         var bestAgent: SpecializedAgentDef? = nil
-        var bestScore = 0
+        var bestScore: Double = 0
+        var bestReason = ""
 
         for agent in agents {
-            var score = 0
+            var score: Double = 0
+            var matchedTriggers: [String] = []
+            var fuzzyTriggers: [String] = []
+
             for trigger in agent.triggers {
-                if lower.contains(trigger.lowercased()) {
-                    score += 1
+                let normTrigger = normalizeText(trigger)
+                let triggerWords = normTrigger.split(separator: " ").map(String.init)
+
+                // Multi-word triggers: check if all words appear in input as whole words
+                if triggerWords.count > 1 {
+                    let allFound = triggerWords.allSatisfy { tw in
+                        inputWords.contains(where: { $0 == tw })
+                    }
+                    if allFound {
+                        score += 1
+                        matchedTriggers.append(trigger)
+                        continue
+                    }
+                } else {
+                    // Single-word trigger: match as whole word
+                    if inputWords.contains(normTrigger) {
+                        score += 1
+                        matchedTriggers.append(trigger)
+                        continue
+                    }
+                }
+
+                // Fuzzy matching: only for triggers longer than 4 chars, Levenshtein distance ≤ 2
+                if normTrigger.count > 4 {
+                    for word in inputWords {
+                        if word.count > 4 && levenshteinDistance(word, normTrigger) <= 2 {
+                            score += 0.5
+                            fuzzyTriggers.append("\(trigger)~\(word)")
+                            break
+                        }
+                    }
                 }
             }
+
             if score > bestScore {
                 bestScore = score
                 bestAgent = agent
+                var parts: [String] = []
+                if !matchedTriggers.isEmpty { parts.append("exact: \(matchedTriggers.joined(separator: ", "))") }
+                if !fuzzyTriggers.isEmpty { parts.append("fuzzy: \(fuzzyTriggers.joined(separator: ", "))") }
+                bestReason = parts.joined(separator: " | ")
             }
         }
 
-        return bestScore > 0 ? bestAgent : nil
+        // Minimum score of 1.0 to activate
+        guard bestScore >= 1.0, let agent = bestAgent else { return nil }
+
+        print("[AgentRouter] → \(agent.name) (score: \(bestScore)) [\(bestReason)]")
+        return agent
+    }
+
+    // MARK: - Text Normalization & Fuzzy Matching
+
+    /// Remove accents, lowercase, strip punctuation
+    static func normalizeText(_ text: String) -> String {
+        let folded = text.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+        return folded.components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+    }
+
+    /// Standard Levenshtein distance (dynamic programming)
+    static func levenshteinDistance(_ a: String, _ b: String) -> Int {
+        let aChars = Array(a)
+        let bChars = Array(b)
+        let m = aChars.count
+        let n = bChars.count
+
+        if m == 0 { return n }
+        if n == 0 { return m }
+
+        // Use two rows instead of full matrix for memory efficiency
+        var prev = Array(0...n)
+        var curr = Array(repeating: 0, count: n + 1)
+
+        for i in 1...m {
+            curr[0] = i
+            for j in 1...n {
+                let cost = aChars[i - 1] == bChars[j - 1] ? 0 : 1
+                curr[j] = min(
+                    prev[j] + 1,       // deletion
+                    curr[j - 1] + 1,   // insertion
+                    prev[j - 1] + cost // substitution
+                )
+            }
+            prev = curr
+        }
+
+        return prev[n]
     }
 
     /// Install default agents if none exist

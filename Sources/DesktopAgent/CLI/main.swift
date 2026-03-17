@@ -205,6 +205,12 @@ struct DesktopAgentCLI {
             do {
                 let response = try await agent.processUserInput(command)
 
+                // Emit follow-up suggestions for desktop app
+                if let emitter = emitter, !response.isEmpty {
+                    let suggestions = agent.generateFollowUpSuggestions(from: response)
+                    emitter.emitSuggestions(suggestions)
+                }
+
                 // Emit done event for desktop app
                 emitter?.emitDone()
 

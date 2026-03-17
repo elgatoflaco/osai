@@ -18,6 +18,7 @@ struct AppEvent: Encodable {
     var message: String?
     var inputTokens: Int?
     var outputTokens: Int?
+    var suggestions: [String]?
 }
 
 final class AppModeEmitter {
@@ -71,6 +72,11 @@ final class AppModeEmitter {
 
     func emitContextPressure(usedPercent: Int) {
         emit(AppEvent(event: "context_pressure", message: "\(usedPercent)"))
+    }
+
+    func emitSuggestions(_ suggestions: [String]) {
+        guard !suggestions.isEmpty else { return }
+        emit(AppEvent(event: "suggestions", suggestions: suggestions))
     }
 
     func emitDone() {

@@ -88,6 +88,16 @@ struct DashboardView: View {
                     .padding(.top, 30)
                     .padding(.bottom, 10)
 
+                    // Morning briefing banner
+                    if appState.showMorningBriefing {
+                        MorningBriefingBanner()
+                            .transition(.asymmetric(
+                                insertion: .opacity.combined(with: .move(edge: .top)),
+                                removal: .opacity.combined(with: .scale(scale: 0.95).combined(with: .opacity))
+                            ))
+                            .frame(maxWidth: 600)
+                    }
+
                     // Dynamic sections based on user customization
                     ForEach(appState.visibleDashboardSections) { section in
                         dashboardSection(section)
@@ -4332,5 +4342,87 @@ struct ProductivityWeatherContent: View {
         formatter.dateFormat = "E"
         let s = formatter.string(from: date)
         return String(s.prefix(1))
+    }
+}
+
+// MARK: - Morning Briefing Banner
+
+struct MorningBriefingBanner: View {
+    @EnvironmentObject var appState: AppState
+    @State private var appeared = false
+
+    private var greeting: String {
+        let hour = Calendar.current.component(.hour, from: Date())
+        if hour < 12 {
+            return "Buenos dias"
+        } else {
+            return "Good afternoon"
+        }
+    }
+
+    var body: some View {
+        GlassCard(hoverEnabled: false) {
+            HStack(spacing: 14) {
+                // Ghost icon
+                GhostIcon(size: 36)
+                    .opacity(appeared ? 1 : 0)
+                    .offset(y: appeared ? 0 : 8)
+                    .animation(.easeOut(duration: 0.5).delay(0.1), value: appeared)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("\(greeting)! Ready to start the day?")
+                        .font(AppTheme.fontBody.weight(.semibold))
+                        .foregroundColor(AppTheme.textPrimary)
+
+                    Text("I can catch you up on what matters today.")
+                        .font(AppTheme.fontCaption)
+                        .foregroundColor(AppTheme.textSecondary)
+                }
+
+                Spacer()
+
+                // Daily Briefing button
+                Button(action: {
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        appState.showMorningBriefing = false
+                    }
+                    appState.startNewChat()
+                    appState.sendMessage("Good morning! Give me my daily briefing: key calendar events, pending tasks, and anything I should know today.")
+                }) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "sun.horizon.fill")
+                            .font(.system(size: 12))
+                        Text("Daily Briefing")
+                            .font(AppTheme.fontCaption.weight(.medium))
+                    }
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(AppTheme.accent)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                }
+                .buttonStyle(.plain)
+
+                // Dismiss button
+                Button(action: {
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        appState.showMorningBriefing = false
+                    }
+                }) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(AppTheme.textSecondary)
+                        .frame(width: 24, height: 24)
+                        .background(AppTheme.bgCard.opacity(0.5))
+                        .clipShape(Circle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .overlay(
+            RoundedRectangle(cornerRadius: AppTheme.cornerRadius)
+                .stroke(AppTheme.accent.opacity(0.2), lineWidth: 1)
+        )
+        .onAppear { appeared = true }
     }
 }

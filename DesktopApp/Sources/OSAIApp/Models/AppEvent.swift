@@ -16,6 +16,7 @@ struct AppEventData: Decodable {
     var message: String?
     var inputTokens: Int?
     var outputTokens: Int?
+    var suggestions: [String]?
 
     enum CodingKeys: String, CodingKey {
         case event, content, id, name, detail, success, output
@@ -23,6 +24,7 @@ struct AppEventData: Decodable {
         case agent, model, message
         case inputTokens = "input_tokens"
         case outputTokens = "output_tokens"
+        case suggestions
     }
 }
 
@@ -34,6 +36,7 @@ enum AppEventType {
     case status(String)
     case tokens(input: Int, output: Int)
     case contextPressure(percent: Int)
+    case suggestions([String])
     case error(String)
     case done
 
@@ -59,6 +62,8 @@ enum AppEventType {
             return .tokens(input: event.inputTokens ?? 0, output: event.outputTokens ?? 0)
         case "context_pressure":
             return .contextPressure(percent: Int(event.message ?? "0") ?? 0)
+        case "suggestions":
+            return .suggestions(event.suggestions ?? [])
         case "error":
             return .error(event.message ?? "Unknown error")
         case "done":

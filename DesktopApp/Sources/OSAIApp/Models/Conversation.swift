@@ -90,13 +90,15 @@ struct ChatMessage: Identifiable, Equatable {
     var replyToMessageId: String?
     var annotation: String?
     var isPinned: Bool = false
+    var suggestions: [String] = []
 
     static func == (lhs: ChatMessage, rhs: ChatMessage) -> Bool {
         lhs.id == rhs.id && lhs.content == rhs.content && lhs.isStreaming == rhs.isStreaming &&
         lhs.activities == rhs.activities && lhs.agentName == rhs.agentName && lhs.reaction == rhs.reaction &&
         lhs.isBookmarked == rhs.isBookmarked && lhs.responseTimeMs == rhs.responseTimeMs &&
         lhs.editHistory == rhs.editHistory && lhs.replyToMessageId == rhs.replyToMessageId &&
-        lhs.annotation == rhs.annotation && lhs.isPinned == rhs.isPinned
+        lhs.annotation == rhs.annotation && lhs.isPinned == rhs.isPinned &&
+        lhs.suggestions == rhs.suggestions
     }
 }
 

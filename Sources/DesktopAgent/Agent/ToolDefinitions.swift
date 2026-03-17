@@ -19,6 +19,7 @@ enum ToolCategory: String, CaseIterable {
     case claudeCode     // claude_code
     case apps           // list_apps, get_frontmost_app, activate_app, open_app, spotlight_search
     case files          // list_directory, file_info, read_clipboard, write_clipboard
+    case system         // system_info, notify, web_search
 }
 
 // MARK: - Tool Definitions for Claude
@@ -99,6 +100,11 @@ struct ToolDefinitions {
         // Files
         for name in ["list_directory", "file_info", "read_clipboard", "write_clipboard"] {
             map[name] = .files
+        }
+
+        // System
+        for name in ["system_info", "notify", "web_search"] {
+            map[name] = .system
         }
 
         return map
@@ -678,6 +684,41 @@ struct ToolDefinitions {
                     "context": PropertySchema(type: "string", description: "Shared context for all sub-agents", enumValues: nil)
                 ],
                 required: ["tasks"]
+            )
+        ),
+
+        // --- System ---
+        ClaudeTool(
+            name: "system_info",
+            description: "Get system information: macOS version, hostname, username, CPU usage, free memory, disk space, WiFi network, battery level.",
+            inputSchema: InputSchema(
+                type: "object",
+                properties: [:],
+                required: nil
+            )
+        ),
+        ClaudeTool(
+            name: "notify",
+            description: "Send a macOS notification with a title and body message.",
+            inputSchema: InputSchema(
+                type: "object",
+                properties: [
+                    "title": PropertySchema(type: "string", description: "Notification title", enumValues: nil),
+                    "body": PropertySchema(type: "string", description: "Notification body text", enumValues: nil)
+                ],
+                required: ["title", "body"]
+            )
+        ),
+        ClaudeTool(
+            name: "web_search",
+            description: "Search the web using DuckDuckGo and return titles and URLs of results.",
+            inputSchema: InputSchema(
+                type: "object",
+                properties: [
+                    "query": PropertySchema(type: "string", description: "Search query", enumValues: nil),
+                    "max_results": PropertySchema(type: "integer", description: "Maximum number of results to return (default: 10)", enumValues: nil)
+                ],
+                required: ["query"]
             )
         ),
 
