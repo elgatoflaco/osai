@@ -277,8 +277,12 @@ final class AgentLoop {
         }
         // Route on early messages OR when user explicitly asks for an agent capability
         let isEarlyMessage = conversationHistory.count <= 2
-        let hasStrongTrigger = AgentRegistry.route(input: routingInput) != nil
-        if (isEarlyMessage || hasStrongTrigger), let specializedAgent = AgentRegistry.route(input: routingInput) {
+        let routedAgent = AgentRegistry.route(input: routingInput)
+        // Agent routing debug (visible in app activity strip)
+        if let emitter = appModeEmitter, let agent = routedAgent {
+            emitter.emitStatus("[AgentRouter] → \(agent.name) (model: \(agent.model))")
+        }
+        if (isEarlyMessage || routedAgent != nil), let specializedAgent = routedAgent {
             // Claude Code backend: delegate directly to CLI
             if specializedAgent.usesClaudeCode {
                 if let emitter = appModeEmitter {
@@ -314,8 +318,13 @@ final class AgentLoop {
                         printColored("  \u{26A0} \(msg)", color: .yellow)
                     }
                 }
-            } else if verbose {
-                printColored("  \u{26A0} Agent '\(specializedAgent.name)' model '\(specializedAgent.model)' not resolved, using main model", color: .yellow)
+            } else {
+                // Model not resolved — always warn (this is a config error)
+                let msg = "⚠ Agent '\(specializedAgent.name)' model '\(specializedAgent.model)' could not be resolved. Using main model."
+                if let emitter = appModeEmitter {
+                    emitter.emitStatus(msg)
+                }
+                printColored("  \(msg)", color: .yellow)
             }
         }
 
