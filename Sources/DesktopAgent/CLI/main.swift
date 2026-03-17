@@ -168,11 +168,12 @@ struct DesktopAgentCLI {
         var commandArgs: [String] = []
         var deliverTarget: String? = nil
         var taskId: String? = nil
+        var overrideModel: String? = nil
         var skipNext = false
         for (i, arg) in args.enumerated() {
             if i == 0 { continue }
             if skipNext { skipNext = false; continue }
-            if arg == "--model" { skipNext = true; continue }
+            if arg == "--model" { skipNext = true; overrideModel = args.count > i + 1 ? args[i + 1] : nil; continue }
             if arg == "--profile" { skipNext = true; continue }
             if arg == "--verbose" || arg == "-v" { continue }
             if arg == "--app-mode" { continue }

@@ -59,6 +59,15 @@ final class AgentRegistry {
         let normalized = normalizeText(input)
         let inputWords = normalized.split(separator: " ").map(String.init)
 
+        // Debug log
+        let debugLines = agents.map { "  \($0.name): triggers=\($0.triggers)" }.joined(separator: "\n")
+        let debugMsg = "[ROUTE-DETAIL] normalized='\(normalized)' words=\(inputWords)\n\(debugLines)\n"
+        if let data = debugMsg.data(using: .utf8) {
+            let logPath = NSHomeDirectory() + "/.desktop-agent/routing.log"
+            if let fh = FileHandle(forWritingAtPath: logPath) { fh.seekToEndOfFile(); fh.write(data); fh.closeFile() }
+            else { FileManager.default.createFile(atPath: logPath, contents: data) }
+        }
+
         // Score each agent by trigger match count
         var bestAgent: SpecializedAgentDef? = nil
         var bestScore: Double = 0
@@ -231,11 +240,10 @@ final class AgentRegistry {
             }
 
             // Regular key: value parsing
-            let kv = trimmed.split(separator: ":", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
-            guard kv.count == 2 else { continue }
-
-            let key = kv[0]
-            let value = kv[1]
+            guard let colonIdx = trimmed.firstIndex(of: ":") else { continue }
+            let key = trimmed[trimmed.startIndex..<colonIdx].trimmingCharacters(in: .whitespaces)
+            let value = trimmed[trimmed.index(after: colonIdx)...].trimmingCharacters(in: .whitespaces)
+            guard !key.isEmpty else { continue }
 
             switch key {
             case "name":

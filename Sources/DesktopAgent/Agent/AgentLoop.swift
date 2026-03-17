@@ -278,9 +278,23 @@ final class AgentLoop {
         // Route on early messages OR when user explicitly asks for an agent capability
         let isEarlyMessage = conversationHistory.count <= 2
         let routedAgent = AgentRegistry.route(input: routingInput)
-        // Agent routing debug (visible in app activity strip)
-        if let emitter = appModeEmitter, let agent = routedAgent {
-            emitter.emitStatus("[AgentRouter] → \(agent.name) (model: \(agent.model))")
+        // ALWAYS log routing result to file for debugging
+        let logMsg = "[ROUTE] input='\(String(routingInput.prefix(60)))' agents_loaded=\(AgentRegistry.loadAll().count) matched=\(routedAgent?.name ?? "NONE") model=\(routedAgent?.model ?? "N/A") history=\(conversationHistory.count)\n"
+        if let data = logMsg.data(using: .utf8) {
+            let logPath = NSHomeDirectory() + "/.desktop-agent/routing.log"
+            if FileManager.default.fileExists(atPath: logPath) {
+                if let fh = FileHandle(forWritingAtPath: logPath) { fh.seekToEndOfFile(); fh.write(data); fh.closeFile() }
+            } else {
+                FileManager.default.createFile(atPath: logPath, contents: data)
+            }
+        }
+        // Emit to app
+        if let emitter = appModeEmitter {
+            if let agent = routedAgent {
+                emitter.emitStatus("[AgentRouter] → \(agent.name) (model: \(agent.model))")
+            } else {
+                emitter.emitStatus("[AgentRouter] No agent matched for: '\(String(routingInput.prefix(40)))'")
+            }
         }
         if (isEarlyMessage || routedAgent != nil), let specializedAgent = routedAgent {
             // Claude Code backend: delegate directly to CLI
