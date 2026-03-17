@@ -2,6 +2,49 @@ import SwiftUI
 import UniformTypeIdentifiers
 import AppKit
 
+// MARK: - Starter Suggestion Model
+
+struct StarterSuggestion: Identifiable {
+    let id = UUID()
+    let icon: String
+    let title: String
+    let subtitle: String
+    let prompt: String
+
+    /// If the prompt ends with a space, the user should complete it (fill input only).
+    /// Otherwise, the prompt is sent immediately.
+    var fillsInputOnly: Bool { prompt.hasSuffix(" ") }
+}
+
+/// Returns a shuffled set of 4 starter suggestions, varying by time of day.
+private func dynamicSuggestions() -> [StarterSuggestion] {
+    let hour = Calendar.current.component(.hour, from: Date())
+    var suggestions: [StarterSuggestion] = []
+
+    // Time-based suggestions
+    if hour < 12 {
+        suggestions.append(StarterSuggestion(icon: "sun.horizon.fill", title: "Morning Briefing", subtitle: "News, calendar, and priorities", prompt: "Give me my morning briefing"))
+    } else if hour >= 17 {
+        suggestions.append(StarterSuggestion(icon: "moon.stars.fill", title: "Evening Wrap-up", subtitle: "Summarize what happened today", prompt: "Give me an evening summary of today"))
+    } else {
+        suggestions.append(StarterSuggestion(icon: "sun.max.fill", title: "Afternoon Check-in", subtitle: "Catch up on updates and tasks", prompt: "What should I focus on this afternoon?"))
+    }
+
+    // Always available pool
+    suggestions.append(contentsOf: [
+        StarterSuggestion(icon: "magnifyingglass", title: "Research something", subtitle: "Deep dive into any topic", prompt: "Research "),
+        StarterSuggestion(icon: "chevron.left.forwardslash.chevron.right", title: "Code assistant", subtitle: "Debug, write, or review code", prompt: "Help me with "),
+        StarterSuggestion(icon: "envelope.fill", title: "Check email", subtitle: "Inbox summary and actions", prompt: "Check my email and summarize unread messages"),
+        StarterSuggestion(icon: "calendar", title: "Today's schedule", subtitle: "Events and availability", prompt: "What's on my calendar today?"),
+        StarterSuggestion(icon: "text.bubble.fill", title: "Write something", subtitle: "Emails, posts, documents", prompt: "Help me write "),
+        StarterSuggestion(icon: "lightbulb.max.fill", title: "Brainstorm ideas", subtitle: "Creative thinking partner", prompt: "Help me brainstorm ideas for "),
+        StarterSuggestion(icon: "doc.text.magnifyingglass", title: "Summarize content", subtitle: "Condense articles or documents", prompt: "Summarize the following: "),
+    ])
+
+    // Shuffle and take 4
+    return Array(suggestions.shuffled().prefix(4))
+}
+
 struct ChatView: View {
     @EnvironmentObject var appState: AppState
     @State private var messageText = ""
@@ -231,10 +274,19 @@ struct ChatView: View {
     }
 
     private func startSuggestion(_ prompt: String) {
-        messageText = prompt
-        appState.sendMessage(prompt)
-        messageText = ""
+        if prompt.hasSuffix(" ") {
+            // Fill the input field so the user can complete the prompt
+            messageText = prompt
+        } else {
+            // Send immediately
+            messageText = prompt
+            appState.sendMessage(prompt)
+            messageText = ""
+        }
     }
+
+    /// Cached dynamic suggestions so they stay stable during the view's lifetime.
+    @State private var starterSuggestions: [StarterSuggestion] = dynamicSuggestions()
 
     @ViewBuilder
     private var conversationStarterView: some View {
@@ -267,54 +319,23 @@ struct ChatView: View {
                         .animation(.easeOut(duration: 0.5).delay(0.18), value: welcomeAnimateIn)
                 }
 
-                // Suggestion cards 2x2
+                // Dynamic suggestion cards 2x2
                 LazyVGrid(columns: [
                     GridItem(.flexible(), spacing: 12),
                     GridItem(.flexible(), spacing: 12),
                 ], spacing: 12) {
-                    WelcomeSuggestionCard(
-                        icon: "ladybug",
-                        title: "Help me debug this code",
-                        subtitle: "Find and fix issues in your codebase"
-                    ) {
-                        startSuggestion("Help me debug this code")
+                    ForEach(Array(starterSuggestions.enumerated()), id: \.element.id) { index, suggestion in
+                        WelcomeSuggestionCard(
+                            icon: suggestion.icon,
+                            title: suggestion.title,
+                            subtitle: suggestion.subtitle
+                        ) {
+                            startSuggestion(suggestion.prompt)
+                        }
+                        .opacity(welcomeAnimateIn ? 1 : 0)
+                        .offset(y: welcomeAnimateIn ? 0 : 14)
+                        .animation(.easeOut(duration: 0.45).delay(0.22 + Double(index) * 0.06), value: welcomeAnimateIn)
                     }
-                    .opacity(welcomeAnimateIn ? 1 : 0)
-                    .offset(y: welcomeAnimateIn ? 0 : 14)
-                    .animation(.easeOut(duration: 0.45).delay(0.22), value: welcomeAnimateIn)
-
-                    WelcomeSuggestionCard(
-                        icon: "lightbulb",
-                        title: "Explain how this works",
-                        subtitle: "Break down concepts step by step"
-                    ) {
-                        startSuggestion("Explain how this works")
-                    }
-                    .opacity(welcomeAnimateIn ? 1 : 0)
-                    .offset(y: welcomeAnimateIn ? 0 : 14)
-                    .animation(.easeOut(duration: 0.45).delay(0.28), value: welcomeAnimateIn)
-
-                    WelcomeSuggestionCard(
-                        icon: "terminal",
-                        title: "Write a script to...",
-                        subtitle: "Automate tasks with custom scripts"
-                    ) {
-                        startSuggestion("Write a script to ")
-                    }
-                    .opacity(welcomeAnimateIn ? 1 : 0)
-                    .offset(y: welcomeAnimateIn ? 0 : 14)
-                    .animation(.easeOut(duration: 0.45).delay(0.34), value: welcomeAnimateIn)
-
-                    WelcomeSuggestionCard(
-                        icon: "magnifyingglass",
-                        title: "Research about...",
-                        subtitle: "Investigate topics and gather insights"
-                    ) {
-                        startSuggestion("Research about ")
-                    }
-                    .opacity(welcomeAnimateIn ? 1 : 0)
-                    .offset(y: welcomeAnimateIn ? 0 : 14)
-                    .animation(.easeOut(duration: 0.45).delay(0.40), value: welcomeAnimateIn)
                 }
                 .frame(maxWidth: 520)
 
