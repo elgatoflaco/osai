@@ -275,8 +275,10 @@ final class AgentLoop {
         } else {
             routingInput = userInput
         }
-        let shouldRoute = conversationHistory.count <= 2
-        if shouldRoute, let specializedAgent = AgentRegistry.route(input: routingInput) {
+        // Route on early messages OR when user explicitly asks for an agent capability
+        let isEarlyMessage = conversationHistory.count <= 2
+        let hasStrongTrigger = AgentRegistry.route(input: routingInput) != nil
+        if (isEarlyMessage || hasStrongTrigger), let specializedAgent = AgentRegistry.route(input: routingInput) {
             // Claude Code backend: delegate directly to CLI
             if specializedAgent.usesClaudeCode {
                 if let emitter = appModeEmitter {
