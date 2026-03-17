@@ -78,17 +78,18 @@ final class MemoryManager {
         "remember", "recall", "last time", "previously", "before",
         "memoria", "recuerda", "anterior",
         "save_memory", "read_memory", "memory", "forgot", "forget",
-        "you told me", "we discussed", "we talked"
+        "you told me", "we discussed", "we talked",
+        "me llamo", "mi nombre", "my name", "who am i", "quién soy",
+        "cómo me llamo", "como me llamo"
     ]
 
     /// Track whether memory has been loaded this session
     var memoryLoadedThisSession = false
 
-    /// Check if user input suggests memory is needed
+    /// Check if user input suggests memory is needed — always returns true to ensure user context is available
     func shouldLoadMemory(for userInput: String) -> Bool {
-        if memoryLoadedThisSession { return true }
-        let lower = userInput.lowercased()
-        return Self.memoryKeywords.contains { lower.contains($0) }
+        // Always load memory — it contains critical user info (name, phone, preferences)
+        return true
     }
 
     /// Conditionally return memory context based on user input relevance
