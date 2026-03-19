@@ -34,12 +34,14 @@ unzip -q osai-latest.zip
 echo "📦 Instalando CLI..."
 sudo cp osai-dist/osai /usr/local/bin/osai
 sudo chmod +x /usr/local/bin/osai
+sudo xattr -rd com.apple.quarantine /usr/local/bin/osai 2>/dev/null || true
 sudo codesign --force --sign - /usr/local/bin/osai 2>/dev/null || true
 
 # Install Desktop App
 echo "📦 Instalando OSAI.app..."
 rm -rf /Applications/OSAI.app
 cp -R osai-dist/OSAI.app /Applications/OSAI.app
+xattr -rd com.apple.quarantine /Applications/OSAI.app 2>/dev/null || true
 codesign --force --sign - /Applications/OSAI.app/Contents/MacOS/OSAI 2>/dev/null || true
 
 # Create config
