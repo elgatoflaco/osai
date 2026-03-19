@@ -150,12 +150,14 @@ final class AgentLoop {
             }
 
             let fallbackBaseURL = fileConfig.getBaseURL(provider: resolved.provider.id) ?? resolved.provider.defaultBaseURL
+            let fallbackAuthType = fileConfig.getAuthType(provider: resolved.provider.id) ?? "api_key"
             let fallbackClient = AIClient(
                 apiKey: fallbackKey,
                 model: resolved.model,
                 maxTokens: config.maxTokens,
                 baseURL: fallbackBaseURL,
-                format: resolved.provider.format
+                format: resolved.provider.format,
+                authType: fallbackAuthType
             )
 
             if let emitter = appModeEmitter {
@@ -987,7 +989,7 @@ final class AgentLoop {
         }
 
         // Save to config
-        let serverConfig = MCPServerConfig(command: command, args: cmdArgs.isEmpty ? nil : cmdArgs, env: nil, description: "Installed via mcp_install")
+        let serverConfig = MCPServerConfig(command: command, args: cmdArgs.isEmpty ? nil : cmdArgs, env: nil, description: "Installed via mcp_install", timeout: nil)
         var fileConfig = AgentConfigFile.load()
         if fileConfig.mcpServers == nil { fileConfig.mcpServers = [:] }
         fileConfig.mcpServers?[name] = serverConfig
@@ -1587,6 +1589,7 @@ final class AgentLoop {
         let pluginKey = fileConfig.getAPIKey(provider: pluginProvider.id) ?? config.apiKey
         let pluginBaseURL = fileConfig.getBaseURL(provider: pluginProvider.id) ?? pluginProvider.defaultBaseURL
 
+        let pluginAuthType = fileConfig.getAuthType(provider: pluginProvider.id) ?? "api_key"
         let pluginConfig = AgentConfig(
             apiKey: pluginKey,
             model: resolvedModel,
@@ -1596,6 +1599,7 @@ final class AgentLoop {
             maxScreenshotWidth: config.maxScreenshotWidth,
             baseURL: pluginBaseURL,
             apiFormat: pluginProvider.format,
+            authType: pluginAuthType,
             providerId: pluginProvider.id,
             profileName: config.profileName,
             fallbackModels: config.fallbackModels
@@ -1886,6 +1890,7 @@ final class AgentLoop {
         let fileConfig = AgentConfigFile.load()
         let agentKey = fileConfig.getAPIKey(provider: resolved.provider.id) ?? config.apiKey
         let agentBaseURL = fileConfig.getBaseURL(provider: resolved.provider.id) ?? resolved.provider.defaultBaseURL
+        let agentAuthType = fileConfig.getAuthType(provider: resolved.provider.id) ?? "api_key"
 
         let agentConfig = AgentConfig(
             apiKey: agentKey,
@@ -1896,6 +1901,7 @@ final class AgentLoop {
             maxScreenshotWidth: config.maxScreenshotWidth,
             baseURL: agentBaseURL,
             apiFormat: resolved.provider.format,
+            authType: agentAuthType,
             providerId: resolved.provider.id,
             profileName: nil,
             fallbackModels: config.fallbackModels

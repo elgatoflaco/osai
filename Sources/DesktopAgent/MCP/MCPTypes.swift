@@ -90,9 +90,10 @@ struct MCPServerConfig: Codable {
     let args: [String]?
     let env: [String: String]?
     let description: String?
+    let timeout: Int?  // Per-server request timeout in seconds (default: 30, browser tools default: 120)
 
     enum CodingKeys: String, CodingKey {
-        case command, args, env, description
+        case command, args, env, description, timeout
     }
 }
 
@@ -102,11 +103,13 @@ struct AIProviderConfig: Codable {
     let apiKey: String
     let baseURL: String?    // nil = use provider default
     let format: String?     // "anthropic" or "openai" — nil = auto-detect
+    let authType: String?   // "api_key" (default) or "bearer" (for claude session tokens)
 
     enum CodingKeys: String, CodingKey {
         case apiKey = "api_key"
         case baseURL = "base_url"
         case format
+        case authType = "auth_type"
     }
 }
 
@@ -313,9 +316,13 @@ struct AgentConfigFile: Codable {
         apiKeys?[provider]?.baseURL
     }
 
-    mutating func setAPIKey(provider: String, key: String, baseURL: String? = nil, format: String? = nil) {
+    func getAuthType(provider: String) -> String? {
+        apiKeys?[provider]?.authType
+    }
+
+    mutating func setAPIKey(provider: String, key: String, baseURL: String? = nil, format: String? = nil, authType: String? = nil) {
         if apiKeys == nil { apiKeys = [:] }
-        apiKeys?[provider] = AIProviderConfig(apiKey: key, baseURL: baseURL, format: format)
+        apiKeys?[provider] = AIProviderConfig(apiKey: key, baseURL: baseURL, format: format, authType: authType)
     }
 
     mutating func removeAPIKey(provider: String) {

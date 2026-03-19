@@ -19,7 +19,16 @@ final class MCPManager {
         }
 
         printColored("  Starting MCP server: \(name)...", color: .gray)
-        let client = MCPClient(serverName: name, config: config)
+        // Use config timeout, or auto-detect browser servers (120s default)
+        let timeout: TimeInterval
+        if let configTimeout = config.timeout {
+            timeout = TimeInterval(configTimeout)
+        } else if Self.isBrowserServer(name: name, config: config) {
+            timeout = 120  // Browser tools need more time for page loads
+        } else {
+            timeout = 30
+        }
+        let client = MCPClient(serverName: name, config: config, requestTimeout: timeout)
         try client.start()
         clients[name] = client
 
@@ -106,6 +115,9 @@ final class MCPManager {
         do {
             let result = try client.callTool(name: originalName, arguments: coercedArgs)
             return ToolResult(success: true, output: result, screenshot: nil)
+        } catch MCPError.timeout {
+            let currentTimeout = Int(client.config.timeout.map { TimeInterval($0) } ?? (Self.isBrowserServer(name: client.serverName, config: client.config) ? 120 : 30))
+            return ToolResult(success: false, output: "MCP request timed out after \(currentTimeout)s. The server '\(client.serverName)' took too long to respond. You can increase the timeout by adding \"timeout\": \(currentTimeout * 2) to the server config in ~/.desktop-agent/config.json", screenshot: nil)
         } catch {
             return ToolResult(success: false, output: "MCP error: \(error)", screenshot: nil)
         }
@@ -185,14 +197,16 @@ final class MCPManager {
                 command: "npx",
                 args: ["-y", packageName] + args,
                 env: env.isEmpty ? nil : env,
-                description: "MCP server: \(name)"
+                description: "MCP server: \(name)",
+                timeout: nil
             )
         } else {
             config = MCPServerConfig(
                 command: packageName,
                 args: args.isEmpty ? nil : args,
                 env: env.isEmpty ? nil : env,
-                description: "MCP server: \(name)"
+                description: "MCP server: \(name)",
+                timeout: nil
             )
         }
 
@@ -217,5 +231,14 @@ final class MCPManager {
         let fileConfig = AgentConfigFile.load()
         return (fileConfig.mcpServers ?? [:]).map { ($0.key, $0.value) }
             .sorted { $0.name < $1.name }
+    }
+
+    /// Detect if this MCP server is a browser automation tool (needs longer timeouts)
+    private static func isBrowserServer(name: String, config: MCPServerConfig) -> Bool {
+        let indicators = ["chrome", "browser", "playwright", "puppeteer", "selenium", "web"]
+        let nameLower = name.lowercased()
+        let commandLower = config.command.lowercased()
+        let argsJoined = (config.args ?? []).joined(separator: " ").lowercased()
+        return indicators.contains { nameLower.contains($0) || commandLower.contains($0) || argsJoined.contains($0) }
     }
 }

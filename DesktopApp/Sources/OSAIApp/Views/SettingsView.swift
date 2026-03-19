@@ -6,6 +6,9 @@ struct SettingsView: View {
     @State private var showResetConfirmation = false
     @State private var showChangelog = false
     @State private var searchText = ""
+    @State private var editingProvider: String? = nil
+    @State private var editingKeyText: String = ""
+    @State private var showAPIKeyEditor = false
 
     // Well-known providers to always show status for
     private let knownProviders = ["anthropic", "openai", "google", "openrouter", "xai", "deepseek", "groq", "mistral"]
@@ -177,13 +180,11 @@ struct SettingsView: View {
     private var apiKeysSection: some View {
         SettingsSection(title: "API Keys", icon: "key.fill") {
             VStack(spacing: 10) {
-                // Show all known providers with status
                 ForEach(allProviders, id: \.self) { provider in
                     let entry = appState.config.apiKeys[provider]
                     let hasKey = entry != nil && !(entry!.apiKey.isEmpty)
 
                     HStack(spacing: 10) {
-                        // Status dot
                         Circle()
                             .fill(hasKey ? AppTheme.success : AppTheme.error.opacity(0.6))
                             .frame(width: 8, height: 8)
@@ -207,14 +208,30 @@ struct SettingsView: View {
 
                         Spacer()
 
+                        // Edit button
+                        Button(action: {
+                            editingProvider = provider
+                            editingKeyText = entry?.apiKey ?? ""
+                            showAPIKeyEditor = true
+                        }) {
+                            Image(systemName: hasKey ? "pencil" : "plus.circle")
+                                .font(.system(size: 12))
+                                .foregroundColor(AppTheme.accent)
+                        }
+                        .buttonStyle(.plain)
+                        .help(hasKey ? "Edit API key" : "Add API key")
+
+                        // Delete button (only if has key)
                         if hasKey {
-                            Text("Active")
-                                .font(.system(size: 10, weight: .semibold))
-                                .foregroundColor(AppTheme.success)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 3)
-                                .background(AppTheme.success.opacity(0.1))
-                                .clipShape(Capsule())
+                            Button(action: {
+                                appState.removeAPIKey(provider: provider)
+                            }) {
+                                Image(systemName: "trash")
+                                    .font(.system(size: 11))
+                                    .foregroundColor(AppTheme.error.opacity(0.7))
+                            }
+                            .buttonStyle(.plain)
+                            .help("Remove API key")
                         }
                     }
                     .padding(.vertical, 6)
@@ -222,28 +239,51 @@ struct SettingsView: View {
                     .background(AppTheme.bgPrimary.opacity(0.3))
                     .clipShape(RoundedRectangle(cornerRadius: 8))
                 }
-
-                Divider().background(AppTheme.borderGlass)
-
-                // CLI hint
-                HStack(spacing: 6) {
-                    Image(systemName: "terminal")
-                        .font(.system(size: 11))
-                        .foregroundColor(AppTheme.textMuted)
-                    Text("Use ")
-                        .font(.system(size: 11))
-                        .foregroundColor(AppTheme.textMuted)
-                    + Text("osai config set-key <provider>")
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundColor(AppTheme.accent)
-                    + Text(" to add or update keys")
-                        .font(.system(size: 11))
-                        .foregroundColor(AppTheme.textMuted)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.top, 2)
+            }
+            .sheet(isPresented: $showAPIKeyEditor) {
+                apiKeyEditorSheet
             }
         }
+    }
+
+    private var apiKeyEditorSheet: some View {
+        VStack(spacing: 16) {
+            Text(editingProvider.map { "\(providerDisplayName($0)) API Key" } ?? "API Key")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundColor(AppTheme.textPrimary)
+
+            SecureField("Paste API key or token...", text: $editingKeyText)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(size: 13, design: .monospaced))
+
+            if let provider = editingProvider, editingKeyText.hasPrefix("sk-ant-oat") && provider == "anthropic" {
+                HStack(spacing: 4) {
+                    Image(systemName: "info.circle")
+                    Text("OAuth token detected — will use Bearer auth automatically")
+                }
+                .font(.system(size: 11))
+                .foregroundColor(AppTheme.accent)
+            }
+
+            HStack(spacing: 12) {
+                Button("Cancel") {
+                    showAPIKeyEditor = false
+                }
+                .keyboardShortcut(.cancelAction)
+
+                Button("Save") {
+                    if let provider = editingProvider, !editingKeyText.isEmpty {
+                        appState.saveAPIKey(provider: provider, key: editingKeyText)
+                    }
+                    showAPIKeyEditor = false
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(editingKeyText.isEmpty)
+            }
+        }
+        .padding(24)
+        .frame(width: 420)
+        .background(AppTheme.bgSecondary)
     }
 
     // MARK: - Active Model

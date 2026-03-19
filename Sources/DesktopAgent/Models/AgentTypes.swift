@@ -104,6 +104,7 @@ struct AgentConfig {
     let maxScreenshotWidth: Int
     let baseURL: String
     let apiFormat: String  // "anthropic" or "openai"
+    let authType: String   // "api_key" or "bearer"
     let providerId: String
     let profileName: String?
     let fallbackModels: [String]  // "provider/model" strings to try when primary fails
@@ -148,6 +149,7 @@ struct AgentConfig {
         }
 
         let baseURL = fileConfig.getBaseURL(provider: provider.id) ?? provider.defaultBaseURL
+        let authType = fileConfig.getAuthType(provider: provider.id) ?? "api_key"
         let maxTokens = fileConfig.maxTokens ?? Int(ProcessInfo.processInfo.environment["DESKTOP_AGENT_MAX_TOKENS"] ?? "8192") ?? 8192
 
         // Install default program.md, profile templates, and agent definitions if needed
@@ -319,6 +321,7 @@ struct AgentConfig {
             maxScreenshotWidth: fileConfig.maxScreenshotWidth ?? 1280,
             baseURL: baseURL,
             apiFormat: provider.format,
+            authType: authType,
             providerId: provider.id,
             profileName: profileName,
             fallbackModels: fileConfig.fallbackModels ?? []

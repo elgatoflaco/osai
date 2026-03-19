@@ -1042,6 +1042,7 @@ struct DesktopAgentCLI {
                 maxScreenshotWidth: config.maxScreenshotWidth,
                 baseURL: config.baseURL,
                 apiFormat: config.apiFormat,
+                authType: config.authType,
                 providerId: config.providerId,
                 profileName: name,
                 fallbackModels: config.fallbackModels
@@ -1640,20 +1641,25 @@ struct DesktopAgentCLI {
         switch subcmd {
         case "set-key":
             guard args.count >= 3 else {
-                printColored("  Usage: /config set-key <provider> <api-key>", color: .yellow)
+                printColored("  Usage: /config set-key <provider> <api-key> [--bearer]", color: .yellow)
                 printDim("  Providers: \(AIProvider.known.map { $0.id }.joined(separator: ", "))")
                 print()
                 printDim("  Examples:")
                 printDim("    /config set-key anthropic sk-ant-...")
                 printDim("    /config set-key openai sk-proj-...")
                 printDim("    /config set-key google AIza...")
+                print()
+                printDim("  For Claude session tokens (OAuth/claude.ai):")
+                printDim("    /config set-key anthropic <token> --bearer")
+                printDim("    /config set-token anthropic <token>  (shortcut)")
                 return .handled
             }
             let provider = args[1].lowercased()
             let key = args[2]
+            let isBearer = args.contains("--bearer")
 
-            // Validate key format
-            if let warning = validateAPIKey(key: key, provider: provider) {
+            // Validate key format (skip for bearer tokens)
+            if !isBearer, let warning = validateAPIKey(key: key, provider: provider) {
                 printColored("  ⚠ \(warning)", color: .yellow)
                 printDim("  The key will be saved anyway, but double-check it's correct.")
                 print()
@@ -1666,14 +1672,49 @@ struct DesktopAgentCLI {
             }
 
             var fileConfig = AgentConfigFile.load()
-            fileConfig.setAPIKey(provider: provider, key: key)
+            fileConfig.setAPIKey(provider: provider, key: key, authType: isBearer ? "bearer" : nil)
             do {
                 try fileConfig.save()
                 let providerName = AIProvider.find(id: provider)?.name ?? provider
                 let masked = maskKey(key)
-                printColored("  ✓ API key saved for \(providerName): \(masked)", color: .green)
+                let authLabel = isBearer ? " (bearer token)" : ""
+                printColored("  ✓ API key saved for \(providerName): \(masked)\(authLabel)", color: .green)
 
                 // If this is the current provider, reload config
+                if provider == config.providerId {
+                    config = AgentConfig.load()
+                    return .reload
+                }
+            } catch {
+                printColored("  ✗ Error: \(error)", color: .red)
+            }
+            return .handled
+
+        case "set-token":
+            // Shortcut for set-key with --bearer (for Claude session tokens)
+            guard args.count >= 3 else {
+                printColored("  Usage: /config set-token <provider> <token>", color: .yellow)
+                print()
+                printDim("  Sets a bearer/session token (e.g. from claude.ai OAuth).")
+                printDim("  Example: /config set-token anthropic eyJhbG...")
+                return .handled
+            }
+            let provider = args[1].lowercased()
+            let token = args[2]
+
+            guard AIProvider.find(id: provider) != nil else {
+                printColored("  ✗ Unknown provider: '\(provider)'", color: .red)
+                return .handled
+            }
+
+            var fileConfig = AgentConfigFile.load()
+            fileConfig.setAPIKey(provider: provider, key: token, authType: "bearer")
+            do {
+                try fileConfig.save()
+                let providerName = AIProvider.find(id: provider)?.name ?? provider
+                let masked = maskKey(token)
+                printColored("  ✓ Bearer token saved for \(providerName): \(masked)", color: .green)
+
                 if provider == config.providerId {
                     config = AgentConfig.load()
                     return .reload
@@ -1823,7 +1864,7 @@ struct DesktopAgentCLI {
             return .handled
 
         default:
-            printColored("  Subcommands: set-key, remove-key, set-url, import-openclaw, list", color: .yellow)
+            printColored("  Subcommands: set-key, set-token, remove-key, set-url, import-openclaw, list", color: .yellow)
             return .handled
         }
     }

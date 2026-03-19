@@ -8,14 +8,16 @@ final class AIClient {
     private let maxTokens: Int
     private let baseURL: String
     private let format: String  // "anthropic" or "openai"
+    private let authType: String // "api_key" or "bearer"
     private let session: URLSession
 
-    init(apiKey: String, model: String, maxTokens: Int, baseURL: String, format: String) {
+    init(apiKey: String, model: String, maxTokens: Int, baseURL: String, format: String, authType: String = "api_key") {
         self.apiKey = apiKey
         self.model = model
         self.maxTokens = maxTokens
         self.baseURL = baseURL
         self.format = format
+        self.authType = authType
 
         let sessionConfig = URLSessionConfiguration.default
         sessionConfig.timeoutIntervalForRequest = 120
@@ -30,7 +32,8 @@ final class AIClient {
             model: config.model,
             maxTokens: config.maxTokens,
             baseURL: config.baseURL,
-            format: config.apiFormat
+            format: config.apiFormat,
+            authType: config.authType
         )
     }
 
@@ -57,9 +60,17 @@ final class AIClient {
         var request = URLRequest(url: URL(string: baseURL)!)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "content-type")
-        request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+
+        // OAuth tokens (sk-ant-oat*) use Bearer auth + special betas
+        let isOAuth = authType == "bearer" || apiKey.hasPrefix("sk-ant-oat")
+        if isOAuth {
+            request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "authorization")
+            request.setValue("oauth-2025-04-20,claude-code-20250219", forHTTPHeaderField: "anthropic-beta")
+        } else {
+            request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+            request.setValue("token-efficient-tool-use-2025-04-14", forHTTPHeaderField: "anthropic-beta")
+        }
         request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
-        request.setValue("token-efficient-tool-use-2025-04-14", forHTTPHeaderField: "anthropic-beta")
 
         // Build request body with prompt caching support
         let encoder = JSONEncoder()

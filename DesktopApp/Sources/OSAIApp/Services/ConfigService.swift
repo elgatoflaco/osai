@@ -21,6 +21,27 @@ class ConfigService {
         }
     }
 
+    func saveAPIKey(provider: String, key: String) {
+        updateConfig { json in
+            var keys = json["apiKeys"] as? [String: [String: Any]] ?? [:]
+            var entry: [String: Any] = ["api_key": key]
+            // Auto-detect OAuth tokens and set bearer auth
+            if key.hasPrefix("sk-ant-oat") && provider == "anthropic" {
+                entry["auth_type"] = "bearer"
+            }
+            keys[provider] = entry
+            json["apiKeys"] = keys
+        }
+    }
+
+    func removeAPIKey(provider: String) {
+        updateConfig { json in
+            var keys = json["apiKeys"] as? [String: [String: Any]] ?? [:]
+            keys.removeValue(forKey: provider)
+            json["apiKeys"] = keys
+        }
+    }
+
     func toggleGateway(_ name: String, enabled: Bool) {
         updateConfig { json in
             if var gateways = json["gateways"] as? [String: [String: Any]],

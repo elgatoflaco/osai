@@ -283,13 +283,17 @@ struct ModelDefinition: Identifiable, Equatable {
 }
 
 let allModelDefinitions: [ModelDefinition] = [
-    // MARK: Anthropic (via OpenRouter)
-    ModelDefinition(id: "openrouter/anthropic/claude-opus-4.6", displayName: "Claude Opus 4.6", shortName: "Opus 4.6", provider: "Anthropic", providerKey: "openrouter", tag: "Best", icon: "brain"),
-    ModelDefinition(id: "openrouter/anthropic/claude-sonnet-4.6", displayName: "Claude Sonnet 4.6", shortName: "Sonnet 4.6", provider: "Anthropic", providerKey: "openrouter", tag: "Smart", icon: "brain.head.profile"),
-    ModelDefinition(id: "openrouter/anthropic/claude-opus-4.5", displayName: "Claude Opus 4.5", shortName: "Opus 4.5", provider: "Anthropic", providerKey: "openrouter", tag: "Powerful", icon: "brain"),
-    ModelDefinition(id: "openrouter/anthropic/claude-sonnet-4.5", displayName: "Claude Sonnet 4.5", shortName: "Sonnet 4.5", provider: "Anthropic", providerKey: "openrouter", tag: "Smart", icon: "brain.head.profile"),
-    ModelDefinition(id: "openrouter/anthropic/claude-sonnet-4", displayName: "Claude Sonnet 4", shortName: "Sonnet 4", provider: "Anthropic", providerKey: "openrouter", tag: "Smart", icon: "brain.head.profile"),
-    ModelDefinition(id: "openrouter/anthropic/claude-haiku-4.5", displayName: "Claude Haiku 4.5", shortName: "Haiku 4.5", provider: "Anthropic", providerKey: "openrouter", tag: "Fast", icon: "hare"),
+    // MARK: Anthropic (direct API — uses your Anthropic API key or OAuth token)
+    ModelDefinition(id: "anthropic/claude-opus-4-20250514", displayName: "Claude Opus 4", shortName: "Opus 4", provider: "Anthropic", providerKey: "anthropic", tag: "Best", icon: "brain"),
+    ModelDefinition(id: "anthropic/claude-sonnet-4-20250514", displayName: "Claude Sonnet 4", shortName: "Sonnet 4", provider: "Anthropic", providerKey: "anthropic", tag: "Smart", icon: "brain.head.profile"),
+    ModelDefinition(id: "anthropic/claude-haiku-4-5-20251001", displayName: "Claude Haiku 4.5", shortName: "Haiku 4.5", provider: "Anthropic", providerKey: "anthropic", tag: "Fast", icon: "hare"),
+    // MARK: Anthropic (via OpenRouter — uses your OpenRouter credits)
+    ModelDefinition(id: "openrouter/anthropic/claude-opus-4.6", displayName: "Claude Opus 4.6", shortName: "Opus 4.6", provider: "Anthropic OR", providerKey: "openrouter", tag: "Best", icon: "brain"),
+    ModelDefinition(id: "openrouter/anthropic/claude-sonnet-4.6", displayName: "Claude Sonnet 4.6", shortName: "Sonnet 4.6", provider: "Anthropic OR", providerKey: "openrouter", tag: "Smart", icon: "brain.head.profile"),
+    ModelDefinition(id: "openrouter/anthropic/claude-opus-4.5", displayName: "Claude Opus 4.5", shortName: "Opus 4.5", provider: "Anthropic OR", providerKey: "openrouter", tag: "Powerful", icon: "brain"),
+    ModelDefinition(id: "openrouter/anthropic/claude-sonnet-4.5", displayName: "Claude Sonnet 4.5", shortName: "Sonnet 4.5", provider: "Anthropic OR", providerKey: "openrouter", tag: "Smart", icon: "brain.head.profile"),
+    ModelDefinition(id: "openrouter/anthropic/claude-sonnet-4", displayName: "Claude Sonnet 4", shortName: "Sonnet 4", provider: "Anthropic OR", providerKey: "openrouter", tag: "Smart", icon: "brain.head.profile"),
+    ModelDefinition(id: "openrouter/anthropic/claude-haiku-4.5", displayName: "Claude Haiku 4.5", shortName: "Haiku 4.5", provider: "Anthropic OR", providerKey: "openrouter", tag: "Fast", icon: "hare"),
     // MARK: OpenAI
     ModelDefinition(id: "openai/gpt-5", displayName: "GPT-5", shortName: "GPT-5", provider: "OpenAI", providerKey: "openai", tag: "Best", icon: "brain"),
     ModelDefinition(id: "openai/gpt-5-mini", displayName: "GPT-5 Mini", shortName: "GPT-5 Mini", provider: "OpenAI", providerKey: "openai", tag: "Fast", icon: "hare"),
@@ -2435,6 +2439,16 @@ class AppState: ObservableObject {
         return config.apiKeys[providerKey] != nil
     }
 
+    func saveAPIKey(provider: String, key: String) {
+        configService.saveAPIKey(provider: provider, key: key)
+        config.apiKeys[provider] = APIKeyEntry(provider: provider, apiKey: key)
+    }
+
+    func removeAPIKey(provider: String) {
+        configService.removeAPIKey(provider: provider)
+        config.apiKeys.removeValue(forKey: provider)
+    }
+
     /// Look up a ModelDefinition by its id string.
     func modelDefinition(for id: String) -> ModelDefinition? {
         allModelDefinitions.first { $0.id == id }
@@ -2864,17 +2878,45 @@ class AppState: ObservableObject {
 
     func refreshStatus() {
         let wasRunning = gatewayRunning
-        let status = service.gatewayStatus()
-        gatewayRunning = status.running
-        gatewayPID = status.pid
-        loadSpending()
-        tasks = service.loadTasks()
+        let svc = service
+        Task.detached(priority: .utility) {
+            let status = svc.gatewayStatus()
+            let taskList = svc.loadTasks()
 
-        // Notify if gateway stopped unexpectedly
-        if wasRunning && !gatewayRunning {
-            sendNotification(title: "OSAI", body: "Gateway stopped unexpectedly")
-            showToast("Gateway stopped unexpectedly", type: .error)
-            addNotification(title: "Gateway Stopped", message: "Gateway stopped unexpectedly", type: .error)
+            // Read spending file off main thread
+            let spendingPath = NSHomeDirectory() + "/.desktop-agent/spending.json"
+            var todayCost: Double = 0
+            var todayTokens: Int = 0
+            var monthCost: Double = 0
+            if let data = FileManager.default.contents(atPath: spendingPath),
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                let today = ISO8601DateFormatter().string(from: Date()).prefix(10)
+                if let daily = json["daily"] as? [String: Any],
+                   let todayData = daily[String(today)] as? [String: Any] {
+                    todayCost = todayData["cost_usd"] as? Double ?? 0.0
+                    todayTokens = todayData["tokens"] as? Int ?? 0
+                }
+                if let daily = json["daily"] as? [String: Any] {
+                    let thisMonth = String(today.prefix(7))
+                    monthCost = daily.filter { $0.key.hasPrefix(thisMonth) }
+                        .compactMap { ($0.value as? [String: Any])?["cost_usd"] as? Double }
+                        .reduce(0, +)
+                }
+            }
+
+            await MainActor.run {
+                self.gatewayRunning = status.running
+                self.gatewayPID = status.pid
+                self.costToday = todayCost
+                self.tokensToday = todayTokens
+                self.costMonth = monthCost
+                self.tasks = taskList
+                if wasRunning && !status.running {
+                    self.sendNotification(title: "OSAI", body: "Gateway stopped unexpectedly")
+                    self.showToast("Gateway stopped unexpectedly", type: .error)
+                    self.addNotification(title: "Gateway Stopped", message: "Gateway stopped unexpectedly", type: .error)
+                }
+            }
         }
     }
 
@@ -3170,7 +3212,25 @@ class AppState: ObservableObject {
             } else {
                 state.accumulatedText += "\n" + content
             }
-            activeConversation?.messages[idx].content = state.accumulatedText
+            // Throttle UI updates to ~50ms to avoid excessive re-renders
+            let now = Date()
+            let elapsed = now.timeIntervalSince(state.lastTextFlush)
+            if elapsed >= 0.05 {
+                state.lastTextFlush = now
+                state.pendingTextFlush = false
+                activeConversation?.messages[idx].content = state.accumulatedText
+            } else if !state.pendingTextFlush {
+                state.pendingTextFlush = true
+                let sid = streamingId
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05 - elapsed) { [weak self] in
+                    guard let self, state.pendingTextFlush else { return }
+                    state.pendingTextFlush = false
+                    state.lastTextFlush = Date()
+                    if let i = self.activeConversation?.messages.firstIndex(where: { $0.id == sid }) {
+                        self.activeConversation?.messages[i].content = state.accumulatedText
+                    }
+                }
+            }
 
         case .toolStart(let id, let name, let detail):
             ghostEmotion = .working
@@ -3251,6 +3311,10 @@ class AppState: ObservableObject {
             }
 
         case .done:
+            // Final flush of any pending throttled text
+            if !state.accumulatedText.isEmpty {
+                activeConversation?.messages[idx].content = state.accumulatedText
+            }
             activeConversation?.messages[idx].isStreaming = false
             for i in 0..<(activeConversation?.messages[idx].activities.count ?? 0) {
                 activeConversation?.messages[idx].activities[i].isComplete = true
@@ -5720,4 +5784,6 @@ class StreamState: @unchecked Sendable {
     var activeActivityIds: [String: String] = [:]  // event id -> activity id
     var accumulatedText: String = ""
     var firstTextReceived: Bool = false
+    var lastTextFlush: Date = .distantPast
+    var pendingTextFlush: Bool = false
 }
