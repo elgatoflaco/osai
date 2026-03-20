@@ -302,7 +302,19 @@ final class AgentLoop {
                 emitter.emitAgentRoute(agent: "assistant", model: config.model, matchType: "fallback")
             }
         }
-        if (isEarlyMessage || routeResult != nil), let route = routeResult {
+        // Multi-intent detection: if the input needs capabilities beyond the matched agent,
+        // fall through to the main agent which has ALL tools and skills.
+        // E.g., "noticias + envía por WhatsApp" → needs news + wacli → main agent handles both.
+        let multiIntentKeywords = ["whatsapp", "wsp", "mensaje", "envía", "enviar", "manda", "mandar",
+                                   "email", "correo", "calendar", "calendario", "recordar", "reminder",
+                                   "programa", "schedule", "crea", "create", "código", "code", "archivo", "file"]
+        let hasMultipleIntents: Bool = {
+            guard routeResult != nil else { return false }
+            let lowerInput = routingInput.lowercased()
+            return multiIntentKeywords.contains(where: { lowerInput.contains($0) })
+        }()
+
+        if (isEarlyMessage || routeResult != nil), let route = routeResult, !hasMultipleIntents {
             let specializedAgent = route.agent
             // Claude Code backend: delegate directly to CLI
             if specializedAgent.usesClaudeCode {
@@ -2203,11 +2215,29 @@ final class AgentLoop {
         let agentBaseURL = fileConfig.getBaseURL(provider: resolved.provider.id) ?? resolved.provider.defaultBaseURL
         let agentAuthType = fileConfig.getAuthType(provider: resolved.provider.id) ?? "api_key"
 
+        // Build system prompt: agent's own prompt + matched skills + autonomy rules from program.md
+        var agentSystemPrompt = agent.systemPrompt
+        let skillContext = SkillManager.buildSkillContext(for: input)
+        if !skillContext.isEmpty {
+            agentSystemPrompt += "\n\n## ACTIVE SKILLS (follow these instructions):\n" + skillContext
+        }
+        // Inject core autonomy rules so specialized agents don't ask dumb questions
+        agentSystemPrompt += """
+
+        \n\n## CRITICAL RULES:
+        - NEVER ask the user for information you can look up yourself (phone numbers, contacts, file paths).
+        - NEVER ask "¿Quieres que...?" — the user already told you what to do. Just do it.
+        - Use tools to find information (contacts, files, etc.) before asking the user.
+        - If you need a WhatsApp number, search with `wacli contacts search "name" --json`.
+        - If you need a file, search with `spotlight_search` or `run_shell` with `find`.
+        - Act first, report after. Be autonomous.
+        """
+
         let agentConfig = AgentConfig(
             apiKey: agentKey,
             model: resolved.model,
             maxTokens: config.maxTokens,
-            systemPrompt: agent.systemPrompt,
+            systemPrompt: agentSystemPrompt,
             verbose: config.verbose,
             maxScreenshotWidth: config.maxScreenshotWidth,
             baseURL: agentBaseURL,

@@ -2376,25 +2376,31 @@ struct ActivityStrip: View {
 
     @State private var showAllTasks = false
 
+    /// Auto-expand when streaming and there are active tasks
+    private var shouldAutoExpand: Bool {
+        isStreaming && toolActivities.count > 1
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            // Summary row: pill cards + expand toggle
-            HStack(spacing: 0) {
-                // Wrapping pill cards
+        VStack(alignment: .leading, spacing: 6) {
+            // Special events row (doom loop, compaction, delegations)
+            let specialActivities = activities.filter { $0.type == .doomLoop || $0.type == .compaction || $0.type == .agentDelegate }
+            if !specialActivities.isEmpty {
                 FlowLayout(spacing: 5) {
-                    // Doom loop warnings
-                    ForEach(activities.filter({ $0.type == .doomLoop })) { dl in
-                        doomLoopPill(dl)
+                    ForEach(specialActivities) { activity in
+                        switch activity.type {
+                        case .doomLoop: doomLoopPill(activity)
+                        case .compaction: compactionPill(activity)
+                        case .agentDelegate: delegationPill(activity)
+                        default: EmptyView()
+                        }
                     }
-                    // Compaction events
-                    ForEach(activities.filter({ $0.type == .compaction })) { comp in
-                        compactionPill(comp)
-                    }
-                    // Agent delegations (sub-agents, batch)
-                    ForEach(activities.filter({ $0.type == .agentDelegate })) { del in
-                        delegationPill(del)
-                    }
-                    // Tool pills
+                }
+            }
+
+            // Tool pills row
+            HStack(spacing: 0) {
+                FlowLayout(spacing: 5) {
                     ForEach(Array(groupedTools.enumerated()), id: \.offset) { _, group in
                         toolPill(name: group.name, count: group.count, activities: group.activities)
                     }
@@ -2406,10 +2412,10 @@ struct ActivityStrip: View {
 
                 Spacer(minLength: 4)
 
-                // Expand/collapse individual tasks
+                // Expand/collapse toggle
                 if toolActivities.count > 1 {
                     Button(action: { withAnimation(.easeInOut(duration: 0.2)) { showAllTasks.toggle() } }) {
-                        Image(systemName: showAllTasks ? "chevron.up" : "chevron.down")
+                        Image(systemName: (showAllTasks || shouldAutoExpand) ? "chevron.up" : "chevron.down")
                             .font(.system(size: 8, weight: .medium))
                             .foregroundColor(AppTheme.textMuted)
                             .frame(width: 20, height: 20)
@@ -2421,9 +2427,9 @@ struct ActivityStrip: View {
                 }
             }
 
-            // Expanded task list — individual rows with detail + cancel
-            if showAllTasks {
-                VStack(spacing: 2) {
+            // Expanded task list — auto-expand while streaming, or manual toggle
+            if showAllTasks || shouldAutoExpand {
+                VStack(spacing: 3) {
                     ForEach(toolActivities) { activity in
                         taskRow(activity)
                     }
@@ -2445,73 +2451,86 @@ struct ActivityStrip: View {
 
     @ViewBuilder
     private func taskRow(_ activity: ActivityItem) -> some View {
-        HStack(spacing: 6) {
-            // Status icon
-            if activity.isComplete {
-                Image(systemName: activity.success == false ? "xmark.circle.fill" : "checkmark.circle.fill")
-                    .font(.system(size: 10))
-                    .foregroundColor(activity.success == false ? AppTheme.error : AppTheme.success)
-            } else {
-                ProgressView().controlSize(.mini).scaleEffect(0.5)
-            }
-
-            // Tool icon + name
-            Image(systemName: toolCategoryIcon(activity.label))
-                .font(.system(size: 9))
-                .foregroundColor(AppTheme.textMuted)
-            Text(activity.label)
-                .font(.system(size: 10, weight: .medium))
-                .foregroundColor(AppTheme.textSecondary)
-
-            // Detail (truncated)
-            if !activity.detail.isEmpty {
-                Text(activity.detail)
-                    .font(.system(size: 9, design: .monospaced))
-                    .foregroundColor(AppTheme.textMuted)
-                    .lineLimit(1)
-                    .frame(maxWidth: 200, alignment: .leading)
-            }
-
-            Spacer()
-
-            // Duration
-            if let ms = activity.durationMs {
-                Text(formatMs(ms))
-                    .font(.system(size: 9, design: .monospaced))
-                    .foregroundColor(AppTheme.textMuted)
-            }
-
-            // Cancel button for active tasks
-            if !activity.isComplete {
-                Button(action: { onCancel?() }) {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 10))
-                        .foregroundColor(AppTheme.error.opacity(0.6))
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 6) {
+                // Status icon
+                if activity.isComplete {
+                    Image(systemName: activity.success == false ? "xmark.circle.fill" : "checkmark.circle.fill")
+                        .font(.system(size: 11))
+                        .foregroundColor(activity.success == false ? AppTheme.error : AppTheme.success)
+                } else {
+                    ProgressView().controlSize(.mini).scaleEffect(0.6)
                 }
-                .buttonStyle(.plain)
-            }
 
-            // Expand output
-            if activity.output != nil || !activity.detail.isEmpty {
-                Button(action: {
-                    withAnimation(.easeInOut(duration: 0.15)) {
-                        expandedOutputId = expandedOutputId == activity.id ? nil : activity.id
-                    }
-                }) {
-                    Image(systemName: expandedOutputId == activity.id ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 7))
+                // Tool icon + name
+                Image(systemName: toolCategoryIcon(activity.label))
+                    .font(.system(size: 10))
+                    .foregroundColor(AppTheme.textMuted)
+                Text(toolDisplayName(activity.label))
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(AppTheme.textSecondary)
+
+                // Detail (the command/input — shown prominently)
+                if !activity.detail.isEmpty {
+                    Text(activity.detail)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundColor(AppTheme.textPrimary.opacity(0.7))
+                        .lineLimit(1)
+                        .frame(maxWidth: 350, alignment: .leading)
+                }
+
+                Spacer()
+
+                // Duration
+                if let ms = activity.durationMs {
+                    Text(formatMs(ms))
+                        .font(.system(size: 9, design: .monospaced))
                         .foregroundColor(AppTheme.textMuted)
                 }
-                .buttonStyle(.plain)
+
+                // Cancel button for active tasks
+                if !activity.isComplete {
+                    Button(action: { onCancel?() }) {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 11))
+                            .foregroundColor(AppTheme.error.opacity(0.6))
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                // Expand output toggle
+                if activity.output != nil || !activity.detail.isEmpty {
+                    Button(action: {
+                        withAnimation(.easeInOut(duration: 0.15)) {
+                            expandedOutputId = expandedOutputId == activity.id ? nil : activity.id
+                        }
+                    }) {
+                        Image(systemName: expandedOutputId == activity.id ? "chevron.down" : "chevron.right")
+                            .font(.system(size: 8))
+                            .foregroundColor(AppTheme.textMuted)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+            // Inline output preview for completed tasks (first 120 chars)
+            if activity.isComplete, let output = activity.output, !output.isEmpty,
+               output != "(no output)" && output != "OK (no output)",
+               expandedOutputId != activity.id {
+                Text(String(output.prefix(120)).replacingOccurrences(of: "\n", with: " "))
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundColor(AppTheme.textMuted.opacity(0.7))
+                    .lineLimit(1)
+                    .padding(.leading, 27)
             }
         }
-        .padding(.horizontal, 6).padding(.vertical, 3)
+        .padding(.horizontal, 8).padding(.vertical, 4)
         .background(
             expandedOutputId == activity.id
                 ? AppTheme.accent.opacity(0.05)
-                : Color.clear
+                : AppTheme.bgCard.opacity(0.3)
         )
-        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 
     // MARK: - Tool Pill Card
@@ -2536,28 +2555,28 @@ struct ActivityStrip: View {
                 // Status dot
                 if allComplete {
                     Image(systemName: anyFailed ? "xmark" : "checkmark")
-                        .font(.system(size: 7, weight: .bold))
+                        .font(.system(size: 8, weight: .bold))
                         .foregroundColor(anyFailed ? AppTheme.error : AppTheme.success)
                 } else {
                     ProgressView()
                         .controlSize(.mini)
-                        .scaleEffect(0.5)
+                        .scaleEffect(0.6)
                 }
 
                 // Icon
                 Image(systemName: toolCategoryIcon(name))
-                    .font(.system(size: 9))
+                    .font(.system(size: 10))
                     .foregroundColor(AppTheme.textSecondary)
 
                 // Name + count
                 Text(toolDisplayName(name))
-                    .font(.system(size: 10, weight: .medium))
+                    .font(.system(size: 11, weight: .medium))
                     .foregroundColor(AppTheme.textSecondary)
                     .lineLimit(1)
 
                 if count > 1 {
                     Text("\u{00D7}\(count)")
-                        .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
                         .foregroundColor(AppTheme.accent)
                 }
 
@@ -2568,8 +2587,8 @@ struct ActivityStrip: View {
                         .foregroundColor(AppTheme.textMuted)
                 }
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
             .background(
                 RoundedRectangle(cornerRadius: 8)
                     .fill(isExpanded ? AppTheme.accent.opacity(0.1) : AppTheme.bgCard.opacity(0.6))

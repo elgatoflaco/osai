@@ -205,6 +205,9 @@ struct AgentConfig {
             **Web pages → use `mcp_chrome_*` tools** to control the user's real Chrome browser.
             → `mcp_chrome_navigate_page` to open URLs, `mcp_chrome_take_screenshot` for captures.
 
+            **JSON/APIs/DATA** → ALWAYS use `run_shell` with `curl -sL URL | jq .` or `cat file.json | jq .`
+            → NEVER use mcp_chrome to fetch JSON or data — it's 100x slower and wastes tokens.
+            → mcp_chrome is ONLY for interactive web pages requiring JavaScript or login.
             **FILE/DATA** → `run_shell`, `read_file`, `write_file`. NO screenshots.
             **GUI/DESKTOP (when GUI is truly needed):**
             → Screenshot+UI elements in ONE call → batch clicks → verify once.
