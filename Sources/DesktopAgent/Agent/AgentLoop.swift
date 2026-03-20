@@ -305,13 +305,32 @@ final class AgentLoop {
         // Multi-intent detection: if the input needs capabilities beyond the matched agent,
         // fall through to the main agent which has ALL tools and skills.
         // E.g., "noticias + envía por WhatsApp" → needs news + wacli → main agent handles both.
-        let multiIntentKeywords = ["whatsapp", "wsp", "mensaje", "envía", "enviar", "manda", "mandar",
-                                   "email", "correo", "calendar", "calendario", "recordar", "reminder",
-                                   "programa", "schedule", "crea", "create", "código", "code", "archivo", "file"]
+        // Detect multi-intent: if the input mentions capabilities outside the matched agent's scope,
+        // use the main agent which has ALL tools (wacli, email, calendar, files, etc.)
+        let multiIntentKeywords = [
+            // Messaging
+            "whatsapp", "wsp", "mensaje", "envía", "envias", "enviar", "manda", "mandar",
+            "envíale", "enviale", "mándale", "mandale", "dile", "escríbele", "escribele",
+            // Email
+            "email", "correo", "mail",
+            // Calendar
+            "calendar", "calendario", "evento", "reunión", "reunion",
+            // Tasks
+            "recordar", "reminder", "programa", "schedule", "tarea",
+            // Code
+            "código", "codigo", "code", "programa", "script", "bug", "fix",
+            // Files
+            "archivo", "file", "guarda", "guardar", "save",
+        ]
         let hasMultipleIntents: Bool = {
             guard routeResult != nil else { return false }
+            // Normalize: remove accents for matching
             let lowerInput = routingInput.lowercased()
-            return multiIntentKeywords.contains(where: { lowerInput.contains($0) })
+                .folding(options: .diacriticInsensitive, locale: .init(identifier: "es"))
+            return multiIntentKeywords.contains(where: {
+                let normalizedKeyword = $0.folding(options: .diacriticInsensitive, locale: .init(identifier: "es"))
+                return lowerInput.contains(normalizedKeyword)
+            })
         }()
 
         if (isEarlyMessage || routeResult != nil), let route = routeResult, !hasMultipleIntents {

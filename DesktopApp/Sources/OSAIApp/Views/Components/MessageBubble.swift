@@ -4848,11 +4848,12 @@ struct StreamingStatusBar: View {
 
     private var statusText: String {
         if let active = activities.last(where: { !$0.isComplete }) {
+            let detail = active.detail.isEmpty ? "" : ": \(String(active.detail.prefix(80)))"
             switch active.type {
             case .toolCall:
-                return "Running tool: \(active.label)"
+                return "\(active.label)\(detail)"
             case .mcpLoading:
-                return "Loading: \(active.label)"
+                return "Loading \(active.label)..."
             case .thinking:
                 return "Thinking..."
             case .agentRoute:
@@ -4867,10 +4868,9 @@ struct StreamingStatusBar: View {
                 return active.label
             }
         }
-        if let last = activities.last {
-            if last.type == .toolCall && last.isComplete {
-                return "Analyzing results..."
-            }
+        let completed = activities.filter { $0.isComplete && $0.type == .toolCall }.count
+        if completed > 0 {
+            return "Analyzing \(completed) results..."
         }
         return "Thinking..."
     }
@@ -4884,18 +4884,22 @@ struct StreamingStatusBar: View {
 
     var body: some View {
         HStack(spacing: 8) {
+            ProgressView()
+                .controlSize(.small)
+                .scaleEffect(0.7)
             Text(statusText)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundColor(AppTheme.textMuted)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(AppTheme.textSecondary)
+                .lineLimit(1)
 
             Spacer()
 
             Text(elapsedString)
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundColor(AppTheme.textMuted.opacity(0.7))
+                .font(.system(size: 12, weight: .medium, design: .monospaced))
+                .foregroundColor(AppTheme.accent.opacity(0.8))
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 6)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
         .background(
             RoundedRectangle(cornerRadius: 8)
                 .fill(AppTheme.bgCard.opacity(0.5))
