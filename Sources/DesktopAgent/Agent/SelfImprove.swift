@@ -147,13 +147,21 @@ struct SelfModificationTools {
             ),
             ClaudeTool(
                 name: "modify_config",
-                description: "Modify agent config: max tokens, screenshot width, active model.",
+                description: "Modify agent configuration. Can change: active model, max tokens, API keys, MCP servers, spending limits. Use `action` to specify the operation.",
                 inputSchema: InputSchema(
                     type: "object",
                     properties: [
+                        "action": PropertySchema(type: "string", description: "Operation: set_model, set_max_tokens, set_api_key, remove_api_key, add_mcp_server, remove_mcp_server, set_spending_limits, show_config", enumValues: nil),
+                        "active_model": PropertySchema(type: "string", description: "Model in provider/model format (e.g. anthropic/claude-haiku-4-5-20251001)", enumValues: nil),
                         "max_tokens": PropertySchema(type: "integer", description: "Max tokens per response (1024-32768)", enumValues: nil),
                         "max_screenshot_width": PropertySchema(type: "integer", description: "Max screenshot width in pixels (640-2560)", enumValues: nil),
-                        "active_model": PropertySchema(type: "string", description: "Active model (provider/model format)", enumValues: nil)
+                        "provider": PropertySchema(type: "string", description: "Provider name for API key operations (anthropic, openai, openrouter, google, etc.)", enumValues: nil),
+                        "api_key": PropertySchema(type: "string", description: "API key value", enumValues: nil),
+                        "server_name": PropertySchema(type: "string", description: "MCP server name for add/remove operations", enumValues: nil),
+                        "server_command": PropertySchema(type: "string", description: "Command for MCP server (e.g. npx)", enumValues: nil),
+                        "server_args": PropertySchema(type: "string", description: "Comma-separated args for MCP server", enumValues: nil),
+                        "daily_usd": PropertySchema(type: "number", description: "Daily spending limit in USD", enumValues: nil),
+                        "monthly_usd": PropertySchema(type: "number", description: "Monthly spending limit in USD", enumValues: nil)
                     ],
                     required: nil
                 )
@@ -239,34 +247,107 @@ struct SelfModificationTools {
 
         case "modify_config":
             var fileConfig = AgentConfigFile.load()
+            let action = input["action"]?.stringValue ?? ""
             var changes: [String] = []
 
-            if let maxTokens = input["max_tokens"]?.intValue {
+            switch action {
+            case "show_config":
+                // Return sanitized config (mask API keys)
+                var info: [String] = []
+                info.append("activeModel: \(fileConfig.activeModel ?? "default")")
+                info.append("maxTokens: \(fileConfig.maxTokens ?? 8192)")
+                info.append("apiKeys: \((fileConfig.apiKeys ?? [:]).keys.sorted().joined(separator: ", "))")
+                info.append("mcpServers: \((fileConfig.mcpServers ?? [:]).keys.sorted().joined(separator: ", "))")
+                if let limits = fileConfig.spendingLimits {
+                    info.append("spending: daily=$\(limits.dailyUsd ?? 0), monthly=$\(limits.monthlyUsd ?? 0)")
+                }
+                return ToolResult(success: true, output: info.joined(separator: "\n"), screenshot: nil)
+
+            case "set_model":
+                guard let model = input["active_model"]?.stringValue else {
+                    return ToolResult(success: false, output: "Missing active_model parameter", screenshot: nil)
+                }
+                fileConfig.activeModel = model
+                changes.append("active_model: \(model)")
+
+            case "set_max_tokens":
+                guard let maxTokens = input["max_tokens"]?.intValue else {
+                    return ToolResult(success: false, output: "Missing max_tokens parameter", screenshot: nil)
+                }
                 let clamped = max(1024, min(32768, maxTokens))
                 fileConfig.maxTokens = clamped
                 changes.append("max_tokens: \(clamped)")
-            }
-            if let maxWidth = input["max_screenshot_width"]?.intValue {
-                let clamped = max(640, min(2560, maxWidth))
-                fileConfig.maxScreenshotWidth = clamped
-                changes.append("max_screenshot_width: \(clamped)")
-            }
-            if let model = input["active_model"]?.stringValue {
-                if AIProvider.resolve(modelString: model) != nil {
+
+            case "set_api_key":
+                guard let provider = input["provider"]?.stringValue,
+                      let key = input["api_key"]?.stringValue else {
+                    return ToolResult(success: false, output: "Missing provider or api_key", screenshot: nil)
+                }
+                let authType = key.hasPrefix("sk-ant-oat") ? "bearer" : nil
+                fileConfig.setAPIKey(provider: provider, key: key, authType: authType)
+                changes.append("api_key for \(provider): set")
+
+            case "remove_api_key":
+                guard let provider = input["provider"]?.stringValue else {
+                    return ToolResult(success: false, output: "Missing provider", screenshot: nil)
+                }
+                fileConfig.removeAPIKey(provider: provider)
+                changes.append("api_key for \(provider): removed")
+
+            case "add_mcp_server":
+                guard let name = input["server_name"]?.stringValue,
+                      let command = input["server_command"]?.stringValue else {
+                    return ToolResult(success: false, output: "Missing server_name or server_command", screenshot: nil)
+                }
+                let args = input["server_args"]?.stringValue?.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespaces) }
+                let config = MCPServerConfig(command: command, args: args, env: nil, description: "Added via modify_config", timeout: nil)
+                if fileConfig.mcpServers == nil { fileConfig.mcpServers = [:] }
+                fileConfig.mcpServers?[name] = config
+                changes.append("mcp_server \(name): added")
+
+            case "remove_mcp_server":
+                guard let name = input["server_name"]?.stringValue else {
+                    return ToolResult(success: false, output: "Missing server_name", screenshot: nil)
+                }
+                fileConfig.mcpServers?.removeValue(forKey: name)
+                changes.append("mcp_server \(name): removed")
+
+            case "set_spending_limits":
+                let daily = input["daily_usd"]?.doubleValue
+                let monthly = input["monthly_usd"]?.doubleValue
+                if daily == nil && monthly == nil {
+                    return ToolResult(success: false, output: "Specify daily_usd or monthly_usd", screenshot: nil)
+                }
+                var limits = fileConfig.spendingLimits ?? SpendingLimits()
+                if let d = daily { limits.dailyUsd = d; changes.append("daily_usd: $\(d)") }
+                if let m = monthly { limits.monthlyUsd = m; changes.append("monthly_usd: $\(m)") }
+                fileConfig.spendingLimits = limits
+
+            default:
+                // Legacy: support direct params without action
+                if let maxTokens = input["max_tokens"]?.intValue {
+                    let clamped = max(1024, min(32768, maxTokens))
+                    fileConfig.maxTokens = clamped
+                    changes.append("max_tokens: \(clamped)")
+                }
+                if let maxWidth = input["max_screenshot_width"]?.intValue {
+                    let clamped = max(640, min(2560, maxWidth))
+                    fileConfig.maxScreenshotWidth = clamped
+                    changes.append("max_screenshot_width: \(clamped)")
+                }
+                if let model = input["active_model"]?.stringValue {
                     fileConfig.activeModel = model
                     changes.append("active_model: \(model)")
-                } else {
-                    return ToolResult(success: false, output: "Unknown model: \(model)", screenshot: nil)
                 }
             }
 
             if changes.isEmpty {
-                return ToolResult(success: false, output: "No valid changes specified", screenshot: nil)
+                return ToolResult(success: false, output: "No valid changes specified. Use action: show_config to see current config.", screenshot: nil)
             }
 
             do {
                 try fileConfig.save()
-                return ToolResult(success: true, output: "Config updated: \(changes.joined(separator: ", ")). Restart for changes to take effect.", screenshot: nil)
+                return ToolResult(success: true, output: "Config updated: \(changes.joined(separator: ", ")). Changes take effect on next interaction.", screenshot: nil)
             } catch {
                 return ToolResult(success: false, output: "Error saving config: \(error)", screenshot: nil)
             }

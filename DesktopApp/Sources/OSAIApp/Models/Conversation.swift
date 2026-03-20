@@ -47,11 +47,14 @@ struct ActivityItem: Identifiable, Equatable {
     var output: String?
 
     enum ActivityType: String, Equatable {
-        case mcpLoading    // Loading MCP server
-        case toolCall      // Running a tool
-        case thinking      // Agent thinking
-        case agentRoute    // Specialized agent selected
-        case status        // Informational status message
+        case mcpLoading       // Loading MCP server
+        case toolCall         // Running a tool
+        case thinking         // Agent thinking
+        case agentRoute       // Specialized agent selected
+        case agentDelegate    // Agent delegating to sub-agent
+        case doomLoop         // Agent stuck in repetitive loop
+        case compaction       // Context compaction occurred
+        case status           // Informational status message
     }
 
     var icon: String {
@@ -60,9 +63,17 @@ struct ActivityItem: Identifiable, Equatable {
         case .toolCall: return "wrench.and.screwdriver"
         case .thinking: return "brain"
         case .agentRoute: return "arrow.triangle.branch"
+        case .agentDelegate: return "person.2.wave.2"
+        case .doomLoop: return "exclamationmark.arrow.circlepath"
+        case .compaction: return "arrow.down.right.and.arrow.up.left"
         case .status: return "info.circle"
         }
     }
+
+    /// Parent agent name (for delegation tree rendering)
+    var parentAgent: String?
+    /// Sub-agent task description
+    var taskDescription: String?
 }
 
 struct EditRecord: Codable, Identifiable, Equatable {
@@ -87,6 +98,7 @@ struct ChatMessage: Identifiable, Equatable {
     var toolName: String?
     var toolResult: String?
     var agentName: String?
+    var agentMatchType: String?
     var reaction: MessageReaction?
     var isBookmarked: Bool = false
     /// Time in milliseconds from user send to first streaming text (assistant messages only)
@@ -96,6 +108,10 @@ struct ChatMessage: Identifiable, Equatable {
     var annotation: String?
     var isPinned: Bool = false
     var suggestions: [String] = []
+    /// Session summary data (cost, turns, cache hits, context %)
+    var sessionCost: Double?
+    var sessionTurns: Int?
+    var sessionContextPct: Int?
 
     static func == (lhs: ChatMessage, rhs: ChatMessage) -> Bool {
         lhs.id == rhs.id && lhs.content == rhs.content && lhs.isStreaming == rhs.isStreaming &&
@@ -103,7 +119,7 @@ struct ChatMessage: Identifiable, Equatable {
         lhs.isBookmarked == rhs.isBookmarked && lhs.responseTimeMs == rhs.responseTimeMs &&
         lhs.editHistory == rhs.editHistory && lhs.replyToMessageId == rhs.replyToMessageId &&
         lhs.annotation == rhs.annotation && lhs.isPinned == rhs.isPinned &&
-        lhs.suggestions == rhs.suggestions
+        lhs.suggestions == rhs.suggestions && lhs.sessionCost == rhs.sessionCost
     }
 }
 

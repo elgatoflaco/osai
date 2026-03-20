@@ -28,6 +28,9 @@ final class AgentLoop {
     // Loop guard: recent tool call hashes for ping-pong detection
     private var recentToolCallHashes: [String] = []
 
+    // Doom loop detection: track exact tool calls (name + input hash) for identical-call detection
+    private var recentExactCalls: [String] = []
+
     // Gateway support
     var gatewayContext: GatewayDeliveryContext?
     var onStreamText: ((String) async -> Void)?
@@ -279,9 +282,9 @@ final class AgentLoop {
         }
         // Route on early messages OR when user explicitly asks for an agent capability
         let isEarlyMessage = conversationHistory.count <= 2
-        let routedAgent = AgentRegistry.route(input: routingInput)
+        let routeResult = AgentRegistry.route(input: routingInput)
         // ALWAYS log routing result to file for debugging
-        let logMsg = "[ROUTE] input='\(String(routingInput.prefix(60)))' agents_loaded=\(AgentRegistry.loadAll().count) matched=\(routedAgent?.name ?? "NONE") model=\(routedAgent?.model ?? "N/A") history=\(conversationHistory.count)\n"
+        let logMsg = "[ROUTE] input='\(String(routingInput.prefix(60)))' agents_loaded=\(AgentRegistry.loadAll().count) matched=\(routeResult?.agent.name ?? "NONE") model=\(routeResult?.agent.model ?? "N/A") match=\(routeResult?.matchType.rawValue ?? "none") history=\(conversationHistory.count)\n"
         if let data = logMsg.data(using: .utf8) {
             let logPath = NSHomeDirectory() + "/.desktop-agent/routing.log"
             if FileManager.default.fileExists(atPath: logPath) {
@@ -290,20 +293,20 @@ final class AgentLoop {
                 FileManager.default.createFile(atPath: logPath, contents: data)
             }
         }
-        // Emit to app
+        // Emit agent route — always show clean routing info (never debug prefixes)
         if let emitter = appModeEmitter {
-            if let agent = routedAgent {
-                emitter.emitStatus("[AgentRouter] → \(agent.name) (model: \(agent.model))")
+            if let route = routeResult {
+                emitter.emitAgentRoute(agent: route.agent.name, model: route.agent.model, matchType: route.matchType.rawValue)
             } else {
-                emitter.emitStatus("[AgentRouter] No agent matched for: '\(String(routingInput.prefix(40)))'")
+                // No match — emit "assistant" as the general-purpose fallback
+                emitter.emitAgentRoute(agent: "assistant", model: config.model, matchType: "fallback")
             }
         }
-        if (isEarlyMessage || routedAgent != nil), let specializedAgent = routedAgent {
+        if (isEarlyMessage || routeResult != nil), let route = routeResult {
+            let specializedAgent = route.agent
             // Claude Code backend: delegate directly to CLI
             if specializedAgent.usesClaudeCode {
-                if let emitter = appModeEmitter {
-                    emitter.emitAgentRoute(agent: specializedAgent.name, model: "claude-code")
-                } else if verbose {
+                if !verbose {} else {
                     printColored("  \u{1F3AF} Routing to Claude Code agent: \(specializedAgent.name)", color: .magenta)
                 }
                 let result = try await runClaudeCodeAgent(agent: specializedAgent, input: userInput)
@@ -314,48 +317,44 @@ final class AgentLoop {
             }
             // API backend: verify the model can be resolved
             else if let resolved = AIProvider.resolve(modelString: specializedAgent.model) {
-                if let emitter = appModeEmitter {
-                    emitter.emitAgentRoute(agent: specializedAgent.name, model: specializedAgent.model)
-                } else if verbose {
+                if verbose {
                     printColored("  \u{1F3AF} Routing to specialized agent: \(specializedAgent.name) (\(specializedAgent.model))", color: .magenta)
                 }
                 do {
-                    let result = try await runSpecializedAgent(agent: specializedAgent, resolved: resolved, input: userInput)
-                    if !result.isEmpty {
-                        // Emit text for desktop app (specialized agent doesn't go through normal emitter path)
-                        if let emitter = appModeEmitter {
-                            emitter.emitText(result)
-                        }
-                        conversationHistory.append(ClaudeMessage(role: "assistant", content: [.text(result)]))
-                        return result
+                    let firstResult = try await runSpecializedAgent(agent: specializedAgent, resolved: resolved, input: userInput)
+                    if !firstResult.isEmpty {
+                        // Emit text for desktop app
+                        appModeEmitter?.emitText(firstResult)
+
+                        // Chain routing: check if a second agent should handle part of the request
+                        // Look for intent keywords in the ORIGINAL input that weren't covered by the first agent
+                        let chainResult = try await chainToNextAgent(
+                            originalInput: routingInput,
+                            firstAgentName: specializedAgent.name,
+                            firstResult: firstResult
+                        )
+
+                        let fullResult = chainResult != nil ? firstResult + "\n\n" + chainResult! : firstResult
+                        conversationHistory.append(ClaudeMessage(role: "assistant", content: [.text(fullResult)]))
+                        return fullResult
                     } else {
-                        let msg = "Agent '\(specializedAgent.name)' returned empty response. Falling back."
-                        appModeEmitter?.emitStatus(msg)
-                        printColored("  ⚠ \(msg)", color: .yellow)
+                        printColored("  ⚠ Agent '\(specializedAgent.name)' returned empty response. Falling back.", color: .yellow)
                     }
                 } catch {
                     // Specialized agent failed — fall through to main model
-                    let msg = "Agent '\(specializedAgent.name)' failed: \(error). Falling back to main model."
-                    // Log to file for debugging
                     let errorLog = "[AGENT-ERROR] \(specializedAgent.name) model=\(specializedAgent.model) error=\(error)\n"
                     if let data = errorLog.data(using: .utf8) {
                         let logPath = NSHomeDirectory() + "/.desktop-agent/routing.log"
                         if let fh = FileHandle(forWritingAtPath: logPath) { fh.seekToEndOfFile(); fh.write(data); fh.closeFile() }
                         else { FileManager.default.createFile(atPath: logPath, contents: data) }
                     }
-                    if let emitter = appModeEmitter {
-                        emitter.emitStatus(msg)
-                    } else {
-                        printColored("  \u{26A0} \(msg)", color: .yellow)
+                    if verbose {
+                        printColored("  \u{26A0} Agent '\(specializedAgent.name)' failed: \(error). Falling back.", color: .yellow)
                     }
                 }
             } else {
-                // Model not resolved — always warn (this is a config error)
-                let msg = "⚠ Agent '\(specializedAgent.name)' model '\(specializedAgent.model)' could not be resolved. Using main model."
-                if let emitter = appModeEmitter {
-                    emitter.emitStatus(msg)
-                }
-                printColored("  \(msg)", color: .yellow)
+                // Model not resolved — config error, log it
+                printColored("  ⚠ Agent '\(specializedAgent.name)' model '\(specializedAgent.model)' could not be resolved. Using main model.", color: .yellow)
             }
         }
 
@@ -390,6 +389,9 @@ final class AgentLoop {
 
         // Add discover_tools meta-tool so the agent can request more tools if needed
         filteredTools.append(ToolDefinitions.discoverToolsTool)
+
+        // Add continue_thinking tool so the agent can extend reasoning on complex tasks
+        filteredTools.append(ToolDefinitions.continueThinkingTool)
 
         // Track dynamically discovered tools that get added mid-conversation
         var dynamicToolCategories: Set<ToolCategory> = []
@@ -441,10 +443,10 @@ final class AgentLoop {
                 if let desc = description {
                     let postTokens = context.estimateMessageTokens(conversationHistory)
                     let saved = max(preTokens - postTokens, 0)
-                    if tier >= 2 {
+                    if tier >= 1 {
                         if let emitter = appModeEmitter {
-                            emitter.emitStatus("\(desc): \(preCount) → \(conversationHistory.count) messages, saved ~\(context.fmtTokens(saved)) tokens")
-                        } else {
+                            emitter.emitCompaction(tier: tier, messagesBefore: preCount, messagesAfter: conversationHistory.count, tokensSaved: saved)
+                        } else if tier >= 2 {
                             printColored("  ✓ \(desc): \(preCount) → \(conversationHistory.count) messages, saved ~\(context.fmtTokens(saved)) tokens", color: .green)
                         }
                     }
@@ -544,7 +546,7 @@ final class AgentLoop {
                 }
             }
 
-            // === Loop Guard: Ping-pong detection ===
+            // === Loop Guard: Ping-pong detection + Doom loop detection ===
             if !pendingToolCalls.isEmpty {
                 let callHash = pendingToolCalls.map { "\($0.name):\($0.input.keys.sorted().joined())" }.joined(separator: "|")
                 recentToolCallHashes.append(callHash)
@@ -562,6 +564,31 @@ final class AgentLoop {
                             printColored("  ⚠ Loop pattern detected (ping-pong)", color: .yellow)
                         }
                         conversationHistory.append(ClaudeMessage(role: "user", content: [.text(warning)]))
+                    }
+                }
+
+                // Doom loop detection: identical tool call (name + full input) repeated 3+ times
+                for tc in pendingToolCalls {
+                    let inputJSON = tc.input.map { "\($0.key)=\($0.value.value)" }.sorted().joined(separator: "&")
+                    let exactHash = "\(tc.name)|\(inputJSON)"
+                    recentExactCalls.append(exactHash)
+                    if recentExactCalls.count > 10 {
+                        recentExactCalls.removeFirst()
+                    }
+                }
+                // Check if last 3 exact calls are identical
+                if recentExactCalls.count >= 3 {
+                    let last3 = Array(recentExactCalls.suffix(3))
+                    if last3[0] == last3[1] && last3[1] == last3[2] {
+                        let toolName = String(last3[0].split(separator: "|").first ?? "unknown")
+                        let warning = "[SYSTEM: DOOM LOOP — you called `\(toolName)` with the EXACT same inputs 3 times in a row. This is wasting tokens and not making progress. You MUST try a completely different approach, use a different tool, or inform the user that this approach is not working.]"
+                        if let emitter = appModeEmitter {
+                            emitter.emitDoomLoop(toolName: toolName, count: 3)
+                        } else {
+                            printColored("  🔴 Doom loop: \(toolName) called 3x with identical inputs", color: .red)
+                        }
+                        conversationHistory.append(ClaudeMessage(role: "user", content: [.text(warning)]))
+                        recentExactCalls.removeAll() // Reset to give it a fresh chance
                     }
                 }
             }
@@ -602,8 +629,25 @@ final class AgentLoop {
                     }
                 }
 
+                // Handle continue_thinking — self-continuation for complex tasks
+                if tc.name == "continue_thinking" {
+                    let progress = tc.input["progress"]?.stringValue ?? ""
+                    let remaining = tc.input["remaining"]?.stringValue ?? ""
+                    let reflection = tc.input["reflection"]?.stringValue ?? ""
+                    if verbose {
+                        printColored("    🧠 Reflecting: \(String(remaining.prefix(80)))...", color: .cyan)
+                    }
+                    appModeEmitter?.emitStatus("Thinking deeper...")
+                    var feedback = "Reflection received. You have \(maxIterations - iterations) turns remaining. "
+                    feedback += "Context at \(Int(context.contextPercentage))%. "
+                    if !reflection.isEmpty {
+                        feedback += "Your reflection: \(reflection). "
+                    }
+                    feedback += "Now continue executing — focus on: \(remaining)"
+                    toolResults.append(.toolResultText(toolUseId: tc.id, text: feedback))
+                }
                 // Handle discover_tools — dynamically load more tools
-                if tc.name == "discover_tools" {
+                else if tc.name == "discover_tools" {
                     let query = tc.input["query"]?.stringValue ?? ""
                     let matchedCategories = IntentAnalyzer.requiredToolCategories(for: query)
                     let newCategories = matchedCategories.subtracting(requiredCategories).subtracting(dynamicToolCategories)
@@ -625,6 +669,10 @@ final class AgentLoop {
                 else if tc.name == "run_subagents" {
                     let subResult = await handleSubAgents(input: tc.input, allTools: allTools)
                     toolResults.append(.toolResultText(toolUseId: tc.id, text: subResult))
+                }
+                else if tc.name == "batch_execute" {
+                    let batchResult = await handleBatchExecute(input: tc.input, toolCallId: tc.id)
+                    toolResults.append(.toolResultText(toolUseId: tc.id, text: batchResult))
                 }
                 else if tc.name == "mcp_install" {
                     let installResult = handleMCPInstall(input: tc.input)
@@ -863,6 +911,19 @@ final class AgentLoop {
                     return nil
                 }
 
+                // Inject token awareness so the agent can self-monitor
+                let pct = Int(context.contextPercentage)
+                let totalTokens = context.totalInputTokens + context.totalOutputTokens
+                let costStr = String(format: "%.4f", context.sessionCost)
+                var statusParts: [String] = ["[STATUS] Turn \(iterations)/\(maxIterations) | Tokens: \(totalTokens) | Context: \(pct)% | Cost: $\(costStr)"]
+                if pct > 60 {
+                    statusParts.append("⚠️ Context getting full — be concise, avoid redundant tool calls")
+                }
+                if iterations > 1 && toolsThisTurn.count == 1 {
+                    statusParts.append("💡 You can call multiple tools in parallel for efficiency")
+                }
+                toolResults.append(.text(statusParts.joined(separator: " | ")))
+
                 // Inject batching hint if the AI is making suboptimal single calls
                 if let hint = orchestrator.checkBatchingOpportunity(currentTools: toolsThisTurn) {
                     if verbose {
@@ -912,6 +973,122 @@ final class AgentLoop {
         return finalResponse
     }
 
+    // MARK: - Batch Execute
+
+    /// Execute multiple tool calls in parallel via the batch_execute tool.
+    /// Parses a JSON array of {tool, params} objects and runs them concurrently.
+    private func handleBatchExecute(input: [String: AnyCodable], toolCallId: String) async -> String {
+        guard let callsJSON = input["calls"]?.stringValue,
+              let data = callsJSON.data(using: .utf8),
+              let parsed = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+            return "Error: 'calls' must be a valid JSON array of objects with 'tool' and 'params' keys."
+        }
+
+        let maxBatchSize = 25
+        let calls = Array(parsed.prefix(maxBatchSize))
+
+        if calls.isEmpty {
+            return "Error: Empty calls array."
+        }
+
+        // Prevent recursive batch_execute
+        if calls.contains(where: { ($0["tool"] as? String) == "batch_execute" }) {
+            return "Error: batch_execute cannot call itself recursively."
+        }
+
+        // Prevent sub-agent spawning inside batch (too heavy)
+        if calls.contains(where: { ($0["tool"] as? String) == "run_subagents" }) {
+            return "Error: Cannot run sub-agents inside batch_execute. Use run_subagents directly."
+        }
+
+        let batchId = UUID().uuidString
+
+        if let emitter = appModeEmitter {
+            emitter.emitAgentDelegate(from: "assistant", to: "batch", task: "Parallel execution of \(calls.count) tools")
+        } else if verbose {
+            printColored("  ⚡ Batch: executing \(calls.count) tools in parallel", color: .cyan)
+        }
+
+        // Parse each call
+        struct BatchCall {
+            let index: Int
+            let toolName: String
+            let params: [String: AnyCodable]
+        }
+
+        var batchCalls: [BatchCall] = []
+        for (i, call) in calls.enumerated() {
+            guard let toolName = call["tool"] as? String else {
+                continue
+            }
+            var params: [String: AnyCodable] = [:]
+            if let rawParams = call["params"] as? [String: Any] {
+                for (key, value) in rawParams {
+                    params[key] = AnyCodable(value)
+                }
+            }
+            batchCalls.append(BatchCall(index: i, toolName: toolName, params: params))
+        }
+
+        if batchCalls.isEmpty {
+            return "Error: No valid tool calls found. Each object needs a 'tool' key."
+        }
+
+        // Emit individual tool starts for the desktop app
+        for call in batchCalls {
+            let detail = call.params.map { "\($0.key): \($0.value.value)" }.prefix(3).joined(separator: ", ")
+            appModeEmitter?.emitToolStart(id: "batch-\(batchId)-\(call.index)", name: call.toolName, detail: String(detail.prefix(100)))
+        }
+
+        // Execute all in parallel using TaskGroup
+        let startTime = DispatchTime.now()
+
+        let results: [(index: Int, name: String, result: ToolResult, durationMs: Int)] = await withTaskGroup(
+            of: (Int, String, ToolResult, Int).self,
+            returning: [(Int, String, ToolResult, Int)].self
+        ) { group in
+            for call in batchCalls {
+                group.addTask {
+                    let callStart = DispatchTime.now()
+                    let (result, _) = self.executor.execute(toolName: call.toolName, input: call.params)
+                    let callMs = Int((DispatchTime.now().uptimeNanoseconds - callStart.uptimeNanoseconds) / 1_000_000)
+                    return (call.index, call.toolName, result, callMs)
+                }
+            }
+            var collected: [(Int, String, ToolResult, Int)] = []
+            for await item in group {
+                collected.append(item)
+                // Emit individual tool results as they complete
+                self.appModeEmitter?.emitToolResult(
+                    id: "batch-\(batchId)-\(item.0)", name: item.1,
+                    success: item.2.success, output: String(item.2.output.prefix(500)),
+                    durationMs: item.3
+                )
+            }
+            return collected.sorted { $0.0 < $1.0 }
+        }
+
+        let elapsed = Int((DispatchTime.now().uptimeNanoseconds - startTime.uptimeNanoseconds) / 1_000_000)
+        let succeeded = results.filter { $0.2.success }.count
+
+        // Format results
+        var output = "Batch results: \(succeeded)/\(results.count) succeeded (\(elapsed)ms)\n"
+        for (index, name, result, durationMs) in results {
+            let icon = result.success ? "✓" : "✗"
+            let truncated = String(result.output.prefix(500))
+            output += "\n[\(index)] \(icon) \(name) (\(durationMs)ms): \(truncated)"
+        }
+
+        if let emitter = appModeEmitter {
+            emitter.emitAgentComplete(id: batchId, agent: "batch", success: succeeded == results.count,
+                                      summary: "\(succeeded)/\(results.count) tools succeeded in \(elapsed)ms")
+        } else {
+            printColored("  ⚡ Batch complete: \(succeeded)/\(results.count) in \(elapsed)ms", color: .cyan)
+        }
+
+        return output
+    }
+
     // MARK: - Sub-Agent Handling
 
     private func handleSubAgents(input: [String: AnyCodable], allTools: [ClaudeTool]) async -> String {
@@ -919,6 +1096,15 @@ final class AgentLoop {
 
         if tasks.isEmpty {
             return "Error: No valid tasks found. Expected JSON array with id, description, prompt, type fields."
+        }
+
+        // Emit delegation events for each sub-agent task
+        for task in tasks {
+            appModeEmitter?.emitAgentDelegate(
+                from: "assistant",
+                to: "\(task.type.rawValue):\(task.id)",
+                task: task.description
+            )
         }
 
         // Extract optional context from the parent agent
@@ -930,7 +1116,18 @@ final class AgentLoop {
             parentContext: context,
             maxConcurrency: 5
         )
+        subExecutor.appModeEmitter = appModeEmitter
         let results = await subExecutor.runParallel(tasks: tasks, tools: allTools)
+
+        // Emit completion events for each sub-agent
+        for result in results {
+            appModeEmitter?.emitAgentComplete(
+                id: result.id,
+                agent: result.type.rawValue,
+                success: result.success,
+                summary: String(result.output.prefix(200))
+            )
+        }
 
         // Format results for the parent agent
         let succeeded = results.filter { $0.success }.count
@@ -1564,10 +1761,44 @@ final class AgentLoop {
     func clearHistory() {
         conversationHistory.removeAll()
         context.reset()
+        recentToolCallHashes.removeAll()
+        recentExactCalls.removeAll()
         printColored("  Conversation cleared.", color: .green)
     }
 
     var historyCount: Int { conversationHistory.count }
+
+    /// Remove the last user+assistant exchange (undo)
+    /// Returns the last user message text if available, nil if nothing to undo
+    @discardableResult
+    func undoLastExchange() -> String? {
+        // Find last user message
+        guard let lastUserIdx = conversationHistory.lastIndex(where: { $0.role == "user" }) else {
+            return nil
+        }
+
+        // Extract user text for potential retry
+        let userText = conversationHistory[lastUserIdx].content.compactMap { c -> String? in
+            if case .text(let t) = c { return t }; return nil
+        }.joined(separator: " ")
+
+        // Remove everything from last user message onwards
+        conversationHistory.removeSubrange(lastUserIdx...)
+        recentToolCallHashes.removeAll()
+        recentExactCalls.removeAll()
+
+        return userText
+    }
+
+    /// Get session performance summary
+    var performanceSummary: (turns: Int, cacheHits: Int, cost: Double, contextPct: Int) {
+        return (
+            turns: context.turnCount,
+            cacheHits: orchestrator.cacheHits,
+            cost: context.sessionCost,
+            contextPct: Int(context.contextPercentage)
+        )
+    }
 
     // MARK: - Run with Plugin
 
@@ -1879,6 +2110,86 @@ final class AgentLoop {
         return result
     }
 
+    // MARK: - Multi-Agent Chain Routing
+
+    /// After the first agent finishes, check if a second agent should handle part of the request.
+    /// This enables workflows like: "news → writer" or "research → code".
+    private func chainToNextAgent(
+        originalInput: String,
+        firstAgentName: String,
+        firstResult: String
+    ) async throws -> String? {
+        // Chain keywords: detect if the original input contains verbs/intents for a SECOND agent
+        let chainPatterns: [(keywords: [String], targetAgents: [String])] = [
+            // Writing/redaction after research/news
+            (["redacta", "escribe", "redactar", "escribir", "write", "draft", "post", "tweet", "linkedin",
+              "email", "correo", "texto para", "copy", "pitch", "carta", "letter", "blog"], ["writer"]),
+            // Code after research/analysis
+            (["implementa", "programa", "codifica", "code", "implement", "build", "crea un script",
+              "fix", "arregla", "debug"], ["code"]),
+            // Design after research
+            (["diseña", "design", "mockup", "wireframe", "prototipo", "ui", "ux", "svg"], ["design"]),
+            // Product after research/news
+            (["roadmap", "plan", "spec", "prd", "feature", "mvp", "lanza", "launch"], ["product"]),
+        ]
+
+        let normalizedInput = AgentRegistry.normalizeText(originalInput)
+        let inputWords = normalizedInput.split(separator: " ").map(String.init)
+
+        for pattern in chainPatterns {
+            // Check if any chain keyword matches
+            let matchedKeyword = pattern.keywords.first { keyword in
+                let normKeyword = AgentRegistry.normalizeText(keyword)
+                let kwWords = normKeyword.split(separator: " ").map(String.init)
+                if kwWords.count > 1 {
+                    return kwWords.allSatisfy { w in inputWords.contains(w) }
+                }
+                return inputWords.contains(normKeyword)
+            }
+
+            guard let keyword = matchedKeyword else { continue }
+
+            // Find a target agent that's DIFFERENT from the first one
+            let agents = AgentRegistry.loadAll()
+            for targetName in pattern.targetAgents {
+                guard targetName != firstAgentName,
+                      let targetAgent = agents.first(where: { $0.name == targetName }),
+                      let resolved = AIProvider.resolve(modelString: targetAgent.model) else { continue }
+
+                // Emit delegation event
+                appModeEmitter?.emitAgentDelegate(from: firstAgentName, to: targetAgent.name, task: keyword)
+                appModeEmitter?.emitAgentRoute(agent: targetAgent.name, model: targetAgent.model, matchType: "chain")
+
+                if verbose {
+                    printColored("  \u{1F517} Chain: \(firstAgentName) → \(targetAgent.name) (keyword: \(keyword))", color: .cyan)
+                }
+
+                // Build input for second agent: original request + first agent's output as context
+                let chainInput = """
+                The user asked: \(originalInput)
+
+                A previous agent (\(firstAgentName)) already gathered this information:
+                ---
+                \(firstResult.prefix(3000))
+                ---
+
+                Now use that information to: \(keyword). Respond in the same language as the user's original message.
+                """
+
+                let secondResult = try await runSpecializedAgent(agent: targetAgent, resolved: resolved, input: chainInput)
+
+                appModeEmitter?.emitAgentComplete(id: UUID().uuidString, agent: targetAgent.name, success: !secondResult.isEmpty, summary: "")
+
+                if !secondResult.isEmpty {
+                    appModeEmitter?.emitText(secondResult)
+                    return secondResult
+                }
+            }
+        }
+
+        return nil
+    }
+
     // MARK: - Specialized Agent Execution
 
     /// Run a specialized agent with its own model/provider and return the final text output.
@@ -2054,6 +2365,7 @@ final class AgentLoop {
         case "modify_config": return "⚙️"
         case "create_plugin": return "🔌"
         case "send_email": return "✉️"
+        case "continue_thinking": return "🧠"
         case "discover_tools": return "🔧"
         default: return "⚡"
         }

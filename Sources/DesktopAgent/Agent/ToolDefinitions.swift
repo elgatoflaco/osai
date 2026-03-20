@@ -77,7 +77,7 @@ struct ToolDefinitions {
         }
 
         // Orchestrator
-        for name in ["run_subagents", "orchestrator_stats", "orchestrator_insights", "clear_tool_cache"] {
+        for name in ["run_subagents", "batch_execute", "orchestrator_stats", "orchestrator_insights", "clear_tool_cache"] {
             map[name] = .orchestrator
         }
 
@@ -136,6 +136,21 @@ struct ToolDefinitions {
                 "query": PropertySchema(type: "string", description: "Capability needed", enumValues: nil)
             ],
             required: ["query"]
+        )
+    )
+
+    /// The continue_thinking tool — lets the agent extend its reasoning for complex tasks
+    static let continueThinkingTool = ClaudeTool(
+        name: "continue_thinking",
+        description: "Use this when a task is complex and you need more reasoning steps. Call this to pause, reflect on your progress, identify what's missing, and plan next steps. This gives you another turn to continue working instead of giving a shallow answer.",
+        inputSchema: InputSchema(
+            type: "object",
+            properties: [
+                "progress": PropertySchema(type: "string", description: "What you've done so far", enumValues: nil),
+                "remaining": PropertySchema(type: "string", description: "What still needs to be done", enumValues: nil),
+                "reflection": PropertySchema(type: "string", description: "What could be improved or what you might be missing", enumValues: nil)
+            ],
+            required: ["progress", "remaining"]
         )
     )
 
@@ -263,6 +278,18 @@ struct ToolDefinitions {
         ),
     ]
 
+    static let batchExecuteTool = ClaudeTool(
+        name: "batch_execute",
+        description: "Execute multiple tool calls in parallel and return all results at once. Use this to run 2-25 independent operations simultaneously (e.g., read multiple files, run multiple shell commands, check multiple apps). Much faster than calling tools one at a time. Each call specifies the tool name and its parameters.",
+        inputSchema: InputSchema(
+            type: "object",
+            properties: [
+                "calls": PropertySchema(type: "string", description: "JSON array of tool calls: [{\"tool\": \"tool_name\", \"params\": {\"key\": \"value\"}}, ...]. Max 25 calls.", enumValues: nil)
+            ],
+            required: ["calls"]
+        )
+    )
+
     static let orchestratorTools: [ClaudeTool] = [
         ClaudeTool(
             name: "orchestrator_stats",
@@ -311,7 +338,7 @@ struct ToolDefinitions {
         ),
     ]
 
-    static let allTools: [ClaudeTool] = SelfModificationTools.tools + mcpManagementTools + schedulerTools + gatewayTools + claudeCodeTools + orchestratorTools + adaptiveTools + [
+    static let allTools: [ClaudeTool] = SelfModificationTools.tools + mcpManagementTools + schedulerTools + gatewayTools + claudeCodeTools + orchestratorTools + adaptiveTools + [batchExecuteTool] + [
         // --- AppleScript ---
         ClaudeTool(
             name: "run_applescript",

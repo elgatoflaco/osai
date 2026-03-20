@@ -336,6 +336,43 @@ final class ContextManager {
         return result
     }
 
+    // MARK: - Tool Result Pruning (OpenCode-style)
+
+    /// Aggressively prune old tool results beyond keepLast turns, replacing with "[cleared]".
+    /// Preserves tool_use structure (so the model knows which tools were called) but removes
+    /// the potentially large output data. This is more aggressive than truncation.
+    func pruneOldToolResults(in messages: [ClaudeMessage], keepLast: Int = 6) -> [ClaudeMessage] {
+        guard messages.count > keepLast else { return messages }
+        let boundary = messages.count - keepLast
+        var result = messages
+        var prunedTokens = 0
+
+        for i in 0..<boundary {
+            let msg = result[i]
+            guard msg.role == "user" else { continue }
+
+            let newContent: [ClaudeContent] = msg.content.map { content in
+                switch content {
+                case .toolResult(let id, let blocks):
+                    let originalSize = blocks.compactMap { $0.text }.joined().count
+                    if originalSize > 100 {
+                        prunedTokens += originalSize / 4
+                        return .toolResult(toolUseId: id, content: [.textBlock("[Old tool result cleared]")])
+                    }
+                    return content
+                default:
+                    return content
+                }
+            }
+            result[i] = ClaudeMessage(role: msg.role, content: newContent)
+        }
+
+        if prunedTokens > 0 {
+            tokensSavedByCompaction += prunedTokens
+        }
+        return result
+    }
+
     // MARK: - Tier 2: Summarize Oldest 50%
 
     /// Summarize the oldest half of the conversation into bullet points using a cheap model call.
@@ -447,19 +484,22 @@ final class ContextManager {
             return (result, "Tier 1: stripped old images, truncated tool results")
 
         case 2:
-            // Tier 2: summarize oldest 50%
+            // Tier 2: prune old tool results + summarize oldest 50%
             var result = stripOldImages(from: messages, keepLast: 2)
+            result = pruneOldToolResults(in: result, keepLast: 8)
             result = truncateToolResults(in: result, maxChars: 200, keepLast: 8)
             if result.count > 10 {
                 result = try await summarizeOldestHalf(messages: result, client: client)
-                return (result, "Tier 2: summarized oldest 50% of conversation")
+                return (result, "Tier 2: pruned + summarized oldest 50%")
             }
-            return (result, "Tier 2: stripped images and truncated results")
+            return (result, "Tier 2: pruned tool results and stripped images")
 
         default:
-            // Tier 3: full deep compaction (existing behavior)
-            let result = try await compactHistory(messages: messages, client: client, systemPrompt: systemPrompt)
-            return (result, "Tier 3: deep compaction")
+            // Tier 3: prune aggressively + deep compaction
+            var pruned = pruneOldToolResults(in: messages, keepLast: 4)
+            pruned = stripOldImages(from: pruned, keepLast: 1)
+            let result = try await compactHistory(messages: pruned, client: client, systemPrompt: systemPrompt)
+            return (result, "Tier 3: deep compaction with aggressive pruning")
         }
     }
 

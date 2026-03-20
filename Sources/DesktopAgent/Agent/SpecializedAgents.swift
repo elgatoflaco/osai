@@ -51,15 +51,29 @@ final class AgentRegistry {
         return parseAgent(content: content, filePath: path)
     }
 
-    /// Find the best matching agent for a user input using fuzzy matching
-    static func route(input: String) -> SpecializedAgentDef? {
+    /// Result of routing — includes match quality info
+    struct RouteResult {
+        let agent: SpecializedAgentDef
+        let score: Double
+        let matchType: MatchType  // how we matched
+        let reason: String
+
+        enum MatchType: String {
+            case exact      // trigger keyword matched
+            case fuzzy      // fuzzy/levenshtein match
+            case intent     // matched via IntentAnalyzer category
+            case fallback   // no match, using general assistant
+        }
+    }
+
+    /// Find the best matching agent for a user input using fuzzy matching + intent fallback
+    static func route(input: String) -> RouteResult? {
         let agents = loadAll()
-        if agents.isEmpty { return nil }
 
         let normalized = normalizeText(input)
         let inputWords = normalized.split(separator: " ").map(String.init)
 
-        // Debug log
+        // Log to file for debugging
         let debugLines = agents.map { "  \($0.name): triggers=\($0.triggers)" }.joined(separator: "\n")
         let debugMsg = "[ROUTE-DETAIL] normalized='\(normalized)' words=\(inputWords)\n\(debugLines)\n"
         if let data = debugMsg.data(using: .utf8) {
@@ -68,13 +82,16 @@ final class AgentRegistry {
             else { FileManager.default.createFile(atPath: logPath, contents: data) }
         }
 
-        // Score each agent by trigger match count
+        // Score each agent by trigger match count + earliest position in input
         var bestAgent: SpecializedAgentDef? = nil
         var bestScore: Double = 0
+        var bestPosition: Int = Int.max  // lower = earlier in input = higher priority
         var bestReason = ""
+        var bestMatchType: RouteResult.MatchType = .exact
 
         for agent in agents {
             var score: Double = 0
+            var earliestPosition: Int = Int.max
             var matchedTriggers: [String] = []
             var fuzzyTriggers: [String] = []
 
@@ -90,44 +107,84 @@ final class AgentRegistry {
                     if allFound {
                         score += 1
                         matchedTriggers.append(trigger)
+                        // Track earliest position of first trigger word
+                        if let pos = inputWords.firstIndex(where: { triggerWords.contains($0) }) {
+                            earliestPosition = min(earliestPosition, pos)
+                        }
                         continue
                     }
                 } else {
                     // Single-word trigger: match as whole word
-                    if inputWords.contains(normTrigger) {
+                    if let pos = inputWords.firstIndex(of: normTrigger) {
                         score += 1
                         matchedTriggers.append(trigger)
+                        earliestPosition = min(earliestPosition, pos)
                         continue
                     }
                 }
 
                 // Fuzzy matching: only for triggers longer than 4 chars, Levenshtein distance ≤ 2
                 if normTrigger.count > 4 {
-                    for word in inputWords {
+                    for (wordIdx, word) in inputWords.enumerated() {
                         if word.count > 4 && levenshteinDistance(word, normTrigger) <= 2 {
                             score += 0.5
                             fuzzyTriggers.append("\(trigger)~\(word)")
+                            earliestPosition = min(earliestPosition, wordIdx)
                             break
                         }
                     }
                 }
             }
 
-            if score > bestScore {
+            // Prefer: higher score, then earlier position in input (tiebreaker)
+            let isBetter = score > bestScore || (score == bestScore && earliestPosition < bestPosition)
+            if isBetter && score > 0 {
                 bestScore = score
+                bestPosition = earliestPosition
                 bestAgent = agent
                 var parts: [String] = []
                 if !matchedTriggers.isEmpty { parts.append("exact: \(matchedTriggers.joined(separator: ", "))") }
                 if !fuzzyTriggers.isEmpty { parts.append("fuzzy: \(fuzzyTriggers.joined(separator: ", "))") }
                 bestReason = parts.joined(separator: " | ")
+                bestMatchType = matchedTriggers.isEmpty ? .fuzzy : .exact
             }
         }
 
-        // Minimum score of 1.0 to activate
-        guard bestScore >= 1.0, let agent = bestAgent else { return nil }
+        // Direct match (score >= 1.0)
+        if bestScore >= 1.0, let agent = bestAgent {
+            return RouteResult(agent: agent, score: bestScore, matchType: bestMatchType, reason: bestReason)
+        }
 
-        print("[AgentRouter] → \(agent.name) (score: \(bestScore)) [\(bestReason)]")
-        return agent
+        // Fuzzy match with lower threshold (score > 0 but < 1.0)
+        if bestScore > 0, let agent = bestAgent {
+            return RouteResult(agent: agent, score: bestScore, matchType: .fuzzy, reason: bestReason)
+        }
+
+        // Intent-based fallback: map ToolCategory to likely agents
+        if !agents.isEmpty {
+            let toolCategories = IntentAnalyzer.requiredToolCategories(for: input)
+            let categoryToAgent: [ToolCategory: [String]] = [
+                .email: ["writer", "organizer"],
+                .scheduling: ["organizer"],
+                .web: ["research", "news"],
+                .gui: ["design"],
+                .config: ["code"],
+            ]
+            // Only trigger intent fallback if we detected non-core categories
+            let nonCore = toolCategories.subtracting([.core])
+            for cat in nonCore {
+                if let agentNames = categoryToAgent[cat] {
+                    for name in agentNames {
+                        if let agent = agents.first(where: { $0.name == name }) {
+                            return RouteResult(agent: agent, score: 0.3, matchType: .intent, reason: "intent: \(cat.rawValue)")
+                        }
+                    }
+                }
+            }
+        }
+
+        // No match at all — caller handles fallback
+        return nil
     }
 
     // MARK: - Text Normalization & Fuzzy Matching

@@ -1751,7 +1751,7 @@ struct MessageBubble: View {
             VStack(alignment: .leading, spacing: appState.displayDensity == "compact" ? 3 : appState.displayDensity == "spacious" ? 10 : 6) {
                 // Agent badge
                 if let agent = message.agentName {
-                    AgentBadge(name: agent)
+                    AgentBadge(name: agent, matchType: message.agentMatchType)
                 }
 
                 // Activity strip (hidden in zen mode and compact density)
@@ -2030,6 +2030,14 @@ struct MessageBubble: View {
                                 Text(responseTimeLabel(rtMs))
                                     .font(.system(size: 9, weight: .medium, design: .rounded))
                                     .foregroundColor(responseTimeColor(rtMs).opacity(0.7))
+                            }
+
+                            // Session cost badge (from session_summary event)
+                            if let cost = message.sessionCost, cost > 0, !message.isStreaming {
+                                Text(String(format: "$%.4f", cost))
+                                    .font(.system(size: 8, weight: .medium, design: .monospaced))
+                                    .foregroundColor(cost > 0.10 ? AppTheme.warning.opacity(0.8) : AppTheme.textMuted)
+                                    .help("Session cost so far")
                             }
                         }
                         .opacity(isTimestampVisible ? 1 : 0)
@@ -2336,154 +2344,404 @@ struct MessageBubble: View {
     }
 }
 
-// MARK: - Activity Strip (redesigned)
+// MARK: - Activity Strip (v3 — pill cards)
 
 struct ActivityStrip: View {
     let activities: [ActivityItem]
     let isStreaming: Bool
-    @State private var expanded = false
+    var onCancel: (() -> Void)? = nil
     @State private var expandedOutputId: String?
 
     private var completedCount: Int { activities.filter(\.isComplete).count }
     private var failedCount: Int { activities.filter { $0.success == false }.count }
     private var toolActivities: [ActivityItem] { activities.filter { $0.type == .toolCall } }
 
+    /// Deduplicate consecutive same-name tools into counts
+    private var groupedTools: [(name: String, count: Int, activities: [ActivityItem])] {
+        var result: [(name: String, count: Int, activities: [ActivityItem])] = []
+        for activity in toolActivities {
+            if let last = result.last, last.name == activity.label {
+                result[result.count - 1].count += 1
+                result[result.count - 1].activities.append(activity)
+            } else {
+                result.append((name: activity.label, count: 1, activities: [activity]))
+            }
+        }
+        return result
+    }
+
+    private var totalDurationMs: Int {
+        toolActivities.compactMap(\.durationMs).reduce(0, +)
+    }
+
+    @State private var showAllTasks = false
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            // Header bar
-            Button(action: { expanded.toggle() }) {
-                HStack(spacing: 8) {
-                    // Progress indicator
-                    ZStack {
-                        Circle()
-                            .stroke(AppTheme.borderGlass, lineWidth: 2)
-                            .frame(width: 18, height: 18)
-                        Circle()
-                            .trim(from: 0, to: activities.isEmpty ? 0 : CGFloat(completedCount) / CGFloat(activities.count))
-                            .stroke(failedCount > 0 ? AppTheme.warning : AppTheme.success, style: StrokeStyle(lineWidth: 2, lineCap: .round))
-                            .frame(width: 18, height: 18)
-                            .rotationEffect(.degrees(-90))
-                        if completedCount == activities.count && !isStreaming {
-                            Image(systemName: failedCount > 0 ? "exclamationmark" : "checkmark")
-                                .font(.system(size: 7, weight: .bold))
-                                .foregroundColor(failedCount > 0 ? AppTheme.warning : AppTheme.success)
-                        }
+        VStack(alignment: .leading, spacing: 4) {
+            // Summary row: pill cards + expand toggle
+            HStack(spacing: 0) {
+                // Wrapping pill cards
+                FlowLayout(spacing: 5) {
+                    // Doom loop warnings
+                    ForEach(activities.filter({ $0.type == .doomLoop })) { dl in
+                        doomLoopPill(dl)
                     }
-
-                    // Summary text
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(summaryText)
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundColor(AppTheme.textSecondary)
-                        if let current = activities.last(where: { !$0.isComplete }) {
-                            let desc = !current.detail.isEmpty ? current.detail : current.label
-                            Text(desc)
-                                .font(.system(size: 10))
-                                .foregroundColor(AppTheme.textMuted)
-                                .lineLimit(1)
-                        }
+                    // Compaction events
+                    ForEach(activities.filter({ $0.type == .compaction })) { comp in
+                        compactionPill(comp)
                     }
+                    // Agent delegations (sub-agents, batch)
+                    ForEach(activities.filter({ $0.type == .agentDelegate })) { del in
+                        delegationPill(del)
+                    }
+                    // Tool pills
+                    ForEach(Array(groupedTools.enumerated()), id: \.offset) { _, group in
+                        toolPill(name: group.name, count: group.count, activities: group.activities)
+                    }
+                    if let current = activities.last(where: { !$0.isComplete && $0.type == .toolCall }),
+                       !groupedTools.contains(where: { $0.activities.contains(where: { $0.id == current.id }) }) {
+                        activePill(current)
+                    }
+                }
 
-                    Spacer()
+                Spacer(minLength: 4)
 
-                    Image(systemName: expanded ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 9, weight: .medium))
+                // Expand/collapse individual tasks
+                if toolActivities.count > 1 {
+                    Button(action: { withAnimation(.easeInOut(duration: 0.2)) { showAllTasks.toggle() } }) {
+                        Image(systemName: showAllTasks ? "chevron.up" : "chevron.down")
+                            .font(.system(size: 8, weight: .medium))
+                            .foregroundColor(AppTheme.textMuted)
+                            .frame(width: 20, height: 20)
+                            .background(AppTheme.bgCard.opacity(0.5))
+                            .clipShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .help(showAllTasks ? "Hide tasks" : "Show all tasks")
+                }
+            }
+
+            // Expanded task list — individual rows with detail + cancel
+            if showAllTasks {
+                VStack(spacing: 2) {
+                    ForEach(toolActivities) { activity in
+                        taskRow(activity)
+                    }
+                }
+                .padding(.top, 2)
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+
+            // Expanded output panel for selected task
+            if let expandedId = expandedOutputId,
+               let activity = activities.first(where: { $0.id == expandedId }) {
+                expandedOutputView(activity)
+                    .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .top)))
+            }
+        }
+    }
+
+    // MARK: - Individual Task Row (detailed, with cancel)
+
+    @ViewBuilder
+    private func taskRow(_ activity: ActivityItem) -> some View {
+        HStack(spacing: 6) {
+            // Status icon
+            if activity.isComplete {
+                Image(systemName: activity.success == false ? "xmark.circle.fill" : "checkmark.circle.fill")
+                    .font(.system(size: 10))
+                    .foregroundColor(activity.success == false ? AppTheme.error : AppTheme.success)
+            } else {
+                ProgressView().controlSize(.mini).scaleEffect(0.5)
+            }
+
+            // Tool icon + name
+            Image(systemName: toolCategoryIcon(activity.label))
+                .font(.system(size: 9))
+                .foregroundColor(AppTheme.textMuted)
+            Text(activity.label)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundColor(AppTheme.textSecondary)
+
+            // Detail (truncated)
+            if !activity.detail.isEmpty {
+                Text(activity.detail)
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundColor(AppTheme.textMuted)
+                    .lineLimit(1)
+                    .frame(maxWidth: 200, alignment: .leading)
+            }
+
+            Spacer()
+
+            // Duration
+            if let ms = activity.durationMs {
+                Text(formatMs(ms))
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundColor(AppTheme.textMuted)
+            }
+
+            // Cancel button for active tasks
+            if !activity.isComplete {
+                Button(action: { onCancel?() }) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 10))
+                        .foregroundColor(AppTheme.error.opacity(0.6))
+                }
+                .buttonStyle(.plain)
+            }
+
+            // Expand output
+            if activity.output != nil || !activity.detail.isEmpty {
+                Button(action: {
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        expandedOutputId = expandedOutputId == activity.id ? nil : activity.id
+                    }
+                }) {
+                    Image(systemName: expandedOutputId == activity.id ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 7))
                         .foregroundColor(AppTheme.textMuted)
                 }
-                .padding(.horizontal, 12).padding(.vertical, 8)
-                .contentShape(Rectangle())
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel("Activity strip: \(summaryText)")
-            .accessibilityHint(expanded ? "Double tap to collapse" : "Double tap to expand")
-            .accessibilityValue(expanded ? "expanded" : "collapsed")
+        }
+        .padding(.horizontal, 6).padding(.vertical, 3)
+        .background(
+            expandedOutputId == activity.id
+                ? AppTheme.accent.opacity(0.05)
+                : Color.clear
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
 
-            // Expanded list — grouped by agent
-            if expanded {
-                Divider()
-                    .background(AppTheme.borderGlass)
-                    .padding(.horizontal, 8)
+    // MARK: - Tool Pill Card
 
-                ScrollView(.vertical, showsIndicators: false) {
-                    VStack(spacing: 2) {
-                        let groups = groupedByAgent
-                        ForEach(Array(groups.enumerated()), id: \.offset) { idx, group in
-                            // Agent header (if there's an agent route)
-                            if let agentActivity = group.first(where: { $0.type == .agentRoute }) {
-                                HStack(spacing: 6) {
-                                    Image(systemName: "arrow.triangle.branch")
-                                        .font(.system(size: 9))
-                                        .foregroundColor(.orange)
-                                    Text(agentActivity.label)
-                                        .font(.system(size: 10, weight: .semibold))
-                                        .foregroundColor(.orange)
-                                    Rectangle()
-                                        .fill(AppTheme.borderGlass)
-                                        .frame(height: 0.5)
-                                }
-                                .padding(.horizontal, 8)
-                                .padding(.top, idx > 0 ? 6 : 2)
-                            }
-                            // Tool calls under this agent
-                            ForEach(group.filter({ $0.type != .agentRoute })) { activity in
-                                ActivityRow(
-                                    activity: activity,
-                                    isOutputExpanded: expandedOutputId == activity.id,
-                                    onToggleOutput: {
-                                        expandedOutputId = expandedOutputId == activity.id ? nil : activity.id
-                                    }
-                                )
-                            }
-                        }
-                    }
-                    .padding(.horizontal, 4).padding(.vertical, 6)
+    @ViewBuilder
+    private func toolPill(name: String, count: Int, activities: [ActivityItem]) -> some View {
+        let allComplete = activities.allSatisfy(\.isComplete)
+        let anyFailed = activities.contains { $0.success == false }
+        let totalMs = activities.compactMap(\.durationMs).reduce(0, +)
+        let hasOutput = activities.contains { $0.output != nil || !$0.detail.isEmpty }
+        let firstId = activities.first?.id ?? ""
+        let isExpanded = expandedOutputId == firstId
+
+        Button(action: {
+            if hasOutput {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    expandedOutputId = isExpanded ? nil : firstId
                 }
-                .frame(maxHeight: 300)
             }
+        }) {
+            HStack(spacing: 5) {
+                // Status dot
+                if allComplete {
+                    Image(systemName: anyFailed ? "xmark" : "checkmark")
+                        .font(.system(size: 7, weight: .bold))
+                        .foregroundColor(anyFailed ? AppTheme.error : AppTheme.success)
+                } else {
+                    ProgressView()
+                        .controlSize(.mini)
+                        .scaleEffect(0.5)
+                }
+
+                // Icon
+                Image(systemName: toolCategoryIcon(name))
+                    .font(.system(size: 9))
+                    .foregroundColor(AppTheme.textSecondary)
+
+                // Name + count
+                Text(toolDisplayName(name))
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(AppTheme.textSecondary)
+                    .lineLimit(1)
+
+                if count > 1 {
+                    Text("\u{00D7}\(count)")
+                        .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                        .foregroundColor(AppTheme.accent)
+                }
+
+                // Duration
+                if totalMs > 0 {
+                    Text(formatMs(totalMs))
+                        .font(.system(size: 9, design: .monospaced))
+                        .foregroundColor(AppTheme.textMuted)
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(isExpanded ? AppTheme.accent.opacity(0.1) : AppTheme.bgCard.opacity(0.6))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(isExpanded ? AppTheme.accent.opacity(0.3) : AppTheme.borderGlass, lineWidth: 0.5)
+            )
         }
-        .background(AppTheme.bgCard.opacity(0.5))
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(AppTheme.borderGlass, lineWidth: 0.5))
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(name)\(count > 1 ? ", \(count) times" : "")\(allComplete ? ", completed" : ", in progress")")
     }
 
-    /// Group activities by agent route — activities before any agentRoute go in group 0,
-    /// then each agentRoute starts a new group
-    private var groupedByAgent: [[ActivityItem]] {
-        var groups: [[ActivityItem]] = [[]]
-        for activity in activities {
-            if activity.type == .agentRoute {
-                groups.append([activity])
+    // MARK: - Active Task Pill (shimmer)
+
+    @ViewBuilder
+    private func activePill(_ activity: ActivityItem) -> some View {
+        HStack(spacing: 5) {
+            ProgressView()
+                .controlSize(.mini)
+                .scaleEffect(0.5)
+            Image(systemName: toolCategoryIcon(activity.label))
+                .font(.system(size: 9))
+                .foregroundColor(AppTheme.accent)
+            Text(toolDisplayName(activity.label))
+                .font(.system(size: 10, weight: .medium))
+                .foregroundColor(AppTheme.accent)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(AppTheme.accent.opacity(0.08))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(AppTheme.accent.opacity(0.2), lineWidth: 0.5)
+        )
+    }
+
+    // MARK: - Doom Loop Pill
+
+    @ViewBuilder
+    private func doomLoopPill(_ activity: ActivityItem) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: "exclamationmark.arrow.circlepath")
+                .font(.system(size: 9, weight: .bold))
+                .foregroundColor(AppTheme.error)
+            Text("Loop: \(activity.label)")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundColor(AppTheme.error)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(AppTheme.error.opacity(0.1))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(AppTheme.error.opacity(0.3), lineWidth: 0.5)
+        )
+    }
+
+    // MARK: - Compaction Pill
+
+    @ViewBuilder
+    private func compactionPill(_ activity: ActivityItem) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: "arrow.down.right.and.arrow.up.left")
+                .font(.system(size: 9))
+                .foregroundColor(.teal)
+            Text(activity.label)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundColor(.teal)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.teal.opacity(0.08))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.teal.opacity(0.2), lineWidth: 0.5)
+        )
+        .help(activity.detail)
+    }
+
+    // MARK: - Delegation Pill (sub-agents, batch)
+
+    @ViewBuilder
+    private func delegationPill(_ activity: ActivityItem) -> some View {
+        let isComplete = activity.isComplete
+        let isBatch = activity.label == "batch"
+
+        HStack(spacing: 4) {
+            if isComplete {
+                Image(systemName: activity.success == false ? "xmark.circle.fill" : "checkmark.circle.fill")
+                    .font(.system(size: 9))
+                    .foregroundColor(activity.success == false ? AppTheme.error : AppTheme.success)
             } else {
-                groups[groups.count - 1].append(activity)
+                ProgressView().controlSize(.mini).scaleEffect(0.5)
+            }
+            Image(systemName: isBatch ? "square.stack.3d.up" : "person.2.wave.2")
+                .font(.system(size: 9))
+                .foregroundColor(.purple)
+            Text(isBatch ? "batch" : activity.label)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundColor(.purple)
+                .lineLimit(1)
+            if let ms = activity.durationMs {
+                Text(formatMs(ms))
+                    .font(.system(size: 8, design: .monospaced))
+                    .foregroundColor(AppTheme.textMuted)
             }
         }
-        return groups.filter { !$0.isEmpty }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.purple.opacity(0.06))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.purple.opacity(0.15), lineWidth: 0.5)
+        )
     }
 
-    private var summaryText: String {
-        if completedCount == activities.count && !isStreaming {
-            if failedCount > 0 {
-                return "\(activities.count) tasks (\(failedCount) failed)"
+    // MARK: - Expanded Output Panel
+
+    @ViewBuilder
+    private func expandedOutputView(_ activity: ActivityItem) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if !activity.detail.isEmpty {
+                HStack(spacing: 4) {
+                    Image(systemName: "terminal")
+                        .font(.system(size: 8))
+                        .foregroundColor(AppTheme.textMuted)
+                    Text(activity.detail)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundColor(AppTheme.textSecondary)
+                        .textSelection(.enabled)
+                        .lineLimit(3)
+                }
             }
-            return "\(activities.count) tasks completed"
+            if let output = activity.output, !output.isEmpty {
+                ClickableOutputView(text: output)
+            }
         }
-        return "\(completedCount)/\(activities.count) tasks"
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(AppTheme.bgCard.opacity(0.4))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(AppTheme.borderGlass, lineWidth: 0.5))
+        .padding(.horizontal, 4)
     }
-}
 
-// MARK: - Activity Row
+    // MARK: - Helpers
 
-struct ActivityRow: View {
-    let activity: ActivityItem
-    let isOutputExpanded: Bool
-    let onToggleOutput: () -> Void
-
-    @State private var shimmerPhase: CGFloat = 0
-    @State private var statusAppeared = false
-
-    private var hasExpandableContent: Bool {
-        activity.output != nil || !activity.detail.isEmpty
+    private func toolDisplayName(_ name: String) -> String {
+        // Shorten verbose tool names
+        name.replacingOccurrences(of: "web_search", with: "search")
+            .replacingOccurrences(of: "run_shell", with: "shell")
+            .replacingOccurrences(of: "read_file", with: "read")
+            .replacingOccurrences(of: "write_file", with: "write")
+            .replacingOccurrences(of: "take_screenshot", with: "screenshot")
+            .replacingOccurrences(of: "list_directory", with: "ls")
+            .replacingOccurrences(of: "run_applescript", with: "applescript")
     }
 
     private func toolCategoryIcon(_ name: String) -> String {
@@ -2501,161 +2759,9 @@ struct ActivityRow: View {
         if name.hasPrefix("discover_tools") { return "wrench.and.screwdriver.fill" }
         if name.contains("mcp_") { return "puzzlepiece.extension" }
         if name.contains("reservation") || name.contains("noweat") { return "fork.knife" }
+        if name == "batch_execute" { return "square.stack.3d.up" }
+        if name == "run_subagents" { return "person.3" }
         return "gearshape"
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            // Main row
-            HStack(spacing: 8) {
-                statusIcon.frame(width: 16)
-
-                Image(systemName: activity.type == .toolCall ? toolCategoryIcon(activity.label) : activity.icon)
-                    .font(.system(size: 10))
-                    .foregroundColor(iconColor)
-                    .frame(width: 14)
-
-                // Label + detail
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(activity.label)
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundColor(AppTheme.textSecondary)
-                        .lineLimit(1)
-
-                    if !activity.detail.isEmpty && !isOutputExpanded {
-                        Text(activity.detail)
-                            .font(.system(size: 10, design: .monospaced))
-                            .foregroundColor(AppTheme.textMuted)
-                            .lineLimit(1)
-                    }
-                }
-
-                Spacer()
-
-                if let ms = activity.durationMs {
-                    Text(formatMs(ms))
-                        .font(.system(size: 9, design: .monospaced))
-                        .foregroundColor(AppTheme.textMuted)
-                } else if !activity.isComplete {
-                    ProgressView()
-                        .controlSize(.mini)
-                        .scaleEffect(0.6)
-                }
-
-                if hasExpandableContent {
-                    Image(systemName: isOutputExpanded ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 7))
-                        .foregroundColor(AppTheme.textMuted)
-                }
-            }
-            .padding(.horizontal, 8).padding(.vertical, 5)
-            .contentShape(Rectangle())
-            .onTapGesture {
-                if hasExpandableContent { onToggleOutput() }
-            }
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel("\(activity.label)\(activity.isComplete ? (activity.success == false ? ", failed" : ", completed") : ", in progress")")
-            .accessibilityValue(activity.detail.isEmpty ? "" : activity.detail)
-            .accessibilityHint(hasExpandableContent ? "Double tap to toggle details" : "")
-            .background(
-                ZStack {
-                    if isOutputExpanded {
-                        AppTheme.bgPrimary.opacity(0.3)
-                    }
-                    // Subtle shimmer overlay while activity is in progress
-                    if !activity.isComplete {
-                        RoundedRectangle(cornerRadius: 6)
-                            .fill(
-                                LinearGradient(
-                                    colors: [.clear, AppTheme.accent.opacity(0.06), .clear],
-                                    startPoint: .leading,
-                                    endPoint: .trailing
-                                )
-                            )
-                            .offset(x: shimmerPhase)
-                            .onAppear {
-                                withAnimation(.easeInOut(duration: 1.5).repeatForever(autoreverses: false)) {
-                                    shimmerPhase = 200
-                                }
-                            }
-                            .clipped()
-                    }
-                }
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 6))
-
-            // Expanded detail + output
-            if isOutputExpanded {
-                VStack(alignment: .leading, spacing: 6) {
-                    // Command detail
-                    if !activity.detail.isEmpty {
-                        HStack(spacing: 4) {
-                            Image(systemName: "terminal")
-                                .font(.system(size: 8))
-                                .foregroundColor(AppTheme.textMuted)
-                            Text(activity.detail)
-                                .font(.system(size: 10, design: .monospaced))
-                                .foregroundColor(AppTheme.textSecondary)
-                                .textSelection(.enabled)
-                        }
-                    }
-
-                    // Output with clickable paths
-                    if let output = activity.output, !output.isEmpty {
-                        ClickableOutputView(text: output)
-                    }
-                }
-                .padding(8)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(AppTheme.bgPrimary.opacity(0.5))
-                .clipShape(RoundedRectangle(cornerRadius: 6))
-                .padding(.horizontal, 8)
-                .padding(.bottom, 4)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var statusIcon: some View {
-        if activity.isComplete {
-            if let success = activity.success {
-                Image(systemName: success ? "checkmark.circle.fill" : "xmark.circle.fill")
-                    .font(.system(size: 12))
-                    .foregroundColor(success ? AppTheme.success : AppTheme.error)
-                    .scaleEffect(statusAppeared ? 1.0 : 0.01)
-                    .opacity(statusAppeared ? 1 : 0)
-                    .onAppear {
-                        withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) {
-                            statusAppeared = true
-                        }
-                    }
-            } else {
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.system(size: 12))
-                    .foregroundColor(AppTheme.success)
-                    .scaleEffect(statusAppeared ? 1.0 : 0.01)
-                    .opacity(statusAppeared ? 1 : 0)
-                    .onAppear {
-                        withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) {
-                            statusAppeared = true
-                        }
-                    }
-            }
-        } else {
-            Circle()
-                .fill(AppTheme.accent)
-                .frame(width: 8, height: 8)
-        }
-    }
-
-    private var iconColor: Color {
-        switch activity.type {
-        case .toolCall: return AppTheme.accent
-        case .mcpLoading: return .purple
-        case .agentRoute: return .orange
-        case .status: return AppTheme.textMuted
-        case .thinking: return AppTheme.textMuted
-        }
     }
 
     private func formatMs(_ ms: Int) -> String {
@@ -3188,18 +3294,61 @@ struct ResponseView: View {
     /// Whether long plain text is truncated.
     @State private var isTextTruncated = true
 
-    var body: some View {
+    // Cached parse results — only recalculated when text changes
+    @State private var cachedSections: [ResponseSection] = []
+    @State private var cachedFootnoteDefs: [FootnoteDefinition] = []
+    @State private var cachedRefOrder: [String: Int] = [:]
+    @State private var cachedTextHash: Int = 0
+    @State private var lastParseTime: Date = .distantPast
+    @State private var pendingParseTimer: DispatchWorkItem?
+
+    /// Re-parse only when text actually changes, throttled during streaming
+    private func updateParseIfNeeded() {
+        let hash = text.hashValue
+        guard hash != cachedTextHash else { return }
+
+        // During streaming, throttle to max once per 200ms
+        if isStreaming {
+            let elapsed = Date().timeIntervalSince(lastParseTime)
+            if elapsed < 0.2 {
+                // Schedule a deferred parse
+                pendingParseTimer?.cancel()
+                let item = DispatchWorkItem { [hash] in
+                    guard hash == text.hashValue else { return } // text may have changed
+                    performParse()
+                }
+                pendingParseTimer = item
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2 - elapsed, execute: item)
+                return
+            }
+        }
+
+        performParse()
+    }
+
+    private func performParse() {
         let footnoteDefs = parseFootnoteDefinitions(from: text)
         let refOrder = footnoteReferenceOrder(from: text)
-        let orderedDefs = footnoteDefs.map { def in
+        let strippedText = footnoteDefs.isEmpty ? text : stripFootnoteDefinitions(from: text)
+        let sections = ResponseParser.parse(strippedText)
+
+        cachedSections = sections
+        cachedFootnoteDefs = footnoteDefs.map { def in
             FootnoteDefinition(
                 id: def.id,
                 displayIndex: refOrder[def.id] ?? def.displayIndex,
                 text: def.text
             )
         }.sorted { $0.displayIndex < $1.displayIndex }
-        let strippedText = footnoteDefs.isEmpty ? text : stripFootnoteDefinitions(from: text)
-        let sections = ResponseParser.parse(strippedText)
+        cachedRefOrder = refOrder
+        cachedTextHash = text.hashValue
+        lastParseTime = Date()
+    }
+
+    var body: some View {
+        let sections = cachedSections
+        let orderedDefs = cachedFootnoteDefs
+        let refOrder = cachedRefOrder
         let result = buildCollapsibleGroups(from: sections)
         let headingCount = result.groups.count
         let useCollapsible = headingCount >= 3 && !isStreaming
@@ -3300,6 +3449,7 @@ struct ResponseView: View {
             }
         }
         .onAppear {
+            performParse()  // Initial parse
             startCursorTimer()
             // Auto-collapse sections after the first 2 on first appearance
             if !didAutoCollapse && headingCount >= 3 {
@@ -3308,8 +3458,15 @@ struct ResponseView: View {
                 didAutoCollapse = true
             }
         }
+        .onChange(of: text) { _ in
+            updateParseIfNeeded()
+        }
         .onChange(of: isStreaming) { streaming in
             if streaming { cursorVisible = true; startCursorTimer() }
+            if !streaming {
+                // Final parse when streaming ends to ensure we have the complete content
+                performParse()
+            }
         }
     }
 
@@ -3380,9 +3537,8 @@ struct ResponseView: View {
     @ViewBuilder
     private func truncatedContentView(sections: [ResponseSection], refOrder: [String: Int]) -> some View {
         if isTextTruncated {
-            // Show truncated version: approximately first 200 words
-            let truncated = truncateToWords(text, maxWords: 200)
-            let truncSections = ResponseParser.parse(truncated + "...")
+            // Show truncated version: first ~200 words from already-parsed sections
+            let truncSections = Array(sections.prefix(10))  // approximate truncation by section count
             ForEach(Array(truncSections.enumerated()), id: \.offset) { _, section in
                 sectionView(section, refOrder: refOrder)
             }
@@ -4682,6 +4838,12 @@ struct StreamingStatusBar: View {
                 return "Thinking..."
             case .agentRoute:
                 return "Routing to \(active.label)..."
+            case .agentDelegate:
+                return "Delegating to \(active.label)..."
+            case .doomLoop:
+                return "Loop detected: \(active.label)"
+            case .compaction:
+                return "Compacting context..."
             case .status:
                 return active.label
             }
@@ -5219,9 +5381,34 @@ struct MathBlockView: View {
 
 struct ResponseParser {
 
-    // MARK: - Parse
+    // MARK: - Parse Cache
+
+    /// LRU cache to avoid re-parsing the same text on every SwiftUI body evaluation.
+    /// Key: text hash + length (to minimize collisions), Value: parsed sections.
+    private static var cache: [(key: Int, textLen: Int, sections: [ResponseSection])] = []
+    private static let maxCacheSize = 8
 
     static func parse(_ text: String) -> [ResponseSection] {
+        let key = text.hashValue
+        let len = text.count
+
+        // Check cache
+        if let entry = cache.first(where: { $0.key == key && $0.textLen == len }) {
+            return entry.sections
+        }
+
+        let result = parseUncached(text)
+
+        // Store in cache (evict oldest if full)
+        if cache.count >= maxCacheSize {
+            cache.removeFirst()
+        }
+        cache.append((key: key, textLen: len, sections: result))
+
+        return result
+    }
+
+    private static func parseUncached(_ text: String) -> [ResponseSection] {
         let lines = text.components(separatedBy: "\n")
         var sections: [ResponseSection] = []
         var i = 0
@@ -6686,19 +6873,59 @@ private struct ArrowHead: Shape {
 
 struct AgentBadge: View {
     let name: String
+    var matchType: String? = nil
+
+    private var color: Color {
+        agentHashColor(name)
+    }
+
+    /// Hash-based unique color per agent name
+    private func agentHashColor(_ name: String) -> Color {
+        // Well-known agents get fixed colors for consistency
+        switch name.lowercased() {
+        case "assistant": return .secondary
+        case "code": return .blue
+        case "research": return .purple
+        case "news": return .orange
+        case "writer": return .green
+        case "design": return .pink
+        case "organizer": return .teal
+        case "product": return .indigo
+        default:
+            let hash = abs(name.hashValue)
+            let hue = Double(hash % 360) / 360.0
+            return Color(hue: hue, saturation: 0.6, brightness: 0.85)
+        }
+    }
+
+    private var confidenceIcon: String? {
+        guard let mt = matchType else { return nil }
+        switch mt {
+        case "exact": return nil  // No indicator needed for exact match
+        case "fuzzy": return "wand.and.stars"
+        case "intent": return "lightbulb"
+        case "fallback": return "sparkles"
+        default: return nil
+        }
+    }
 
     var body: some View {
         HStack(spacing: 5) {
-            GhostIcon(size: 12, animate: false, tint: agentColor(name))
+            GhostIcon(size: 12, animate: false, tint: color)
             Text(name)
                 .font(.system(size: 11, weight: .semibold))
-                .foregroundColor(agentColor(name))
+                .foregroundColor(color)
+            if let icon = confidenceIcon {
+                Image(systemName: icon)
+                    .font(.system(size: 8))
+                    .foregroundColor(color.opacity(0.6))
+            }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 4)
-        .background(agentColor(name).opacity(0.1))
+        .background(color.opacity(0.1))
         .clipShape(Capsule())
-        .overlay(Capsule().stroke(agentColor(name).opacity(0.2), lineWidth: 0.5))
+        .overlay(Capsule().stroke(color.opacity(0.2), lineWidth: 0.5))
         .accessibilityLabel("Agent: \(name)")
     }
 }

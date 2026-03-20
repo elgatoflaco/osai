@@ -212,8 +212,12 @@ struct DesktopAgentCLI {
                     emitter.emitSuggestions(suggestions)
                 }
 
-                // Emit done event for desktop app
-                emitter?.emitDone()
+                // Emit session summary + done event for desktop app
+                if let emitter = emitter {
+                    let perf = agent.performanceSummary
+                    emitter.emitSessionSummary(turns: perf.turns, cacheHits: perf.cacheHits, cost: perf.cost, contextPct: perf.contextPct)
+                    emitter.emitDone()
+                }
 
                 // Deliver result to gateway if --deliver specified
                 if let target = deliverTarget {
@@ -318,6 +322,7 @@ struct DesktopAgentCLI {
         }
     }
     nonisolated(unsafe) static var usageDisplayLevel: UsageDisplayLevel = .full
+    nonisolated(unsafe) static var lastUndoneInput: String?
 
     /// Save terminal state before entering raw mode (called once at interactive start)
     static func saveTerminal() {
@@ -525,8 +530,9 @@ struct DesktopAgentCLI {
         let commands = ["/help", "/quit", "/exit", "/clear", "/config", "/model",
                        "/mcp", "/plugin", "/memory", "/skill", "/task", "/gateway",
                        "/fallback", "/apps", "/windows", "/screen", "/perms",
-                       "/verbose", "/yolo", "/context", "/compact",
-                       "/save", "/sessions", "/session", "/new"]
+                       "/verbose", "/yolo", "/context", "/compact", "/undo", "/retry",
+                       "/save", "/sessions", "/session", "/new", "/agent",
+                       "/code", "/research", "/news", "/write", "/design", "/product", "/organizer"]
 
         // Find closest match by edit distance or prefix
         var bestMatch: String?
@@ -608,8 +614,96 @@ struct DesktopAgentCLI {
                 printDim("  Not enough history to compact.")
             } else {
                 printColored("  Compacting...", color: .magenta)
-                // Trigger compaction on next turn by temporarily lowering threshold
                 printHint("Compaction will happen automatically or use /clear to reset.")
+            }
+            return .handled
+
+        case "/undo":
+            if let undoneText = agent.undoLastExchange() {
+                let preview = String(undoneText.prefix(80))
+                printColored("  ↩ Undid last exchange: \"\(preview)\"", color: .cyan)
+                printHint("History now has \(agent.historyCount) messages. Use /retry to resend.")
+                lastUndoneInput = undoneText
+            } else {
+                printDim("  Nothing to undo.")
+            }
+            return .handled
+
+        case "/retry":
+            // Retry the last message (optionally with edits)
+            let newPrompt: String
+            if !args.isEmpty {
+                // /retry <new prompt> — use the new prompt instead
+                newPrompt = args.joined(separator: " ")
+            } else if let undone = lastUndoneInput {
+                // /retry after /undo — resend the undone message
+                newPrompt = undone
+            } else if let lastUser = agent.undoLastExchange() {
+                // /retry without /undo — undo + resend
+                newPrompt = lastUser
+            } else {
+                printDim("  Nothing to retry. Send a message first.")
+                return .handled
+            }
+            lastUndoneInput = nil
+            printColored("  🔄 Retrying: \"\(String(newPrompt.prefix(80)))\"", color: .cyan)
+            do {
+                _ = try await agent.processUserInput(newPrompt)
+            } catch {
+                printColored("  Error: \(error)", color: .red)
+            }
+            return .handled
+
+        // --- Direct Agent Routing ---
+        case "/agent":
+            if args.isEmpty {
+                let agents = AgentRegistry.loadAll()
+                if agents.isEmpty {
+                    printDim("  No agents configured. Add them to ~/.desktop-agent/agents/")
+                } else {
+                    printColored("  Available agents:", color: .cyan)
+                    for a in agents {
+                        let triggers = a.triggers.prefix(5).joined(separator: ", ")
+                        printDim("    \(a.name) [\(a.model)] triggers: \(triggers)")
+                    }
+                    printHint("  Usage: /agent <name> <prompt>")
+                    printHint("  Shortcuts: /code, /research, /news, /write, /design")
+                }
+                return .handled
+            }
+            // /agent <name> <prompt...> — route directly to named agent
+            let agentName = args[0].lowercased()
+            let prompt = args.dropFirst().joined(separator: " ")
+            if prompt.isEmpty {
+                printColored("  Usage: /agent \(agentName) <your prompt>", color: .yellow)
+                return .handled
+            }
+            let allAgents = AgentRegistry.loadAll()
+            if let target = allAgents.first(where: { $0.name.lowercased() == agentName }) {
+                printColored("  → Routing directly to \(target.name) (\(target.model))", color: .magenta)
+                do {
+                    _ = try await agent.processUserInput("[\(target.name.uppercased()) AGENT] \(prompt)")
+                } catch {
+                    printColored("  Error: \(error)", color: .red)
+                }
+            } else {
+                printColored("  Agent '\(agentName)' not found. Use /agent to list available agents.", color: .red)
+            }
+            return .handled
+
+        // Agent shortcuts — skip LLM routing, go direct
+        case "/code", "/research", "/news", "/write", "/design", "/product", "/organizer":
+            let agentName = String(command.dropFirst())  // remove "/"
+            let prompt = args.joined(separator: " ")
+            if prompt.isEmpty {
+                printColored("  Usage: \(command) <your prompt>", color: .yellow)
+                return .handled
+            }
+            printColored("  → Direct to \(agentName) agent", color: .magenta)
+            do {
+                _ = try await agent.processUserInput("[\(agentName.uppercased()) AGENT] \(prompt)")
+            } catch {
+                printColored("  Error: \(error)", color: .red)
             }
             return .handled
 
@@ -1295,11 +1389,11 @@ struct DesktopAgentCLI {
             if phrase.isEmpty {
                 printDim("  Usage: /agent test <phrase>")
                 printDim("  Example: /agent test dame las noticias de hoy")
-            } else if let match = AgentRegistry.route(input: phrase) {
-                printColored("  \u{2192} Would route to: \(match.name) (\(match.model))", color: .cyan)
-                printDim("     Matched triggers: \(match.triggers.filter { phrase.lowercased().contains($0.lowercased()) }.joined(separator: ", "))")
+            } else if let route = AgentRegistry.route(input: phrase) {
+                printColored("  \u{2192} Would route to: \(route.agent.name) (\(route.agent.model)) [\(route.matchType.rawValue), score: \(route.score)]", color: .cyan)
+                printDim("     Reason: \(route.reason)")
             } else {
-                printDim("  \u{2192} No agent matched. Main agent would handle.")
+                printDim("  \u{2192} No agent matched. Main assistant would handle.")
             }
 
         case "reload":
@@ -1337,13 +1431,41 @@ struct DesktopAgentCLI {
                 DeliveryQueue.fail(id: pending.id)
                 return
             }
+
+            // Support DM delivery: "discord:dm:USER_ID" → create DM channel first
+            var resolvedChannelId = chatId
+            if chatId.hasPrefix("dm:") {
+                let userId = String(chatId.dropFirst(3))
+                do {
+                    let dmUrl = URL(string: "https://discord.com/api/v10/users/@me/channels")!
+                    var dmReq = URLRequest(url: dmUrl)
+                    dmReq.httpMethod = "POST"
+                    dmReq.setValue("Bot \(discord.botToken)", forHTTPHeaderField: "Authorization")
+                    dmReq.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                    dmReq.httpBody = try JSONSerialization.data(withJSONObject: ["recipient_id": userId])
+                    let (dmData, _) = try await URLSession.shared.data(for: dmReq)
+                    if let dmJson = try? JSONSerialization.jsonObject(with: dmData) as? [String: Any],
+                       let dmChannelId = dmJson["id"] as? String {
+                        resolvedChannelId = dmChannelId
+                    } else {
+                        printColored("  ✗ Discord: failed to create DM channel for user \(userId)", color: .red)
+                        DeliveryQueue.fail(id: pending.id)
+                        return
+                    }
+                } catch {
+                    printColored("  ✗ Discord DM error: \(error)", color: .red)
+                    DeliveryQueue.fail(id: pending.id)
+                    return
+                }
+            }
+
             // Short messages: plain content. Long messages (>500): embed with teal color.
             // Embed description max 4096 chars; split into multiple embeds if needed.
             if message.count <= 500 {
                 let chunks = splitForDelivery(message, maxLength: 2000)
                 for chunk in chunks {
                     do {
-                        let url = URL(string: "https://discord.com/api/v10/channels/\(chatId)/messages")!
+                        let url = URL(string: "https://discord.com/api/v10/channels/\(resolvedChannelId)/messages")!
                         var request = URLRequest(url: url)
                         request.httpMethod = "POST"
                         request.setValue("Bot \(discord.botToken)", forHTTPHeaderField: "Authorization")
@@ -1373,7 +1495,7 @@ struct DesktopAgentCLI {
                             "timestamp": timestamp
                         ]
                         let payload: [String: Any] = ["embeds": [embed]]
-                        let url = URL(string: "https://discord.com/api/v10/channels/\(chatId)/messages")!
+                        let url = URL(string: "https://discord.com/api/v10/channels/\(resolvedChannelId)/messages")!
                         var request = URLRequest(url: url)
                         request.httpMethod = "POST"
                         request.setValue("Bot \(discord.botToken)", forHTTPHeaderField: "Authorization")

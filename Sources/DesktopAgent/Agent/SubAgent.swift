@@ -133,6 +133,7 @@ final class SubAgentExecutor {
     private let mcpManager: MCPManager?
     private let parentContext: String?
     private let maxConcurrency: Int
+    var appModeEmitter: AppModeEmitter?
 
     init(config: AgentConfig, mcpManager: MCPManager? = nil, parentContext: String? = nil, maxConcurrency: Int = 5) {
         self.config = config
@@ -211,8 +212,8 @@ final class SubAgentExecutor {
         if let allowed = task.type.allowedTools {
             filteredTools = tools.filter { allowed.contains($0.name) }
         } else {
-            // Remove run_subagents to prevent infinite recursion
-            filteredTools = tools.filter { $0.name != "run_subagents" }
+            // Remove recursion-prone tools to prevent infinite nesting
+            filteredTools = tools.filter { $0.name != "run_subagents" && $0.name != "batch_execute" }
         }
 
         // Build system prompt with parent context
@@ -253,6 +254,13 @@ final class SubAgentExecutor {
                         }
                     case .toolUse(let id, let name, let input, _):
                         hasToolUse = true
+
+                        // Emit progress for desktop app
+                        appModeEmitter?.emitAgentProgress(
+                            id: task.id,
+                            agent: task.type.rawValue,
+                            status: "\(name) (iter \(iterations)/\(maxIterations))"
+                        )
 
                         // Check if it's an MCP tool
                         if let mcp = mcpManager, mcp.canHandle(toolName: name) {

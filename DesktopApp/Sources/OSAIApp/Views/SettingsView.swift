@@ -196,6 +196,15 @@ struct SettingsView: View {
                             .frame(minWidth: 90, alignment: .leading)
 
                         if let entry = entry, hasKey {
+                            if provider == "anthropic" && entry.apiKey.hasPrefix("sk-ant-oat") {
+                                Text("Suscripción Pro")
+                                    .font(.system(size: 10, weight: .bold))
+                                    .foregroundColor(.green)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(Color.green.opacity(0.15))
+                                    .clipShape(Capsule())
+                            }
                             Text(entry.maskedKey)
                                 .font(AppTheme.fontMono)
                                 .foregroundColor(AppTheme.textMuted)

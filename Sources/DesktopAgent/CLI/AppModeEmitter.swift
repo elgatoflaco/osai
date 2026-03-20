@@ -19,6 +19,10 @@ struct AppEvent: Encodable {
     var inputTokens: Int?
     var outputTokens: Int?
     var suggestions: [String]?
+    var fromAgent: String?
+    var toAgent: String?
+    var task: String?
+    var matchType: String?
 }
 
 final class AppModeEmitter {
@@ -54,8 +58,48 @@ final class AppModeEmitter {
         emit(AppEvent(event: "tool_result", id: id, name: name, success: success, output: truncated, durationMs: durationMs))
     }
 
-    func emitAgentRoute(agent: String, model: String) {
-        emit(AppEvent(event: "agent_route", agent: agent, model: model))
+    func emitAgentRoute(agent: String, model: String, matchType: String? = nil) {
+        emit(AppEvent(event: "agent_route", agent: agent, model: model, matchType: matchType))
+    }
+
+    func emitAgentDelegate(from: String, to: String, task: String) {
+        var e = AppEvent(event: "agent_delegate")
+        e.id = UUID().uuidString
+        e.fromAgent = from
+        e.toAgent = to
+        e.task = task
+        emit(e)
+    }
+
+    func emitAgentProgress(id: String, agent: String, status: String) {
+        var e = AppEvent(event: "agent_progress")
+        e.id = id
+        e.agent = agent
+        e.message = status
+        emit(e)
+    }
+
+    func emitAgentComplete(id: String, agent: String, success: Bool, summary: String) {
+        var e = AppEvent(event: "agent_complete")
+        e.id = id
+        e.success = success
+        e.agent = agent
+        e.message = summary
+        emit(e)
+    }
+
+    func emitCompaction(tier: Int, messagesBefore: Int, messagesAfter: Int, tokensSaved: Int) {
+        var e = AppEvent(event: "compaction")
+        e.message = "Tier \(tier): \(messagesBefore) → \(messagesAfter) messages, saved ~\(tokensSaved) tokens"
+        e.detail = "\(tier)"
+        emit(e)
+    }
+
+    func emitDoomLoop(toolName: String, count: Int) {
+        var e = AppEvent(event: "doom_loop")
+        e.name = toolName
+        e.message = "Tool '\(toolName)' called \(count)x with identical inputs — forced strategy change"
+        emit(e)
     }
 
     func emitStatus(_ message: String) {
@@ -77,6 +121,13 @@ final class AppModeEmitter {
     func emitSuggestions(_ suggestions: [String]) {
         guard !suggestions.isEmpty else { return }
         emit(AppEvent(event: "suggestions", suggestions: suggestions))
+    }
+
+    func emitSessionSummary(turns: Int, cacheHits: Int, cost: Double, contextPct: Int) {
+        var e = AppEvent(event: "session_summary")
+        e.message = String(format: "%.4f", cost)
+        e.detail = "\(turns)|\(cacheHits)|\(contextPct)"
+        emit(e)
     }
 
     func emitDone() {

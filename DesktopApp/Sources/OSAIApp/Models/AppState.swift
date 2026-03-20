@@ -283,7 +283,7 @@ struct ModelDefinition: Identifiable, Equatable {
 }
 
 let allModelDefinitions: [ModelDefinition] = [
-    // MARK: Anthropic (direct API — uses your Anthropic API key or OAuth token)
+    // MARK: Anthropic (direct — uses your Anthropic subscription or API key)
     ModelDefinition(id: "anthropic/claude-opus-4-20250514", displayName: "Claude Opus 4", shortName: "Opus 4", provider: "Anthropic", providerKey: "anthropic", tag: "Best", icon: "brain"),
     ModelDefinition(id: "anthropic/claude-sonnet-4-20250514", displayName: "Claude Sonnet 4", shortName: "Sonnet 4", provider: "Anthropic", providerKey: "anthropic", tag: "Smart", icon: "brain.head.profile"),
     ModelDefinition(id: "anthropic/claude-haiku-4-5-20251001", displayName: "Claude Haiku 4.5", shortName: "Haiku 4.5", provider: "Anthropic", providerKey: "anthropic", tag: "Fast", icon: "hare"),
@@ -2439,6 +2439,12 @@ class AppState: ObservableObject {
         return config.apiKeys[providerKey] != nil
     }
 
+    /// Whether a provider is using an OAuth/subscription token (not a paid API key)
+    func isSubscription(for providerKey: String) -> Bool {
+        guard let entry = config.apiKeys[providerKey] else { return false }
+        return entry.apiKey.hasPrefix("sk-ant-oat")
+    }
+
     func saveAPIKey(provider: String, key: String) {
         configService.saveAPIKey(provider: provider, key: key)
         config.apiKeys[provider] = APIKeyEntry(provider: provider, apiKey: key)
@@ -3253,8 +3259,9 @@ class AppState: ObservableObject {
                 activeConversation?.messages[idx].activities[actIdx].durationMs = durationMs
             }
 
-        case .agentRoute(let agent, _):
+        case .agentRoute(let agent, _, let matchType):
             activeConversation?.messages[idx].agentName = agent
+            activeConversation?.messages[idx].agentMatchType = matchType
             if activeConversation?.agentName == nil {
                 activeConversation?.agentName = agent
             }
@@ -3268,9 +3275,73 @@ class AppState: ObservableObject {
                 startTime: Date()
             )
             activeConversation?.messages[idx].activities.append(activity)
-            addNotification(title: "Agent Routed", message: "Routed to \(agent)", type: .info)
+
+        case .agentDelegate(let id, let from, let to, let task):
+            var activity = ActivityItem(
+                id: id,
+                type: .agentDelegate,
+                label: to,
+                detail: task,
+                isComplete: false,
+                startTime: Date()
+            )
+            activity.parentAgent = from
+            activity.taskDescription = task
+            state.activeActivityIds[id] = activity.id
+            activeConversation?.messages[idx].activities.append(activity)
+
+        case .agentProgress(let id, _, let status):
+            if let actIdx = activeConversation?.messages[idx].activities.firstIndex(where: { $0.id == id }) {
+                activeConversation?.messages[idx].activities[actIdx].detail = status
+            }
+
+        case .agentComplete(let id, _, let success, let summary):
+            if let actIdx = activeConversation?.messages[idx].activities.firstIndex(where: { $0.id == id }) {
+                activeConversation?.messages[idx].activities[actIdx].isComplete = true
+                activeConversation?.messages[idx].activities[actIdx].success = success
+                activeConversation?.messages[idx].activities[actIdx].output = summary
+                activeConversation?.messages[idx].activities[actIdx].durationMs = Int(Date().timeIntervalSince(
+                    activeConversation?.messages[idx].activities[actIdx].startTime ?? Date()
+                ) * 1000)
+            }
+
+        case .doomLoop(let toolName, let message):
+            let activity = ActivityItem(
+                id: UUID().uuidString,
+                type: .doomLoop,
+                label: toolName,
+                detail: message,
+                isComplete: true,
+                startTime: Date(),
+                success: false
+            )
+            activeConversation?.messages[idx].activities.append(activity)
+            showToast("Loop detected: \(toolName) stuck", type: .error)
+            AppSound.error.play()
+
+        case .compaction(let tier, let message):
+            let activity = ActivityItem(
+                id: UUID().uuidString,
+                type: .compaction,
+                label: "Context T\(tier)",
+                detail: message,
+                isComplete: true,
+                startTime: Date(),
+                success: true
+            )
+            activeConversation?.messages[idx].activities.append(activity)
+
+        case .sessionSummary(let turns, _, let cost, let contextPct):
+            activeConversation?.messages[idx].sessionCost = cost
+            activeConversation?.messages[idx].sessionTurns = turns
+            activeConversation?.messages[idx].sessionContextPct = contextPct
 
         case .status(let message):
+            // Filter debug noise — these prefixes are for CLI verbose mode, not GUI
+            let debugPrefixes = ["[AgentRouter]", "[Tools]", "[STATUS]", "[ROUTE", "[MCP-DEBUG]"]
+            if debugPrefixes.contains(where: { message.hasPrefix($0) }) {
+                break
+            }
             let activity = ActivityItem(
                 id: UUID().uuidString,
                 type: .status,

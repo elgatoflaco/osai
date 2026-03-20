@@ -805,14 +805,16 @@ struct ModelSelectorPopover: View {
                 HStack(spacing: 6) {
                     ForEach(providers, id: \.provider) { group in
                         let isActive = activeProvider == group.provider
-                        let hasKey = appState.hasAPIKey(for: group.models.first?.providerKey ?? "")
+                        let provKey = group.models.first?.providerKey ?? ""
+                        let hasKey = appState.hasAPIKey(for: provKey)
                         let isHovered = hoveredProvider == group.provider
+                        let isSub = group.provider == "Anthropic" && appState.isSubscription(for: "anthropic")
 
                         Button(action: { selectedProvider = group.provider }) {
                             HStack(spacing: 4) {
                                 Image(systemName: providerIcon(group.provider))
                                     .font(.system(size: 9))
-                                Text(group.provider)
+                                Text(isSub ? "Claude Pro" : group.provider)
                                     .font(.system(size: 10, weight: isActive ? .bold : .medium))
                                 Text("\(group.models.count)")
                                     .font(.system(size: 8, weight: .bold, design: .monospaced))
@@ -880,6 +882,16 @@ struct ModelSelectorPopover: View {
                                             Text(meta.description)
                                                 .font(.system(size: 10))
                                                 .foregroundColor(AppTheme.textSecondary)
+
+                                            if model.providerKey == "anthropic" && appState.isSubscription(for: "anthropic") {
+                                                Text("Suscripción")
+                                                    .font(.system(size: 8, weight: .bold))
+                                                    .foregroundColor(.green)
+                                                    .padding(.horizontal, 5)
+                                                    .padding(.vertical, 1)
+                                                    .background(Color.green.opacity(0.15))
+                                                    .clipShape(Capsule())
+                                            }
 
                                             Spacer()
 
