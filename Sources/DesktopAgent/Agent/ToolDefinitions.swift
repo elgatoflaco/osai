@@ -3,8 +3,8 @@ import Foundation
 // MARK: - Tool Category for Dynamic Loading
 
 enum ToolCategory: String, CaseIterable {
-    case core           // always loaded: take_screenshot, click_element, type_text, press_key, run_shell, read_file, write_file
-    case gui            // get_ui_elements, scroll, drag, mouse_move, wait, list_windows, move_window, resize_window, get_screen_size
+    case core           // always loaded: take_screenshot, click_element, type_text, press_key, run_shell, read_file, write_file, clipboard_manager, send_notification, spotlight_search
+    case gui            // get_ui_elements, scroll, drag, mouse_move, wait, list_windows, move_window, resize_window, get_screen_size, window_manager
     case web            // open_url (MCP chrome tools handled separately)
     case email          // send_email
     case scheduling     // schedule_task, list_tasks, cancel_task, run_task
@@ -17,7 +17,7 @@ enum ToolCategory: String, CaseIterable {
     case applescript    // run_applescript
     case adaptive       // adaptive_stats, ui_cache_lookup, clear_ui_cache
     case claudeCode     // claude_code
-    case apps           // list_apps, get_frontmost_app, activate_app, open_app, spotlight_search
+    case apps           // list_apps, get_frontmost_app, activate_app, open_app
     case files          // list_directory, file_info, read_clipboard, write_clipboard
     case system         // system_info, notify, web_search
 }
@@ -33,12 +33,12 @@ struct ToolDefinitions {
         var map: [String: ToolCategory] = [:]
 
         // Core (always loaded)
-        for name in ["take_screenshot", "click_element", "type_text", "press_key", "run_shell", "read_file", "write_file"] {
+        for name in ["take_screenshot", "click_element", "type_text", "press_key", "run_shell", "read_file", "write_file", "clipboard_manager", "send_notification", "spotlight_search"] {
             map[name] = .core
         }
 
         // GUI
-        for name in ["get_ui_elements", "scroll", "drag", "mouse_move", "wait", "list_windows", "move_window", "resize_window", "get_screen_size"] {
+        for name in ["get_ui_elements", "scroll", "drag", "mouse_move", "wait", "list_windows", "move_window", "resize_window", "get_screen_size", "window_manager"] {
             map[name] = .gui
         }
 
@@ -93,7 +93,7 @@ struct ToolDefinitions {
         map["claude_code"] = .claudeCode
 
         // Apps
-        for name in ["list_apps", "get_frontmost_app", "activate_app", "open_app", "spotlight_search"] {
+        for name in ["list_apps", "get_frontmost_app", "activate_app", "open_app"] {
             map[name] = .apps
         }
 
@@ -369,14 +369,30 @@ struct ToolDefinitions {
         // --- Spotlight ---
         ClaudeTool(
             name: "spotlight_search",
-            description: "Search for files, apps, or folders using macOS Spotlight.",
+            description: "Search files on macOS using Spotlight (mdfind). Searches file contents and metadata.",
             inputSchema: InputSchema(
                 type: "object",
                 properties: [
-                    "query": PropertySchema(type: "string", description: "Search query", enumValues: nil),
-                    "kind": PropertySchema(type: "string", description: "Filter by type", enumValues: ["application", "document", "folder", "image", "any"])
+                    "query": PropertySchema(type: "string", description: "Search query (Spotlight syntax, e.g. 'kMDItemDisplayName == *.swift' or plain text)", enumValues: nil),
+                    "folder": PropertySchema(type: "string", description: "Limit search to this folder path (optional)", enumValues: nil),
+                    "max_results": PropertySchema(type: "integer", description: "Maximum number of results to return (default: 10)", enumValues: nil)
                 ],
                 required: ["query"]
+            )
+        ),
+
+        // --- Notification ---
+        ClaudeTool(
+            name: "send_notification",
+            description: "Send a macOS notification to the user with a title, message, and optional sound.",
+            inputSchema: InputSchema(
+                type: "object",
+                properties: [
+                    "title": PropertySchema(type: "string", description: "Notification title", enumValues: nil),
+                    "message": PropertySchema(type: "string", description: "Notification body message", enumValues: nil),
+                    "sound": PropertySchema(type: "string", description: "Sound name (default: \"default\")", enumValues: nil)
+                ],
+                required: ["title", "message"]
             )
         ),
 
@@ -571,6 +587,23 @@ struct ToolDefinitions {
                 required: ["app_name", "width", "height"]
             )
         ),
+        ClaudeTool(
+            name: "window_manager",
+            description: "Advanced window management: list, focus, resize, move, minimize, close, tile, and fullscreen windows.",
+            inputSchema: InputSchema(
+                type: "object",
+                properties: [
+                    "action": PropertySchema(type: "string", description: "Window action to perform", enumValues: ["list_windows", "focus_window", "resize_window", "minimize_window", "close_window", "tile_left", "tile_right", "fullscreen"]),
+                    "app_name": PropertySchema(type: "string", description: "Application name (for focus, resize, minimize, close)", enumValues: nil),
+                    "title": PropertySchema(type: "string", description: "Window title filter (optional, for focus)", enumValues: nil),
+                    "x": PropertySchema(type: "integer", description: "X position (for resize_window)", enumValues: nil),
+                    "y": PropertySchema(type: "integer", description: "Y position (for resize_window)", enumValues: nil),
+                    "width": PropertySchema(type: "integer", description: "Window width (for resize_window)", enumValues: nil),
+                    "height": PropertySchema(type: "integer", description: "Window height (for resize_window)", enumValues: nil)
+                ],
+                required: ["action"]
+            )
+        ),
 
         // --- Utilities ---
         ClaudeTool(
@@ -602,6 +635,18 @@ struct ToolDefinitions {
                     "text": PropertySchema(type: "string", description: "Text to copy to clipboard", enumValues: nil)
                 ],
                 required: ["text"]
+            )
+        ),
+        ClaudeTool(
+            name: "clipboard_manager",
+            description: "Manage the macOS clipboard: read text, write text, or copy an image file to clipboard.",
+            inputSchema: InputSchema(
+                type: "object",
+                properties: [
+                    "action": PropertySchema(type: "string", description: "Action to perform", enumValues: ["read", "write", "write_image"]),
+                    "content": PropertySchema(type: "string", description: "Text to write (for 'write') or image file path (for 'write_image')", enumValues: nil)
+                ],
+                required: ["action"]
             )
         ),
         ClaudeTool(

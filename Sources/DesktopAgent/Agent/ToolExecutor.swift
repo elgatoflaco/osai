@@ -124,8 +124,44 @@ final class ToolExecutor {
         // --- Spotlight ---
         handlers["spotlight_search"] = { exe, input in
             let query = input["query"]?.stringValue ?? ""
-            let kind = input["kind"]?.stringValue
-            return (exe.shell.spotlightSearch(query: query, kind: kind), nil)
+            let folder = input["folder"]?.stringValue
+            let maxResults = input["max_results"]?.intValue ?? 10
+            guard !query.isEmpty else {
+                return (ToolResult(success: false, output: "Missing required field: query", screenshot: nil), nil)
+            }
+            let safeQuery = query.replacingOccurrences(of: "'", with: "'\\''")
+            var cmd: String
+            if let folder = folder, !folder.isEmpty {
+                let safeFolder = folder.replacingOccurrences(of: "'", with: "'\\''")
+                cmd = "mdfind -onlyin '\(safeFolder)' '\(safeQuery)' | head -\(maxResults)"
+            } else {
+                cmd = "mdfind '\(safeQuery)' | head -\(maxResults)"
+            }
+            let result = exe.shell.execute(command: cmd, timeout: 15)
+            if result.success {
+                let output = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
+                return (ToolResult(success: true, output: output.isEmpty ? "No results found for: \(query)" : output, screenshot: nil), nil)
+            }
+            return (result, nil)
+        }
+
+        // --- Notification ---
+        handlers["send_notification"] = { exe, input in
+            let title = input["title"]?.stringValue ?? ""
+            let message = input["message"]?.stringValue ?? ""
+            let sound = input["sound"]?.stringValue ?? "default"
+            guard !title.isEmpty, !message.isEmpty else {
+                return (ToolResult(success: false, output: "Missing required fields: title, message", screenshot: nil), nil)
+            }
+            let safeTitle = title.replacingOccurrences(of: "\"", with: "\\\"")
+            let safeMessage = message.replacingOccurrences(of: "\"", with: "\\\"")
+            let safeSound = sound.replacingOccurrences(of: "\"", with: "\\\"")
+            let script = "display notification \"\(safeMessage)\" with title \"\(safeTitle)\" sound name \"\(safeSound)\""
+            let result = exe.shell.execute(command: "osascript -e '\(script.replacingOccurrences(of: "'", with: "'\\''"))'", timeout: 5)
+            if result.success {
+                return (ToolResult(success: true, output: "Notification sent: \(title)", screenshot: nil), nil)
+            }
+            return (result, nil)
         }
 
         // --- App Management ---
@@ -289,6 +325,171 @@ final class ToolExecutor {
             return (exe.accessibility.setWindowSize(pid: app.pid, width: w, height: h), nil)
         }
 
+        // --- Window Manager ---
+        handlers["window_manager"] = { exe, input in
+            let action = input["action"]?.stringValue ?? ""
+            let appName = input["app_name"]?.stringValue ?? ""
+            let title = input["title"]?.stringValue
+
+            switch action {
+            case "list_windows":
+                let script = """
+                tell application "System Events"
+                    set windowList to ""
+                    repeat with proc in (every process whose visible is true)
+                        set procName to name of proc
+                        try
+                            repeat with win in (every window of proc)
+                                set winTitle to name of win
+                                set winPos to position of win
+                                set winSize to size of win
+                                set windowList to windowList & procName & " | " & winTitle & " | pos: (" & (item 1 of winPos) & ", " & (item 2 of winPos) & ") | size: (" & (item 1 of winSize) & "x" & (item 2 of winSize) & ")" & linefeed
+                            end repeat
+                        end try
+                    end repeat
+                    return windowList
+                end tell
+                """
+                let result = exe.applescript.execute(script)
+                let output = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
+                return (ToolResult(success: result.success, output: output.isEmpty ? "No visible windows found" : output, screenshot: nil), nil)
+
+            case "focus_window":
+                guard !appName.isEmpty || title != nil else {
+                    return (ToolResult(success: false, output: "Provide app_name or title to focus a window", screenshot: nil), nil)
+                }
+                if let title = title, !title.isEmpty {
+                    let safeTitle = title.replacingOccurrences(of: "\"", with: "\\\"")
+                    let script = """
+                    tell application "System Events"
+                        repeat with proc in (every process whose visible is true)
+                            try
+                                repeat with win in (every window of proc)
+                                    if name of win contains "\(safeTitle)" then
+                                        set frontmost of proc to true
+                                        perform action "AXRaise" of win
+                                        return "Focused: " & name of proc & " — " & name of win
+                                    end if
+                                end repeat
+                            end try
+                        end repeat
+                        return "No window matching title: \(safeTitle)"
+                    end tell
+                    """
+                    return (exe.applescript.execute(script), nil)
+                } else {
+                    let safeApp = appName.replacingOccurrences(of: "\"", with: "\\\"")
+                    let script = """
+                    tell application "\(safeApp)" to activate
+                    return "Focused: \(safeApp)"
+                    """
+                    return (exe.applescript.execute(script), nil)
+                }
+
+            case "resize_window":
+                guard !appName.isEmpty else {
+                    return (ToolResult(success: false, output: "Provide app_name for resize_window", screenshot: nil), nil)
+                }
+                let safeApp = appName.replacingOccurrences(of: "\"", with: "\\\"")
+                let x = input["x"]?.intValue
+                let y = input["y"]?.intValue
+                let w = input["width"]?.intValue
+                let h = input["height"]?.intValue
+                var commands: [String] = []
+                if let x = x, let y = y {
+                    commands.append("set position of window 1 to {\(x), \(y)}")
+                }
+                if let w = w, let h = h {
+                    commands.append("set size of window 1 to {\(w), \(h)}")
+                }
+                guard !commands.isEmpty else {
+                    return (ToolResult(success: false, output: "Provide x,y for position and/or width,height for size", screenshot: nil), nil)
+                }
+                let script = """
+                tell application "System Events" to tell process "\(safeApp)"
+                    \(commands.joined(separator: "\n    "))
+                end tell
+                return "Resized: \(safeApp)"
+                """
+                return (exe.applescript.execute(script), nil)
+
+            case "minimize_window":
+                guard !appName.isEmpty else {
+                    return (ToolResult(success: false, output: "Provide app_name for minimize_window", screenshot: nil), nil)
+                }
+                let safeApp = appName.replacingOccurrences(of: "\"", with: "\\\"")
+                let script = """
+                tell application "System Events" to tell process "\(safeApp)"
+                    set value of attribute "AXMinimized" of window 1 to true
+                end tell
+                return "Minimized: \(safeApp)"
+                """
+                return (exe.applescript.execute(script), nil)
+
+            case "close_window":
+                guard !appName.isEmpty else {
+                    return (ToolResult(success: false, output: "Provide app_name for close_window", screenshot: nil), nil)
+                }
+                let safeApp = appName.replacingOccurrences(of: "\"", with: "\\\"")
+                let script = """
+                tell application "System Events" to tell process "\(safeApp)"
+                    click (menu item "Close" of menu "File" of menu bar 1)
+                end tell
+                return "Closed window: \(safeApp)"
+                """
+                return (exe.applescript.execute(script), nil)
+
+            case "tile_left":
+                let script = """
+                tell application "System Events"
+                    set screenBounds to bounds of window of desktop
+                    set screenW to item 3 of screenBounds
+                    set screenH to item 4 of screenBounds
+                    set halfW to screenW div 2
+                    set frontProc to first process whose frontmost is true
+                    tell frontProc
+                        set position of window 1 to {0, 0}
+                        set size of window 1 to {halfW, screenH}
+                    end tell
+                    return "Tiled left: " & name of frontProc & " (" & halfW & "x" & screenH & ")"
+                end tell
+                """
+                exe.vision.invalidateCache()
+                return (exe.applescript.execute(script), nil)
+
+            case "tile_right":
+                let script = """
+                tell application "System Events"
+                    set screenBounds to bounds of window of desktop
+                    set screenW to item 3 of screenBounds
+                    set screenH to item 4 of screenBounds
+                    set halfW to screenW div 2
+                    set frontProc to first process whose frontmost is true
+                    tell frontProc
+                        set position of window 1 to {halfW, 0}
+                        set size of window 1 to {halfW, screenH}
+                    end tell
+                    return "Tiled right: " & name of frontProc & " (" & halfW & "x" & screenH & ")"
+                end tell
+                """
+                exe.vision.invalidateCache()
+                return (exe.applescript.execute(script), nil)
+
+            case "fullscreen":
+                let script = """
+                tell application "System Events"
+                    keystroke "f" using {control down, command down}
+                end tell
+                return "Toggled fullscreen"
+                """
+                exe.vision.invalidateCache()
+                return (exe.applescript.execute(script), nil)
+
+            default:
+                return (ToolResult(success: false, output: "Unknown window_manager action: \(action). Valid: list_windows, focus_window, resize_window, minimize_window, close_window, tile_left, tile_right, fullscreen", screenshot: nil), nil)
+            }
+        }
+
         // --- Utilities ---
         handlers["open_url"] = { exe, input in
             let url = input["url"]?.stringValue ?? ""
@@ -302,6 +503,61 @@ final class ToolExecutor {
         handlers["write_clipboard"] = { exe, input in
             let text = input["text"]?.stringValue ?? ""
             return (exe.applescript.setClipboard(text), nil)
+        }
+
+        handlers["clipboard_manager"] = { exe, input in
+            let action = input["action"]?.stringValue ?? ""
+
+            switch action {
+            case "read":
+                let result = exe.shell.execute(command: "pbpaste", timeout: 5)
+                if result.success {
+                    let text = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
+                    return (ToolResult(success: true, output: text.isEmpty ? "(clipboard is empty)" : text, screenshot: nil), nil)
+                }
+                return (result, nil)
+
+            case "write":
+                let content = input["content"]?.stringValue ?? ""
+                guard !content.isEmpty else {
+                    return (ToolResult(success: false, output: "Missing required field: content", screenshot: nil), nil)
+                }
+                // Pipe content via stdin to pbcopy to handle special characters safely
+                let safeContent = content.replacingOccurrences(of: "'", with: "'\\''")
+                let result = exe.shell.execute(command: "printf '%s' '\(safeContent)' | pbcopy", timeout: 5)
+                return (result.success
+                    ? ToolResult(success: true, output: "Text copied to clipboard (\(content.count) chars)", screenshot: nil)
+                    : result, nil)
+
+            case "write_image":
+                let path = input["content"]?.stringValue ?? ""
+                guard !path.isEmpty else {
+                    return (ToolResult(success: false, output: "Missing required field: content (image file path)", screenshot: nil), nil)
+                }
+                let resolvedPath = (path as NSString).expandingTildeInPath
+                let safePath = resolvedPath.replacingOccurrences(of: "'", with: "'\\''")
+                // Determine image type from extension
+                let ext = (resolvedPath as NSString).pathExtension.lowercased()
+                let imageType: String
+                switch ext {
+                case "png":
+                    imageType = "PNG picture"
+                case "tiff", "tif":
+                    imageType = "TIFF picture"
+                case "gif":
+                    imageType = "GIF picture"
+                default:
+                    imageType = "JPEG picture"
+                }
+                let script = "set the clipboard to (read (POSIX file \"\(safePath)\") as \(imageType))"
+                let result = exe.shell.execute(command: "osascript -e '\(script.replacingOccurrences(of: "'", with: "'\\''"))'", timeout: 10)
+                return (result.success
+                    ? ToolResult(success: true, output: "Image copied to clipboard: \(resolvedPath)", screenshot: nil)
+                    : result, nil)
+
+            default:
+                return (ToolResult(success: false, output: "Unknown clipboard_manager action: \(action). Valid actions: read, write, write_image", screenshot: nil), nil)
+            }
         }
 
         handlers["get_screen_size"] = { exe, input in
