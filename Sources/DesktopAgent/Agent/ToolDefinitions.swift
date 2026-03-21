@@ -3,7 +3,7 @@ import Foundation
 // MARK: - Tool Category for Dynamic Loading
 
 enum ToolCategory: String, CaseIterable {
-    case core           // always loaded: take_screenshot, click_element, type_text, press_key, run_shell, read_file, write_file, clipboard_manager, send_notification, spotlight_search
+    case core           // always loaded: take_screenshot, click_element, type_text, press_key, run_shell, read_file, write_file, clipboard_manager, send_notification, spotlight_search, file_manager
     case gui            // get_ui_elements, scroll, drag, mouse_move, wait, list_windows, move_window, resize_window, get_screen_size, window_manager
     case web            // open_url (MCP chrome tools handled separately)
     case email          // send_email
@@ -19,7 +19,7 @@ enum ToolCategory: String, CaseIterable {
     case claudeCode     // claude_code
     case apps           // list_apps, get_frontmost_app, activate_app, open_app
     case files          // list_directory, file_info, read_clipboard, write_clipboard
-    case system         // system_info, notify, web_search, process_manager, network_info, battery_info
+    case system         // system_info, notify, web_search, process_manager, network_info, battery_info, media_control
 }
 
 // MARK: - Tool Definitions for Claude
@@ -33,7 +33,7 @@ struct ToolDefinitions {
         var map: [String: ToolCategory] = [:]
 
         // Core (always loaded)
-        for name in ["take_screenshot", "click_element", "type_text", "press_key", "run_shell", "read_file", "write_file", "clipboard_manager", "send_notification", "spotlight_search"] {
+        for name in ["take_screenshot", "click_element", "type_text", "press_key", "run_shell", "read_file", "write_file", "clipboard_manager", "send_notification", "spotlight_search", "file_manager"] {
             map[name] = .core
         }
 
@@ -103,7 +103,7 @@ struct ToolDefinitions {
         }
 
         // System
-        for name in ["system_info", "notify", "web_search", "system_control", "process_manager", "network_info", "battery_info"] {
+        for name in ["system_info", "notify", "web_search", "system_control", "media_control", "process_manager", "network_info", "battery_info"] {
             map[name] = .system
         }
 
@@ -650,6 +650,20 @@ struct ToolDefinitions {
             )
         ),
         ClaudeTool(
+            name: "file_manager",
+            description: "Manage files and folders: list, find, get info, open, reveal in Finder, move, copy, trash, create folders, and get folder sizes.",
+            inputSchema: InputSchema(
+                type: "object",
+                properties: [
+                    "action": PropertySchema(type: "string", description: "Action to perform", enumValues: ["list", "find", "info", "open", "reveal", "move", "copy", "trash", "create_folder", "get_size"]),
+                    "path": PropertySchema(type: "string", description: "File or directory path (required for most actions)", enumValues: nil),
+                    "destination": PropertySchema(type: "string", description: "Destination path (for move and copy)", enumValues: nil),
+                    "pattern": PropertySchema(type: "string", description: "File name pattern (for find, e.g. '*.swift')", enumValues: nil)
+                ],
+                required: ["action"]
+            )
+        ),
+        ClaudeTool(
             name: "get_screen_size",
             description: "Get screen dimensions in pixels.",
             inputSchema: InputSchema(
@@ -803,6 +817,21 @@ struct ToolDefinitions {
                 properties: [
                     "action": PropertySchema(type: "string", description: "System action to perform", enumValues: ["set_volume", "toggle_wifi", "toggle_bluetooth", "toggle_dnd", "set_brightness", "toggle_dark_mode", "lock_screen", "empty_trash", "sleep_display"]),
                     "value": PropertySchema(type: "integer", description: "Value for set_volume (0-100) or set_brightness (0-100)", enumValues: nil)
+                ],
+                required: ["action"]
+            )
+        ),
+
+        // --- Media Control ---
+        ClaudeTool(
+            name: "media_control",
+            description: "Control music/media playback on macOS. Automatically detects Spotify or Apple Music. Can also open URLs in the default browser.",
+            inputSchema: InputSchema(
+                type: "object",
+                properties: [
+                    "action": PropertySchema(type: "string", description: "Media action to perform", enumValues: ["play_pause", "next_track", "previous_track", "now_playing", "set_volume", "mute", "unmute", "open_url_in_browser"]),
+                    "value": PropertySchema(type: "integer", description: "Volume level 0-100 (for set_volume)", enumValues: nil),
+                    "url": PropertySchema(type: "string", description: "URL to open (for open_url_in_browser)", enumValues: nil)
                 ],
                 required: ["action"]
             )

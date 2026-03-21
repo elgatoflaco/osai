@@ -1583,6 +1583,13 @@ struct MessageBubble: View {
                 .padding(.trailing, 4)
                 .opacity(isTimestampVisible ? 1 : 0)
                 .animation(.easeInOut(duration: 0.2), value: isTimestampVisible)
+            } else if !showTimestamp && isHovered {
+                // Hover-to-reveal timestamp on every message
+                Text(timeString(message.timestamp))
+                    .font(.system(size: 9))
+                    .foregroundColor(AppTheme.textMuted)
+                    .padding(.trailing, 4)
+                    .transition(.opacity)
             }
 
             annotationView
@@ -2079,6 +2086,12 @@ struct MessageBubble: View {
                         }
                         .opacity(isTimestampVisible ? 1 : 0)
                         .animation(.easeInOut(duration: 0.2), value: isTimestampVisible)
+                    } else if !showTimestamp && isHovered {
+                        // Hover-to-reveal timestamp on every message
+                        Text(timeString(message.timestamp))
+                            .font(.system(size: 9))
+                            .foregroundColor(AppTheme.textMuted)
+                            .transition(.opacity)
                     }
 
                     // Reaction picker: show on hover or if a reaction is already set

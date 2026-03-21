@@ -769,6 +769,109 @@ final class ToolExecutor {
             }
         }
 
+        // --- Media Control ---
+        handlers["media_control"] = { exe, input in
+            let action = input["action"]?.stringValue ?? ""
+            let value = input["value"]?.intValue
+            let url = input["url"]?.stringValue ?? ""
+
+            // Helper: detect whether Spotify is running
+            let spotifyCheck = exe.shell.execute(command: "osascript -e 'tell app \"System Events\" to (name of processes) contains \"Spotify\"'", timeout: 5)
+            let useSpotify = spotifyCheck.output.trimmingCharacters(in: .whitespacesAndNewlines) == "true"
+            let app = useSpotify ? "Spotify" : "Music"
+
+            switch action {
+            case "play_pause":
+                let result = exe.shell.execute(command: "osascript -e 'tell app \"\(app)\" to playpause'", timeout: 5)
+                return (result.success
+                    ? ToolResult(success: true, output: "Toggled play/pause on \(app)", screenshot: nil)
+                    : result, nil)
+
+            case "next_track":
+                let result = exe.shell.execute(command: "osascript -e 'tell app \"\(app)\" to next track'", timeout: 5)
+                return (result.success
+                    ? ToolResult(success: true, output: "Skipped to next track on \(app)", screenshot: nil)
+                    : result, nil)
+
+            case "previous_track":
+                let result = exe.shell.execute(command: "osascript -e 'tell app \"\(app)\" to previous track'", timeout: 5)
+                return (result.success
+                    ? ToolResult(success: true, output: "Went to previous track on \(app)", screenshot: nil)
+                    : result, nil)
+
+            case "now_playing":
+                let script: String
+                if useSpotify {
+                    script = """
+                    osascript -e 'tell app "Spotify"' \
+                      -e 'set trackName to name of current track' \
+                      -e 'set artistName to artist of current track' \
+                      -e 'set albumName to album of current track' \
+                      -e 'set playerState to player state as string' \
+                      -e 'return trackName & " | " & artistName & " | " & albumName & " | " & playerState' \
+                      -e 'end tell'
+                    """
+                } else {
+                    script = """
+                    osascript -e 'tell app "Music"' \
+                      -e 'set trackName to name of current track' \
+                      -e 'set artistName to artist of current track' \
+                      -e 'set albumName to album of current track' \
+                      -e 'set playerState to player state as string' \
+                      -e 'return trackName & " | " & artistName & " | " & albumName & " | " & playerState' \
+                      -e 'end tell'
+                    """
+                }
+                let result = exe.shell.execute(command: script, timeout: 10)
+                if result.success {
+                    let parts = result.output.trimmingCharacters(in: .whitespacesAndNewlines).components(separatedBy: " | ")
+                    if parts.count >= 4 {
+                        return (ToolResult(success: true, output: "Now playing on \(app):\n  Track: \(parts[0])\n  Artist: \(parts[1])\n  Album: \(parts[2])\n  State: \(parts[3])", screenshot: nil), nil)
+                    }
+                    return (ToolResult(success: true, output: "Now playing on \(app): \(result.output.trimmingCharacters(in: .whitespacesAndNewlines))", screenshot: nil), nil)
+                }
+                return (ToolResult(success: false, output: "No track currently playing or \(app) is not running.", screenshot: nil), nil)
+
+            case "set_volume":
+                let vol = min(max(value ?? 50, 0), 100)
+                let script: String
+                if useSpotify {
+                    script = "osascript -e 'tell app \"Spotify\" to set sound volume to \(vol)'"
+                } else {
+                    script = "osascript -e 'tell app \"Music\" to set sound volume to \(vol)'"
+                }
+                let result = exe.shell.execute(command: script, timeout: 5)
+                return (result.success
+                    ? ToolResult(success: true, output: "\(app) volume set to \(vol)%", screenshot: nil)
+                    : result, nil)
+
+            case "mute":
+                let result = exe.shell.execute(command: "osascript -e 'set volume with output muted'", timeout: 5)
+                return (result.success
+                    ? ToolResult(success: true, output: "System audio muted", screenshot: nil)
+                    : result, nil)
+
+            case "unmute":
+                let result = exe.shell.execute(command: "osascript -e 'set volume without output muted'", timeout: 5)
+                return (result.success
+                    ? ToolResult(success: true, output: "System audio unmuted", screenshot: nil)
+                    : result, nil)
+
+            case "open_url_in_browser":
+                guard !url.isEmpty else {
+                    return (ToolResult(success: false, output: "Missing 'url' parameter for open_url_in_browser action", screenshot: nil), nil)
+                }
+                let sanitized = url.replacingOccurrences(of: "\"", with: "\\\"")
+                let result = exe.shell.execute(command: "open \"\(sanitized)\"", timeout: 10)
+                return (result.success
+                    ? ToolResult(success: true, output: "Opened \(url) in default browser", screenshot: nil)
+                    : result, nil)
+
+            default:
+                return (ToolResult(success: false, output: "Unknown media_control action: \(action). Valid actions: play_pause, next_track, previous_track, now_playing, set_volume, mute, unmute, open_url_in_browser", screenshot: nil), nil)
+            }
+        }
+
         // --- Process Manager ---
         handlers["process_manager"] = { exe, input in
             let action = input["action"]?.stringValue ?? ""
@@ -991,6 +1094,111 @@ final class ToolExecutor {
         // --- Sub-Agents (handled by AgentLoop directly) ---
         handlers["run_subagents"] = { exe, input in
             return (ToolResult(success: true, output: "SUBAGENT_DISPATCH", screenshot: nil), nil)
+        }
+
+        // --- File Manager ---
+        handlers["file_manager"] = { exe, input in
+            let action = input["action"]?.stringValue ?? ""
+            let path = input["path"]?.stringValue ?? ""
+            let destination = input["destination"]?.stringValue ?? ""
+            let pattern = input["pattern"]?.stringValue ?? "*"
+
+            // Resolve ~ in paths
+            let resolvedPath = path.isEmpty ? "" : (path as NSString).expandingTildeInPath
+            let resolvedDest = destination.isEmpty ? "" : (destination as NSString).expandingTildeInPath
+            let safePath = resolvedPath.replacingOccurrences(of: "'", with: "'\\''")
+            let safeDest = resolvedDest.replacingOccurrences(of: "'", with: "'\\''")
+            let safePattern = pattern.replacingOccurrences(of: "'", with: "'\\''")
+
+            switch action {
+            case "list":
+                guard !resolvedPath.isEmpty else {
+                    return (ToolResult(success: false, output: "Missing required field: path", screenshot: nil), nil)
+                }
+                return (exe.shell.execute(command: "ls -la '\(safePath)'", timeout: 10), nil)
+
+            case "find":
+                guard !resolvedPath.isEmpty else {
+                    return (ToolResult(success: false, output: "Missing required field: path", screenshot: nil), nil)
+                }
+                return (exe.shell.execute(command: "find '\(safePath)' -name '\(safePattern)' -maxdepth 3 2>/dev/null | head -20", timeout: 15), nil)
+
+            case "info":
+                guard !resolvedPath.isEmpty else {
+                    return (ToolResult(success: false, output: "Missing required field: path", screenshot: nil), nil)
+                }
+                return (exe.shell.execute(command: "stat -f '%N %z bytes, modified %Sm' '\(safePath)'", timeout: 5), nil)
+
+            case "open":
+                guard !resolvedPath.isEmpty else {
+                    return (ToolResult(success: false, output: "Missing required field: path", screenshot: nil), nil)
+                }
+                let result = exe.shell.execute(command: "open '\(safePath)'", timeout: 5)
+                return (result.success
+                    ? ToolResult(success: true, output: "Opened: \(path)", screenshot: nil)
+                    : result, nil)
+
+            case "reveal":
+                guard !resolvedPath.isEmpty else {
+                    return (ToolResult(success: false, output: "Missing required field: path", screenshot: nil), nil)
+                }
+                let result = exe.shell.execute(command: "open -R '\(safePath)'", timeout: 5)
+                return (result.success
+                    ? ToolResult(success: true, output: "Revealed in Finder: \(path)", screenshot: nil)
+                    : result, nil)
+
+            case "move":
+                guard !resolvedPath.isEmpty else {
+                    return (ToolResult(success: false, output: "Missing required field: path", screenshot: nil), nil)
+                }
+                guard !resolvedDest.isEmpty else {
+                    return (ToolResult(success: false, output: "Missing required field: destination", screenshot: nil), nil)
+                }
+                let result = exe.shell.execute(command: "mv '\(safePath)' '\(safeDest)'", timeout: 10)
+                return (result.success
+                    ? ToolResult(success: true, output: "Moved: \(path) → \(destination)", screenshot: nil)
+                    : result, nil)
+
+            case "copy":
+                guard !resolvedPath.isEmpty else {
+                    return (ToolResult(success: false, output: "Missing required field: path", screenshot: nil), nil)
+                }
+                guard !resolvedDest.isEmpty else {
+                    return (ToolResult(success: false, output: "Missing required field: destination", screenshot: nil), nil)
+                }
+                let result = exe.shell.execute(command: "cp -r '\(safePath)' '\(safeDest)'", timeout: 30)
+                return (result.success
+                    ? ToolResult(success: true, output: "Copied: \(path) → \(destination)", screenshot: nil)
+                    : result, nil)
+
+            case "trash":
+                guard !resolvedPath.isEmpty else {
+                    return (ToolResult(success: false, output: "Missing required field: path", screenshot: nil), nil)
+                }
+                let safeAppleScriptPath = resolvedPath.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
+                let result = exe.shell.execute(command: "osascript -e 'tell app \"Finder\" to delete POSIX file \"\(safeAppleScriptPath)\"'", timeout: 10)
+                return (result.success
+                    ? ToolResult(success: true, output: "Moved to trash: \(path)", screenshot: nil)
+                    : result, nil)
+
+            case "create_folder":
+                guard !resolvedPath.isEmpty else {
+                    return (ToolResult(success: false, output: "Missing required field: path", screenshot: nil), nil)
+                }
+                let result = exe.shell.execute(command: "mkdir -p '\(safePath)'", timeout: 5)
+                return (result.success
+                    ? ToolResult(success: true, output: "Created folder: \(path)", screenshot: nil)
+                    : result, nil)
+
+            case "get_size":
+                guard !resolvedPath.isEmpty else {
+                    return (ToolResult(success: false, output: "Missing required field: path", screenshot: nil), nil)
+                }
+                return (exe.shell.execute(command: "du -sh '\(safePath)'", timeout: 30), nil)
+
+            default:
+                return (ToolResult(success: false, output: "Unknown file_manager action: \(action). Valid actions: list, find, info, open, reveal, move, copy, trash, create_folder, get_size", screenshot: nil), nil)
+            }
         }
 
         return handlers

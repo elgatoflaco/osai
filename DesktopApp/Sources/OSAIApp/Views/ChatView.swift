@@ -1206,7 +1206,9 @@ struct ChatView: View {
                             }
 
                             // Scroll-to-bottom / Resume auto-scroll floating button
-                            if !isNearBottom || autoScrollPaused {
+                            // Always visible when there are enough messages; prominent when scrolled up
+                            if (appState.activeConversation?.messages.count ?? 0) > 3 {
+                                let scrolledAway = !isNearBottom || autoScrollPaused
                                 Button(action: {
                                     withAnimation(.easeOut(duration: 0.3)) {
                                         proxy.scrollTo("scroll_bottom_anchor", anchor: .bottom)
@@ -1241,13 +1243,13 @@ struct ChatView: View {
                                                 .frame(width: 40, height: 40)
                                                 .overlay(
                                                     Circle()
-                                                        .strokeBorder(Color.white.opacity(0.15), lineWidth: 0.5)
+                                                        .strokeBorder(Color.white.opacity(scrolledAway ? 0.25 : 0.1), lineWidth: 0.5)
                                                 )
-                                                .shadow(color: .black.opacity(0.25), radius: 8, y: 4)
+                                                .shadow(color: .black.opacity(scrolledAway ? 0.25 : 0.1), radius: scrolledAway ? 8 : 4, y: scrolledAway ? 4 : 2)
                                                 .overlay(
-                                                    Image(systemName: "arrow.down")
-                                                        .font(.system(size: 16, weight: .semibold))
-                                                        .foregroundColor(AppTheme.accent)
+                                                    Image(systemName: "chevron.down")
+                                                        .font(.system(size: 14, weight: .semibold))
+                                                        .foregroundColor(AppTheme.accent.opacity(scrolledAway ? 1 : 0.5))
                                                 )
 
                                             // Unread count badge
@@ -1272,7 +1274,9 @@ struct ChatView: View {
                                 .padding(.trailing, focusMode ? 0 : 16)
                                 .padding(.bottom, 16)
                                 .frame(maxWidth: focusMode ? .infinity : nil, alignment: .center)
-                                .transition(.opacity.combined(with: .scale))
+                                .opacity(scrolledAway ? 1 : 0.5)
+                                .scaleEffect(scrolledAway ? 1 : 0.85)
+                                .animation(.spring(response: 0.3, dampingFraction: 0.7), value: scrolledAway)
                                 .animation(.spring(response: 0.3, dampingFraction: 0.7), value: unreadCount)
                             }
                         }
