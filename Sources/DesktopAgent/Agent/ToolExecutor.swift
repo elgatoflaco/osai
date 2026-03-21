@@ -1201,6 +1201,198 @@ final class ToolExecutor {
             }
         }
 
+        // --- Calendar Control ---
+        handlers["calendar_control"] = { exe, input in
+            let action = input["action"]?.stringValue ?? ""
+            let title = input["title"]?.stringValue ?? ""
+            let date = input["date"]?.stringValue ?? ""
+            let duration = input["duration"]?.intValue ?? 60
+            let calendarName = input["calendar_name"]?.stringValue ?? ""
+            let notes = input["notes"]?.stringValue ?? ""
+
+            let safeTitle = title.replacingOccurrences(of: "\"", with: "\\\"")
+            let safeNotes = notes.replacingOccurrences(of: "\"", with: "\\\"")
+            let safeCalendar = calendarName.replacingOccurrences(of: "\"", with: "\\\"")
+
+            switch action {
+            case "list_calendars":
+                let script = "tell application \"Calendar\" to get name of every calendar"
+                return (exe.applescript.execute(script), nil)
+
+            case "list_today":
+                let script = """
+                set today to current date
+                set hours of today to 0
+                set minutes of today to 0
+                set seconds of today to 0
+                set tomorrow to today + (1 * days)
+                set output to ""
+                tell application "Calendar"
+                    repeat with cal in calendars
+                        set evts to (every event of cal whose start date >= today and start date < tomorrow)
+                        repeat with evt in evts
+                            set evtStart to start date of evt
+                            set evtEnd to end date of evt
+                            set output to output & (summary of evt) & " | " & (evtStart as string) & " - " & (evtEnd as string) & " [" & (name of cal) & "]" & linefeed
+                        end repeat
+                    end repeat
+                end tell
+                if output is "" then return "No events today."
+                return output
+                """
+                return (exe.applescript.execute(script), nil)
+
+            case "list_week":
+                let script = """
+                set today to current date
+                set hours of today to 0
+                set minutes of today to 0
+                set seconds of today to 0
+                set weekEnd to today + (7 * days)
+                set output to ""
+                tell application "Calendar"
+                    repeat with cal in calendars
+                        set evts to (every event of cal whose start date >= today and start date < weekEnd)
+                        repeat with evt in evts
+                            set evtStart to start date of evt
+                            set evtEnd to end date of evt
+                            set output to output & (summary of evt) & " | " & (evtStart as string) & " - " & (evtEnd as string) & " [" & (name of cal) & "]" & linefeed
+                        end repeat
+                    end repeat
+                end tell
+                if output is "" then return "No events this week."
+                return output
+                """
+                return (exe.applescript.execute(script), nil)
+
+            case "create_event":
+                guard !safeTitle.isEmpty, !date.isEmpty else {
+                    return (ToolResult(success: false, output: "Missing required fields: title, date", screenshot: nil), nil)
+                }
+                let calTarget = safeCalendar.isEmpty ? "first calendar" : "calendar \"\(safeCalendar)\""
+                let notesLine = safeNotes.isEmpty ? "" : "set description of newEvent to \"\(safeNotes)\""
+                let script = """
+                set eventDate to date "\(date)"
+                set eventEnd to eventDate + (\(duration) * minutes)
+                tell application "Calendar"
+                    tell \(calTarget)
+                        set newEvent to make new event with properties {summary:"\(safeTitle)", start date:eventDate, end date:eventEnd}
+                        \(notesLine)
+                    end tell
+                end tell
+                return "Event created: \(safeTitle)"
+                """
+                return (exe.applescript.execute(script), nil)
+
+            case "delete_event":
+                guard !safeTitle.isEmpty else {
+                    return (ToolResult(success: false, output: "Missing required field: title", screenshot: nil), nil)
+                }
+                let script = """
+                tell application "Calendar"
+                    repeat with cal in calendars
+                        set evts to (every event of cal whose summary is "\(safeTitle)")
+                        repeat with evt in evts
+                            delete evt
+                        end repeat
+                    end repeat
+                end tell
+                return "Deleted events matching: \(safeTitle)"
+                """
+                return (exe.applescript.execute(script), nil)
+
+            default:
+                return (ToolResult(success: false, output: "Unknown calendar_control action: \(action). Valid: list_today, list_week, create_event, delete_event, list_calendars", screenshot: nil), nil)
+            }
+        }
+
+        // --- Reminders Control ---
+        handlers["reminders_control"] = { exe, input in
+            let action = input["action"]?.stringValue ?? ""
+            let title = input["title"]?.stringValue ?? ""
+            let listName = input["list_name"]?.stringValue ?? "Reminders"
+            let dueDate = input["due_date"]?.stringValue ?? ""
+            let notes = input["notes"]?.stringValue ?? ""
+
+            let safeTitle = title.replacingOccurrences(of: "\"", with: "\\\"")
+            let safeList = listName.replacingOccurrences(of: "\"", with: "\\\"")
+            let safeNotes = notes.replacingOccurrences(of: "\"", with: "\\\"")
+
+            switch action {
+            case "list_lists":
+                let script = "tell application \"Reminders\" to get name of every list"
+                return (exe.applescript.execute(script), nil)
+
+            case "list":
+                let script = """
+                set output to ""
+                tell application "Reminders"
+                    set rems to reminders of list "\(safeList)" whose completed is false
+                    repeat with rem in rems
+                        set remName to name of rem
+                        set remDue to ""
+                        try
+                            set remDue to " (due: " & (due date of rem as string) & ")"
+                        end try
+                        set output to output & "- " & remName & remDue & linefeed
+                    end repeat
+                end tell
+                if output is "" then return "No pending reminders in \(safeList)."
+                return output
+                """
+                return (exe.applescript.execute(script), nil)
+
+            case "create":
+                guard !safeTitle.isEmpty else {
+                    return (ToolResult(success: false, output: "Missing required field: title", screenshot: nil), nil)
+                }
+                var props = "name:\"\(safeTitle)\""
+                if !safeNotes.isEmpty {
+                    props += ", body:\"\(safeNotes)\""
+                }
+                var dueLine = ""
+                if !dueDate.isEmpty {
+                    dueLine = "\nset due date of newReminder to date \"\(dueDate)\""
+                }
+                let script = """
+                tell application "Reminders"
+                    set newReminder to make new reminder in list "\(safeList)" with properties {\(props)}
+                    \(dueLine)
+                end tell
+                return "Reminder created: \(safeTitle)"
+                """
+                return (exe.applescript.execute(script), nil)
+
+            case "complete":
+                guard !safeTitle.isEmpty else {
+                    return (ToolResult(success: false, output: "Missing required field: title", screenshot: nil), nil)
+                }
+                let script = """
+                tell application "Reminders"
+                    set targetReminder to first reminder of list "\(safeList)" whose name is "\(safeTitle)"
+                    set completed of targetReminder to true
+                end tell
+                return "Completed: \(safeTitle)"
+                """
+                return (exe.applescript.execute(script), nil)
+
+            case "delete":
+                guard !safeTitle.isEmpty else {
+                    return (ToolResult(success: false, output: "Missing required field: title", screenshot: nil), nil)
+                }
+                let script = """
+                tell application "Reminders"
+                    delete (first reminder of list "\(safeList)" whose name is "\(safeTitle)")
+                end tell
+                return "Deleted: \(safeTitle)"
+                """
+                return (exe.applescript.execute(script), nil)
+
+            default:
+                return (ToolResult(success: false, output: "Unknown reminders_control action: \(action). Valid: list, create, complete, delete, list_lists", screenshot: nil), nil)
+            }
+        }
+
         return handlers
     }
 

@@ -17,7 +17,7 @@ enum ToolCategory: String, CaseIterable {
     case applescript    // run_applescript
     case adaptive       // adaptive_stats, ui_cache_lookup, clear_ui_cache
     case claudeCode     // claude_code
-    case apps           // list_apps, get_frontmost_app, activate_app, open_app
+    case apps           // list_apps, get_frontmost_app, activate_app, open_app, calendar_control, reminders_control
     case files          // list_directory, file_info, read_clipboard, write_clipboard
     case system         // system_info, notify, web_search, process_manager, network_info, battery_info, media_control
 }
@@ -93,7 +93,7 @@ struct ToolDefinitions {
         map["claude_code"] = .claudeCode
 
         // Apps
-        for name in ["list_apps", "get_frontmost_app", "activate_app", "open_app"] {
+        for name in ["list_apps", "get_frontmost_app", "activate_app", "open_app", "calendar_control", "reminders_control"] {
             map[name] = .apps
         }
 
@@ -435,6 +435,41 @@ struct ToolDefinitions {
                     "name": PropertySchema(type: "string", description: "Application name", enumValues: nil)
                 ],
                 required: ["name"]
+            )
+        ),
+
+        // --- Calendar Control ---
+        ClaudeTool(
+            name: "calendar_control",
+            description: "Control macOS Calendar app: list today's or this week's events, create/delete events, list calendars.",
+            inputSchema: InputSchema(
+                type: "object",
+                properties: [
+                    "action": PropertySchema(type: "string", description: "Action to perform", enumValues: ["list_today", "list_week", "create_event", "delete_event", "list_calendars"]),
+                    "title": PropertySchema(type: "string", description: "Event title (for create_event, delete_event)", enumValues: nil),
+                    "date": PropertySchema(type: "string", description: "Event date in ISO 8601 format, e.g. 2025-03-21T14:00:00 (for create_event)", enumValues: nil),
+                    "duration": PropertySchema(type: "integer", description: "Event duration in minutes (default: 60, for create_event)", enumValues: nil),
+                    "calendar_name": PropertySchema(type: "string", description: "Calendar name (for create_event; omit for default calendar)", enumValues: nil),
+                    "notes": PropertySchema(type: "string", description: "Event notes (for create_event)", enumValues: nil)
+                ],
+                required: ["action"]
+            )
+        ),
+
+        // --- Reminders Control ---
+        ClaudeTool(
+            name: "reminders_control",
+            description: "Control macOS Reminders app: list, create, complete, delete reminders, and list reminder lists.",
+            inputSchema: InputSchema(
+                type: "object",
+                properties: [
+                    "action": PropertySchema(type: "string", description: "Action to perform", enumValues: ["list", "create", "complete", "delete", "list_lists"]),
+                    "title": PropertySchema(type: "string", description: "Reminder title (for create, complete, delete)", enumValues: nil),
+                    "list_name": PropertySchema(type: "string", description: "Reminders list name (default: Reminders)", enumValues: nil),
+                    "due_date": PropertySchema(type: "string", description: "Due date in ISO 8601 format (for create)", enumValues: nil),
+                    "notes": PropertySchema(type: "string", description: "Reminder notes (for create)", enumValues: nil)
+                ],
+                required: ["action"]
             )
         ),
 

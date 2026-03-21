@@ -1499,6 +1499,7 @@ struct KeyboardShortcutsView: View {
             ShortcutCategory(name: "Navigation", icon: "arrow.triangle.swap", shortcuts: [
                 ShortcutEntry(keys: "\u{2318}1-5", label: "Switch tabs"),
                 ShortcutEntry(keys: "\u{2318}N", label: "New chat"),
+                ShortcutEntry(keys: "\u{2318},", label: "Settings"),
                 ShortcutEntry(keys: "\u{2318}W", label: "Close conversation"),
                 ShortcutEntry(keys: "\u{2318}[ / ]", label: "Prev / next conversation"),
                 ShortcutEntry(keys: "\u{2318}L", label: "Focus input"),
