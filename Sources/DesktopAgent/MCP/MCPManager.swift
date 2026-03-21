@@ -108,12 +108,31 @@ final class MCPManager {
             return ToolResult(success: false, output: "MCP tool '\(qualifiedName)' not found", screenshot: nil)
         }
 
+        // Auto-restart if server died
+        if !client.isRunning {
+            printColored("  ⚠ MCP server '\(client.serverName)' died, restarting...", color: .yellow)
+            stopServer(name: client.serverName)
+            do {
+                try startServer(name: client.serverName, config: client.config)
+            } catch {
+                return ToolResult(success: false, output: "MCP server '\(client.serverName)' crashed and failed to restart: \(error)", screenshot: nil)
+            }
+            // Re-lookup after restart
+            guard let (newClient, newName) = allTools[qualifiedName] else {
+                return ToolResult(success: false, output: "MCP tool '\(qualifiedName)' not available after restart", screenshot: nil)
+            }
+            return executeToolCall(client: newClient, toolName: newName, qualifiedName: qualifiedName, arguments: arguments)
+        }
+
+        return executeToolCall(client: client, toolName: originalName, qualifiedName: qualifiedName, arguments: arguments)
+    }
+
+    private func executeToolCall(client: MCPClient, toolName: String, qualifiedName: String, arguments: [String: Any]) -> ToolResult {
         // Coerce argument types to match the tool's input schema.
-        // AI models sometimes return 0/1 instead of false/true for boolean params.
         let coercedArgs = coerceArguments(arguments, forTool: qualifiedName)
 
         do {
-            let result = try client.callTool(name: originalName, arguments: coercedArgs)
+            let result = try client.callTool(name: toolName, arguments: coercedArgs)
             return ToolResult(success: true, output: result, screenshot: nil)
         } catch MCPError.timeout {
             let currentTimeout = Int(client.config.timeout.map { TimeInterval($0) } ?? (Self.isBrowserServer(name: client.serverName, config: client.config) ? 120 : 30))

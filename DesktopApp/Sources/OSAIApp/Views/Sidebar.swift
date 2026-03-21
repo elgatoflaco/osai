@@ -144,9 +144,10 @@ struct Sidebar: View {
                     .padding(.horizontal, 16)
 
                 HStack(spacing: 12) {
+                    let stats = appState.conversations.reduce((msgs: 0, tokens: 0)) { ($0.msgs + $1.messages.count, $0.tokens + $1.totalTokens) }
                     Label("\(appState.conversations.count)", systemImage: "bubble.left.and.bubble.right")
-                    Label("\(appState.conversations.reduce(0) { $0 + $1.messages.count })", systemImage: "text.bubble")
-                    Label(formatTokenCount(appState.conversations.reduce(0) { $0 + $1.totalTokens }), systemImage: "gauge.low")
+                    Label("\(stats.msgs)", systemImage: "text.bubble")
+                    Label(formatTokenCount(stats.tokens), systemImage: "gauge.low")
                 }
                 .font(.system(size: 10, weight: .medium, design: .monospaced))
                 .foregroundColor(AppTheme.textMuted)
@@ -154,7 +155,7 @@ struct Sidebar: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 6)
                 .accessibilityElement(children: .combine)
-                .accessibilityLabel("Stats: \(appState.conversations.count) conversations, \(appState.conversations.reduce(0) { $0 + $1.messages.count }) messages")
+                .accessibilityLabel("Stats: \(appState.conversations.count) conversations")
                 .accessibilityIdentifier("sidebar_stats")
                 .accessibilitySortPriority(40)
             }
@@ -697,10 +698,14 @@ struct MiniCalendarWidget: View {
     private let calendar = Calendar.current
     private let dayOfWeekSymbols = ["S", "M", "T", "W", "T", "F", "S"]
 
+    private static let monthYearFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "MMM yyyy"
+        return f
+    }()
+
     private var monthYearString: String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "MMM yyyy"
-        return formatter.string(from: displayedMonth)
+        Self.monthYearFormatter.string(from: displayedMonth)
     }
 
     private var daysInMonth: [DayCell] {

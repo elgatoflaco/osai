@@ -120,7 +120,18 @@ final class MCPClient {
     func stop() {
         if let proc = process, proc.isRunning {
             proc.terminate()
-            proc.waitUntilExit()
+            // Don't block forever — give 3s then force kill
+            let deadline = Date().addingTimeInterval(3)
+            while proc.isRunning && Date() < deadline {
+                Thread.sleep(forTimeInterval: 0.05)
+            }
+            if proc.isRunning {
+                proc.interrupt()  // SIGINT
+                Thread.sleep(forTimeInterval: 0.5)
+                if proc.isRunning {
+                    kill(proc.processIdentifier, SIGKILL)
+                }
+            }
         }
         process = nil
         stdin = nil

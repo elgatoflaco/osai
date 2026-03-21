@@ -43,7 +43,7 @@ struct TasksView: View {
                         .font(AppTheme.fontHeadline)
                         .foregroundColor(AppTheme.textPrimary)
 
-                    let active = appState.tasks.filter { $0.enabled }.count
+                    let active = appState.tasks.count { $0.enabled }
                     let total = appState.tasks.count
                     Text("\(active) active of \(total) total")
                         .font(AppTheme.fontCaption)

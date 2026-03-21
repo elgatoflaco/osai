@@ -1139,9 +1139,9 @@ struct ChatInputBar: View {
     ]
 
     private var filteredSlashCommands: [SlashCommand] {
-        slashCommands.filter { cmd in
-            slashFilter.isEmpty || cmd.name.lowercased().contains("/" + slashFilter.lowercased())
-        }
+        guard !slashFilter.isEmpty else { return slashCommands }
+        let lowerFilter = "/" + slashFilter.lowercased()
+        return slashCommands.filter { $0.name.lowercased().contains(lowerFilter) }
     }
 
     var body: some View {
@@ -1503,11 +1503,10 @@ struct PromptTemplatePopover: View {
         if searchText.isEmpty {
             return appState.promptTemplates
         }
-        let query = searchText.lowercased()
         return appState.promptTemplates.filter {
-            $0.name.lowercased().contains(query) ||
-            $0.content.lowercased().contains(query) ||
-            $0.category.lowercased().contains(query)
+            $0.name.localizedCaseInsensitiveContains(searchText) ||
+            $0.content.localizedCaseInsensitiveContains(searchText) ||
+            $0.category.localizedCaseInsensitiveContains(searchText)
         }
     }
 

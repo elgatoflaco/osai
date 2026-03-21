@@ -1,6 +1,8 @@
 import Foundation
 
 class OSAIService {
+    private static let isoFormatter = ISO8601DateFormatter()
+
     private let binaryPath: String = {
         // 1. Look in Contents/Helpers/ inside the app bundle
         if let bundleURL = Bundle.main.bundleURL as URL? {
@@ -203,12 +205,12 @@ class OSAIService {
 
         var lastRun: Date?
         if let lastRunStr = json["lastRun"] as? String {
-            let formatter = ISO8601DateFormatter()
-            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-            lastRun = formatter.date(from: lastRunStr)
+            let taskFormatter = ISO8601DateFormatter()
+            taskFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            lastRun = taskFormatter.date(from: lastRunStr)
             if lastRun == nil {
-                formatter.formatOptions = [.withInternetDateTime]
-                lastRun = formatter.date(from: lastRunStr)
+                taskFormatter.formatOptions = [.withInternetDateTime]
+                lastRun = taskFormatter.date(from: lastRunStr)
             }
         }
 
@@ -281,6 +283,118 @@ class OSAIService {
         return config
     }
 
+    // MARK: - Quick Completion (lightweight AI call for suggestions, titles, etc.)
+
+    /// Resolve provider info from a model string like "anthropic/claude-sonnet-4-20250514" or "openrouter/google/gemini-3-flash-preview"
+    private struct ProviderInfo {
+        let baseURL: String
+        let format: String // "anthropic" or "openai"
+        let model: String  // model id to send to the API
+        let apiKey: String
+        let authType: String // "api_key" or "bearer"
+    }
+
+    private func resolveProvider(modelId: String, config: AppConfig) -> ProviderInfo? {
+        // Provider lookup table
+        let providers: [(id: String, baseURL: String, format: String)] = [
+            ("anthropic", "https://api.anthropic.com/v1/messages", "anthropic"),
+            ("openai", "https://api.openai.com/v1/chat/completions", "openai"),
+            ("google", "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", "openai"),
+            ("groq", "https://api.groq.com/openai/v1/chat/completions", "openai"),
+            ("mistral", "https://api.mistral.ai/v1/chat/completions", "openai"),
+            ("openrouter", "https://openrouter.ai/api/v1/chat/completions", "openai"),
+            ("deepseek", "https://api.deepseek.com/v1/chat/completions", "openai"),
+            ("xai", "https://api.x.ai/v1/chat/completions", "openai"),
+        ]
+
+        guard modelId.contains("/") else { return nil }
+        let parts = modelId.split(separator: "/", maxSplits: 1)
+        let providerId = String(parts[0])
+        let model = String(parts[1])
+
+        guard let provider = providers.first(where: { $0.id == providerId }),
+              let keyEntry = config.apiKeys[providerId] else { return nil }
+
+        let authType = keyEntry.apiKey.hasPrefix("sk-ant-oat") ? "bearer" : "api_key"
+
+        return ProviderInfo(
+            baseURL: provider.baseURL,
+            format: provider.format,
+            model: model,
+            apiKey: keyEntry.apiKey,
+            authType: authType
+        )
+    }
+
+    /// Make a quick, lightweight API call (low max_tokens, no tools).
+    /// Returns the text response or nil on failure. Does not throw — failures are silent.
+    func quickCompletion(prompt: String, systemPrompt: String? = nil, modelId: String, config: AppConfig, maxTokens: Int = 200) async -> String? {
+        guard let provider = resolveProvider(modelId: modelId, config: config) else { return nil }
+
+        var request: URLRequest
+        var body: [String: Any]
+
+        if provider.format == "anthropic" {
+            request = URLRequest(url: URL(string: provider.baseURL)!)
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "content-type")
+            request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+            if provider.authType == "bearer" {
+                request.setValue("Bearer \(provider.apiKey)", forHTTPHeaderField: "authorization")
+            } else {
+                request.setValue(provider.apiKey, forHTTPHeaderField: "x-api-key")
+            }
+            body = [
+                "model": provider.model,
+                "max_tokens": maxTokens,
+                "messages": [["role": "user", "content": prompt]],
+            ]
+            if let sys = systemPrompt { body["system"] = sys }
+        } else {
+            request = URLRequest(url: URL(string: provider.baseURL)!)
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "content-type")
+            request.setValue("Bearer \(provider.apiKey)", forHTTPHeaderField: "authorization")
+            var messages: [[String: String]] = []
+            if let sys = systemPrompt { messages.append(["role": "system", "content": sys]) }
+            messages.append(["role": "user", "content": prompt])
+            body = [
+                "model": provider.model,
+                "max_tokens": maxTokens,
+                "messages": messages,
+            ]
+        }
+
+        request.timeoutInterval = 10 // Quick call — fail fast
+
+        guard let jsonData = try? JSONSerialization.data(withJSONObject: body) else { return nil }
+        request.httpBody = jsonData
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResp = response as? HTTPURLResponse, httpResp.statusCode == 200 else { return nil }
+            guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+
+            // Parse response based on format
+            if provider.format == "anthropic" {
+                if let content = json["content"] as? [[String: Any]],
+                   let first = content.first,
+                   let text = first["text"] as? String {
+                    return text
+                }
+            } else {
+                if let choices = json["choices"] as? [[String: Any]],
+                   let first = choices.first,
+                   let message = first["message"] as? [String: Any],
+                   let text = message["content"] as? String {
+                    return text
+                }
+            }
+        } catch {}
+
+        return nil
+    }
+
     // MARK: - Gateway
 
     func gatewayStatus() -> (running: Bool, pid: Int?) {
@@ -340,7 +454,7 @@ class OSAIService {
                 "id": msg.id,
                 "role": msg.role.rawValue,
                 "content": msg.content,
-                "timestamp": ISO8601DateFormatter().string(from: msg.timestamp)
+                "timestamp": Self.isoFormatter.string(from: msg.timestamp)
             ]
             if let tool = msg.toolName { m["toolName"] = tool }
             if let result = msg.toolResult { m["toolResult"] = result }
@@ -355,7 +469,7 @@ class OSAIService {
                     [
                         "id": record.id.uuidString,
                         "content": record.content,
-                        "editedAt": ISO8601DateFormatter().string(from: record.editedAt)
+                        "editedAt": Self.isoFormatter.string(from: record.editedAt)
                     ]
                 }
             }
@@ -365,7 +479,7 @@ class OSAIService {
         var json: [String: Any] = [
             "id": conv.id,
             "title": conv.title,
-            "createdAt": ISO8601DateFormatter().string(from: conv.createdAt),
+            "createdAt": Self.isoFormatter.string(from: conv.createdAt),
             "messages": messages
         ]
         if let agent = conv.agentName { json["agentName"] = agent }
@@ -396,7 +510,7 @@ class OSAIService {
         guard let id = json["id"] as? String,
               let title = json["title"] as? String,
               let createdStr = json["createdAt"] as? String,
-              let createdAt = ISO8601DateFormatter().date(from: createdStr) else { return nil }
+              let createdAt = Self.isoFormatter.date(from: createdStr) else { return nil }
 
         let msgArray = json["messages"] as? [[String: Any]] ?? []
         let messages: [ChatMessage] = msgArray.compactMap { m in
@@ -405,7 +519,7 @@ class OSAIService {
                   let role = MessageRole(rawValue: roleStr),
                   let content = m["content"] as? String,
                   let tsStr = m["timestamp"] as? String,
-                  let ts = ISO8601DateFormatter().date(from: tsStr) else { return nil }
+                  let ts = Self.isoFormatter.date(from: tsStr) else { return nil }
             var reaction: MessageReaction?
             if let reactionStr = m["reaction"] as? String {
                 reaction = MessageReaction(rawValue: reactionStr)
@@ -419,7 +533,7 @@ class OSAIService {
                           let uid = UUID(uuidString: idStr),
                           let content = record["content"],
                           let dateStr = record["editedAt"],
-                          let date = ISO8601DateFormatter().date(from: dateStr) else { return nil }
+                          let date = Self.isoFormatter.date(from: dateStr) else { return nil }
                     return EditRecord(id: uid, content: content, editedAt: date)
                 }
             }

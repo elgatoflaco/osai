@@ -601,9 +601,7 @@ struct DailyTokenUsage: Identifiable, Codable, Equatable {
 
     /// Short day label (Mon, Tue, etc.)
     var dayLabel: String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "EEE"
-        return formatter.string(from: date)
+        AppState.shortDayFormatter.string(from: date)
     }
 }
 
@@ -757,6 +755,11 @@ struct ThemePreset: Identifiable, Equatable {
 }
 
 class AppState: ObservableObject {
+    // MARK: - Cached Encoders/Formatters
+    static let jsonEncoder = JSONEncoder()
+    static let jsonDecoder = JSONDecoder()
+    static let isoFormatter = ISO8601DateFormatter()
+
     // MARK: - Conversation Color Labels
     static let conversationColors: [(name: String, color: Color)] = [
         ("red", .red),
@@ -790,6 +793,9 @@ class AppState: ObservableObject {
     @AppStorage("smartPasteEnabled") var smartPasteEnabled: Bool = true
     @AppStorage("showQuickReplies") var showQuickReplies: Bool = true
     @AppStorage("displayDensity") var displayDensity: String = "comfortable"
+    @AppStorage("appLanguage") var appLanguage: String = "system" {
+        didSet { L10n.current = AppLanguage(rawValue: appLanguage) ?? .system }
+    }
 
     /// Message bubble padding based on display density
     var messagePadding: CGFloat {
@@ -851,7 +857,7 @@ class AppState: ObservableObject {
             }
         }
         dict["_exportVersion"] = 1
-        dict["_exportDate"] = ISO8601DateFormatter().string(from: Date())
+        dict["_exportDate"] = AppState.isoFormatter.string(from: Date())
         return (try? JSONSerialization.data(withJSONObject: dict, options: [.prettyPrinted, .sortedKeys])) ?? Data()
     }
 
@@ -999,8 +1005,7 @@ class AppState: ObservableObject {
 
     /// Called on app launch to update the usage streak based on consecutive days.
     func updateStreak() {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd"
+        let formatter = Self.dateKeyFormatter
         let todayStr = formatter.string(from: Date())
 
         if lastActiveDate == todayStr {
@@ -1054,15 +1059,13 @@ class AppState: ObservableObject {
 
     /// Records a message for today's heatmap data.
     func recordDailyActivity() {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd"
-        let todayStr = formatter.string(from: Date())
+        let todayStr = Self.dateKeyFormatter.string(from: Date())
 
         var heatmap = parseDailyHeatmap()
         heatmap[todayStr, default: 0] += 1
         // Keep only last 30 days
         let cutoff = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date()
-        let cutoffStr = formatter.string(from: cutoff)
+        let cutoffStr = Self.dateKeyFormatter.string(from: cutoff)
         heatmap = heatmap.filter { $0.key >= cutoffStr }
 
         if let data = try? JSONSerialization.data(withJSONObject: heatmap),
@@ -1083,14 +1086,12 @@ class AppState: ObservableObject {
 
     /// Returns message counts for the last 7 days (oldest first).
     func last7DaysActivity() -> [(date: String, count: Int)] {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd"
         let heatmap = parseDailyHeatmap()
         let calendar = Calendar.current
 
         return (0..<7).reversed().map { daysAgo in
             let date = calendar.date(byAdding: .day, value: -daysAgo, to: Date()) ?? Date()
-            let key = formatter.string(from: date)
+            let key = Self.dateKeyFormatter.string(from: date)
             return (date: key, count: heatmap[key] ?? 0)
         }
     }
@@ -1127,13 +1128,13 @@ class AppState: ObservableObject {
     /// Ordered list of visible dashboard sections, persisted to UserDefaults.
     @Published var visibleDashboardSections: [DashboardSection] = {
         if let data = UserDefaults.standard.data(forKey: "visibleDashboardSections"),
-           let decoded = try? JSONDecoder().decode([DashboardSection].self, from: data) {
+           let decoded = try? AppState.jsonDecoder.decode([DashboardSection].self, from: data) {
             return decoded
         }
         return DashboardSection.defaultOrder
     }() {
         didSet {
-            if let data = try? JSONEncoder().encode(visibleDashboardSections) {
+            if let data = try? AppState.jsonEncoder.encode(visibleDashboardSections) {
                 UserDefaults.standard.set(data, forKey: "visibleDashboardSections")
             }
         }
@@ -1142,13 +1143,13 @@ class AppState: ObservableObject {
     /// Set of collapsed (minimized) dashboard section keys, persisted to UserDefaults.
     @Published var collapsedDashboardSections: Set<DashboardSection> = {
         if let data = UserDefaults.standard.data(forKey: "collapsedDashboardSections"),
-           let decoded = try? JSONDecoder().decode(Set<DashboardSection>.self, from: data) {
+           let decoded = try? AppState.jsonDecoder.decode(Set<DashboardSection>.self, from: data) {
             return decoded
         }
         return []
     }() {
         didSet {
-            if let data = try? JSONEncoder().encode(collapsedDashboardSections) {
+            if let data = try? AppState.jsonEncoder.encode(collapsedDashboardSections) {
                 UserDefaults.standard.set(data, forKey: "collapsedDashboardSections")
             }
         }
@@ -1349,6 +1350,7 @@ class AppState: ObservableObject {
         }
 
         // -- Messages (by content) --
+        var messageResultCount = 0
         for conv in conversations {
             for msg in conv.messages where msg.role == .user || msg.role == .assistant {
                 let contentLower = msg.content.lowercased()
@@ -1377,15 +1379,18 @@ class AppState: ObservableObject {
                             self?.scrollToMessageId = msgId
                         }
                     ))
+                    messageResultCount += 1
                 }
-                if results.filter({ $0.category == .message }).count >= 5 { break }
+                if messageResultCount >= 5 { break }
             }
-            if results.filter({ $0.category == .message }).count >= 5 { break }
+            if messageResultCount >= 5 { break }
         }
 
         // -- Agents (by name and description) --
         for agent in agents {
-            if agent.name.lowercased().contains(q) || agent.description.lowercased().contains(q) {
+            let nameLow = agent.name.lowercased()
+            let descLow = agent.description.lowercased()
+            if nameLow.contains(q) || descLow.contains(q) {
                 results.append(SearchResult(
                     category: .agent,
                     title: agent.name,
@@ -1410,7 +1415,9 @@ class AppState: ObservableObject {
 
         // -- Templates (prompt templates + conversation templates by name) --
         for template in promptTemplates {
-            if template.name.lowercased().contains(q) || template.category.lowercased().contains(q) {
+            let tNameLow = template.name.lowercased()
+            let tCatLow = template.category.lowercased()
+            if tNameLow.contains(q) || tCatLow.contains(q) {
                 results.append(SearchResult(
                     category: .template,
                     title: template.name,
@@ -1424,7 +1431,9 @@ class AppState: ObservableObject {
             }
         }
         for template in allTemplates {
-            if template.name.lowercased().contains(q) || template.description.lowercased().contains(q) {
+            let ctNameLow = template.name.lowercased()
+            let ctDescLow = template.description.lowercased()
+            if ctNameLow.contains(q) || ctDescLow.contains(q) {
                 let alreadyHas = results.contains { $0.category == .template && $0.title == template.name }
                 if !alreadyHas {
                     results.append(SearchResult(
@@ -1464,7 +1473,7 @@ class AppState: ObservableObject {
             ("Export Data", "square.and.arrow.up", .settings),
         ]
         for item in settingsItems {
-            if item.label.lowercased().contains(q) {
+            if item.label.localizedCaseInsensitiveContains(q) {
                 results.append(SearchResult(
                     category: .setting,
                     title: item.label,
@@ -1488,13 +1497,13 @@ class AppState: ObservableObject {
     /// Enabled quick actions shown in the chat toolbar. Persisted to UserDefaults.
     @Published var quickActions: [ChatQuickAction] = {
         if let data = UserDefaults.standard.data(forKey: "chatQuickActions"),
-           let decoded = try? JSONDecoder().decode([ChatQuickAction].self, from: data) {
+           let decoded = try? AppState.jsonDecoder.decode([ChatQuickAction].self, from: data) {
             return decoded
         }
         return ChatQuickAction.defaults
     }() {
         didSet {
-            if let data = try? JSONEncoder().encode(quickActions) {
+            if let data = try? AppState.jsonEncoder.encode(quickActions) {
                 UserDefaults.standard.set(data, forKey: "chatQuickActions")
             }
         }
@@ -1503,13 +1512,13 @@ class AppState: ObservableObject {
     /// Saved prompt templates. Persisted to UserDefaults.
     @Published var promptTemplates: [PromptTemplate] = {
         if let data = UserDefaults.standard.data(forKey: "promptTemplates"),
-           let decoded = try? JSONDecoder().decode([PromptTemplate].self, from: data) {
+           let decoded = try? AppState.jsonDecoder.decode([PromptTemplate].self, from: data) {
             return decoded
         }
         return PromptTemplate.builtInDefaults
     }() {
         didSet {
-            if let data = try? JSONEncoder().encode(promptTemplates) {
+            if let data = try? AppState.jsonEncoder.encode(promptTemplates) {
                 UserDefaults.standard.set(data, forKey: "promptTemplates")
             }
         }
@@ -1585,7 +1594,7 @@ class AppState: ObservableObject {
             savedAt: Date()
         )
 
-        if let data = try? JSONEncoder().encode(state) {
+        if let data = try? AppState.jsonEncoder.encode(state) {
             UserDefaults.standard.set(data, forKey: "sessionState")
         }
     }
@@ -1594,7 +1603,7 @@ class AppState: ObservableObject {
     func restoreSessionState() {
         guard restoreSessionOnLaunch,
               let data = UserDefaults.standard.data(forKey: "sessionState"),
-              let state = try? JSONDecoder().decode(SessionState.self, from: data) else { return }
+              let state = try? AppState.jsonDecoder.decode(SessionState.self, from: data) else { return }
 
         // Restore active tab
         if let tab = SidebarItem(rawValue: state.activeTab) {
@@ -1709,12 +1718,12 @@ class AppState: ObservableObject {
         }
 
         // Apply search query
-        let query = taskSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let query = taskSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         if !query.isEmpty {
             result = result.filter {
-                $0.id.lowercased().contains(query) ||
-                $0.description.lowercased().contains(query) ||
-                $0.command.lowercased().contains(query)
+                $0.id.localizedCaseInsensitiveContains(query) ||
+                $0.description.localizedCaseInsensitiveContains(query) ||
+                $0.command.localizedCaseInsensitiveContains(query)
             }
         }
 
@@ -1728,11 +1737,11 @@ class AppState: ObservableObject {
     // MARK: - Conversation Snapshots
     @Published var snapshots: [ConversationSnapshot] = {
         guard let data = UserDefaults.standard.data(forKey: "conversationSnapshots"),
-              let decoded = try? JSONDecoder().decode([ConversationSnapshot].self, from: data) else { return [] }
+              let decoded = try? AppState.jsonDecoder.decode([ConversationSnapshot].self, from: data) else { return [] }
         return decoded
     }() {
         didSet {
-            if let encoded = try? JSONEncoder().encode(snapshots) {
+            if let encoded = try? AppState.jsonEncoder.encode(snapshots) {
                 UserDefaults.standard.set(encoded, forKey: "conversationSnapshots")
             }
         }
@@ -1792,7 +1801,7 @@ class AppState: ObservableObject {
 
     /// Number of active (enabled) tasks.
     var activeTaskCount: Int {
-        tasks.filter { $0.enabled }.count
+        tasks.count { $0.enabled }
     }
 
     /// Number of available agents.
@@ -1891,11 +1900,11 @@ class AppState: ObservableObject {
     // MARK: - Workspaces
     @Published var workspaces: [Workspace] = {
         guard let data = UserDefaults.standard.data(forKey: "workspaces"),
-              let decoded = try? JSONDecoder().decode([Workspace].self, from: data) else { return [] }
+              let decoded = try? AppState.jsonDecoder.decode([Workspace].self, from: data) else { return [] }
         return decoded
     }() {
         didSet {
-            if let encoded = try? JSONEncoder().encode(workspaces) {
+            if let encoded = try? AppState.jsonEncoder.encode(workspaces) {
                 UserDefaults.standard.set(encoded, forKey: "workspaces")
             }
         }
@@ -2054,11 +2063,11 @@ class AppState: ObservableObject {
 
     @Published var agentLastUsed: [String: Date] = {
         guard let data = UserDefaults.standard.data(forKey: "agentLastUsed"),
-              let decoded = try? JSONDecoder().decode([String: Date].self, from: data) else { return [:] }
+              let decoded = try? AppState.jsonDecoder.decode([String: Date].self, from: data) else { return [:] }
         return decoded
     }() {
         didSet {
-            if let data = try? JSONEncoder().encode(agentLastUsed) {
+            if let data = try? AppState.jsonEncoder.encode(agentLastUsed) {
                 UserDefaults.standard.set(data, forKey: "agentLastUsed")
             }
         }
@@ -2172,11 +2181,10 @@ class AppState: ObservableObject {
             results = results.filter { $0.category == category.rawValue }
         }
         if !searchQuery.isEmpty {
-            let query = searchQuery.lowercased()
             results = results.filter {
-                $0.name.lowercased().contains(query) ||
-                $0.description.lowercased().contains(query) ||
-                $0.category.lowercased().contains(query)
+                $0.name.localizedCaseInsensitiveContains(searchQuery) ||
+                $0.description.localizedCaseInsensitiveContains(searchQuery) ||
+                $0.category.localizedCaseInsensitiveContains(searchQuery)
             }
         }
         return results
@@ -2215,14 +2223,14 @@ class AppState: ObservableObject {
     }
 
     private func persistUserTemplates() {
-        if let data = try? JSONEncoder().encode(userTemplates) {
+        if let data = try? AppState.jsonEncoder.encode(userTemplates) {
             UserDefaults.standard.set(data, forKey: "osai_user_templates")
         }
     }
 
     func loadUserTemplates() {
         if let data = UserDefaults.standard.data(forKey: "osai_user_templates"),
-           let templates = try? JSONDecoder().decode([ConversationTemplate].self, from: data) {
+           let templates = try? AppState.jsonDecoder.decode([ConversationTemplate].self, from: data) {
             userTemplates = templates
         }
     }
@@ -2309,7 +2317,7 @@ class AppState: ObservableObject {
 
         // Words per message
         let totalWords = messages.reduce(0) { total, msg in
-            total + msg.content.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }.count
+            total + msg.content.split(whereSeparator: { $0.isWhitespace || $0.isNewline }).count
         }
         let wordsPerMsg = messages.isEmpty ? 0.0 : Double(totalWords) / Double(messages.count)
 
@@ -2339,9 +2347,8 @@ class AppState: ObservableObject {
 
     func generateSummary(for conversation: Conversation) -> String {
         let messages = conversation.messages
-        let userCount = messages.filter { $0.role == .user }.count
-        let assistantCount = messages.filter { $0.role == .assistant }.count
         let totalCount = messages.count
+        let (userCount, assistantCount) = messages.reduce((0, 0)) { ($0.0 + ($1.role == .user ? 1 : 0), $0.1 + ($1.role == .assistant ? 1 : 0)) }
 
         // Duration
         var durationStr = ""
@@ -2503,7 +2510,7 @@ class AppState: ObservableObject {
     }
 
     var unreadNotificationCount: Int {
-        notifications.filter { !$0.isRead }.count
+        notifications.count { !$0.isRead }
     }
 
     // MARK: - Response Time Metrics
@@ -2560,7 +2567,7 @@ class AppState: ObservableObject {
     var messagesPerHour: Double {
         let cutoff = Date().addingTimeInterval(-3600 * 24)
         let count = conversations.reduce(0) { total, conv in
-            total + conv.messages.filter { $0.timestamp >= cutoff }.count
+            total + conv.messages.count { $0.timestamp >= cutoff }
         }
         return Double(count) / 24.0
     }
@@ -2568,14 +2575,14 @@ class AppState: ObservableObject {
     /// Number of conversations created today
     var conversationsToday: Int {
         let start = Calendar.current.startOfDay(for: Date())
-        return conversations.filter { $0.createdAt >= start }.count
+        return conversations.count { $0.createdAt >= start }
     }
 
     /// Number of conversations created this week
     var conversationsThisWeek: Int {
         let calendar = Calendar.current
         guard let weekStart = calendar.date(from: calendar.dateComponents([.yearForWeekOfYear, .weekOfYear], from: Date())) else { return 0 }
-        return conversations.filter { $0.createdAt >= weekStart }.count
+        return conversations.count { $0.createdAt >= weekStart }
     }
 
     /// Returns non-archived conversations sorted by the selected sort order, with pinned items always first.
@@ -2815,7 +2822,8 @@ class AppState: ObservableObject {
     /// Returns the number of conversations in a workspace.
     func workspaceConversationCount(_ workspaceId: String) -> Int {
         guard let ws = workspaces.first(where: { $0.id == workspaceId }) else { return 0 }
-        return ws.conversationIds.filter { cid in conversations.contains(where: { $0.id == cid }) }.count
+        let existingIds = Set(conversations.map { $0.id })
+        return ws.conversationIds.filter { existingIds.contains($0) }.count
     }
 
     /// Returns which workspaces a conversation belongs to.
@@ -2896,7 +2904,7 @@ class AppState: ObservableObject {
             var monthCost: Double = 0
             if let data = FileManager.default.contents(atPath: spendingPath),
                let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                let today = ISO8601DateFormatter().string(from: Date()).prefix(10)
+                let today = AppState.isoFormatter.string(from: Date()).prefix(10)
                 if let daily = json["daily"] as? [String: Any],
                    let todayData = daily[String(today)] as? [String: Any] {
                     todayCost = todayData["cost_usd"] as? Double ?? 0.0
@@ -2931,7 +2939,7 @@ class AppState: ObservableObject {
         guard let data = FileManager.default.contents(atPath: spendingPath),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
 
-        let today = ISO8601DateFormatter().string(from: Date()).prefix(10)
+        let today = AppState.isoFormatter.string(from: Date()).prefix(10)
 
         if let daily = json["daily"] as? [String: Any],
            let todayData = daily[String(today)] as? [String: Any] {
@@ -2956,21 +2964,19 @@ class AppState: ObservableObject {
 
     func loadDailyTokenUsage() {
         if let data = UserDefaults.standard.data(forKey: Self.dailyTokenUsageKey),
-           let decoded = try? JSONDecoder().decode([DailyTokenUsage].self, from: data) {
+           let decoded = try? AppState.jsonDecoder.decode([DailyTokenUsage].self, from: data) {
             dailyTokenUsage = decoded
         }
     }
 
     private func saveDailyTokenUsage() {
-        if let data = try? JSONEncoder().encode(dailyTokenUsage) {
+        if let data = try? AppState.jsonEncoder.encode(dailyTokenUsage) {
             UserDefaults.standard.set(data, forKey: Self.dailyTokenUsageKey)
         }
     }
 
     func recordDailyTokenUsage(input: Int, output: Int) {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd"
-        let todayKey = formatter.string(from: Date())
+        let todayKey = Self.dateKeyFormatter.string(from: Date())
 
         if let idx = dailyTokenUsage.firstIndex(where: { $0.dateKey == todayKey }) {
             dailyTokenUsage[idx].inputTokens += input
@@ -2995,13 +3001,10 @@ class AppState: ObservableObject {
     func getWeeklyTokenUsage() -> [DailyTokenUsage] {
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: Date())
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd"
-
         var result: [DailyTokenUsage] = []
         for dayOffset in (0..<7).reversed() {
             guard let date = calendar.date(byAdding: .day, value: -dayOffset, to: today) else { continue }
-            let key = formatter.string(from: date)
+            let key = Self.dateKeyFormatter.string(from: date)
             if let existing = dailyTokenUsage.first(where: { $0.dateKey == key }) {
                 result.append(existing)
             } else {
@@ -3193,9 +3196,25 @@ class AppState: ObservableObject {
         }
     }
 
-    /// Keep conversations array in sync with activeConversation
+    /// Keep conversations array in sync with activeConversation (debounced during streaming)
+    private var syncDebounceTimer: DispatchWorkItem?
+
     private func syncConversationToList() {
         guard let active = activeConversation else { return }
+
+        // During streaming, debounce to reduce @Published cascade
+        if isProcessing {
+            syncDebounceTimer?.cancel()
+            let item = DispatchWorkItem { [weak self] in
+                guard let self, let active = self.activeConversation,
+                      let idx = self.conversations.firstIndex(where: { $0.id == active.id }) else { return }
+                self.conversations[idx] = active
+            }
+            syncDebounceTimer = item
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: item)
+            return
+        }
+
         if let idx = conversations.firstIndex(where: { $0.id == active.id }) {
             conversations[idx] = active
         }
@@ -3673,7 +3692,7 @@ class AppState: ObservableObject {
                 "id": msg.id,
                 "role": msg.role.rawValue,
                 "content": msg.content,
-                "timestamp": ISO8601DateFormatter().string(from: msg.timestamp)
+                "timestamp": AppState.isoFormatter.string(from: msg.timestamp)
             ]
             if let tool = msg.toolName { m["toolName"] = tool }
             if let result = msg.toolResult { m["toolResult"] = result }
@@ -3686,7 +3705,7 @@ class AppState: ObservableObject {
                     [
                         "id": record.id.uuidString,
                         "content": record.content,
-                        "editedAt": ISO8601DateFormatter().string(from: record.editedAt)
+                        "editedAt": AppState.isoFormatter.string(from: record.editedAt)
                     ]
                 }
             }
@@ -3696,7 +3715,7 @@ class AppState: ObservableObject {
         var json: [String: Any] = [
             "id": conv.id,
             "title": conv.title,
-            "createdAt": ISO8601DateFormatter().string(from: conv.createdAt),
+            "createdAt": AppState.isoFormatter.string(from: conv.createdAt),
             "messages": messages
         ]
         if let agent = conv.agentName { json["agentName"] = agent }
@@ -3956,7 +3975,7 @@ class AppState: ObservableObject {
         let path = snippetsFilePath
         guard FileManager.default.fileExists(atPath: path),
               let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
-              let decoded = try? JSONDecoder().decode([SavedSnippet].self, from: data) else { return }
+              let decoded = try? AppState.jsonDecoder.decode([SavedSnippet].self, from: data) else { return }
         savedSnippets = decoded
     }
 
@@ -3964,7 +3983,7 @@ class AppState: ObservableObject {
         let path = snippetsFilePath
         let dir = (path as NSString).deletingLastPathComponent
         try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
-        if let data = try? JSONEncoder().encode(savedSnippets) {
+        if let data = try? AppState.jsonEncoder.encode(savedSnippets) {
             try? data.write(to: URL(fileURLWithPath: path))
         }
     }
@@ -4075,6 +4094,7 @@ class AppState: ObservableObject {
                 activeConversation?.tags.append(trimmed)
             }
         }
+        invalidateTagCache()
         if let updated = conversations.first(where: { $0.id == conversationId }) {
             service.saveConversation(updated)
         }
@@ -4087,13 +4107,23 @@ class AppState: ObservableObject {
         if activeConversation?.id == conversationId {
             activeConversation?.tags.removeAll { $0 == tag }
         }
+        invalidateTagCache()
         if let updated = conversations.first(where: { $0.id == conversationId }) {
             service.saveConversation(updated)
         }
     }
 
+    private var cachedUniqueTags: [String]?
+
     func allUniqueTags() -> [String] {
-        Array(Set(conversations.flatMap { $0.tags })).sorted()
+        if let cached = cachedUniqueTags { return cached }
+        let tags = Array(Set(conversations.flatMap { $0.tags })).sorted()
+        cachedUniqueTags = tags
+        return tags
+    }
+
+    func invalidateTagCache() {
+        cachedUniqueTags = nil
     }
 
     /// Predefined tag color palette
@@ -4102,10 +4132,14 @@ class AppState: ObservableObject {
         ("blue", .blue), ("purple", .purple), ("pink", .pink), ("gray", .gray)
     ]
 
+    private static let tagColorPaletteMap: [String: Color] = {
+        Dictionary(uniqueKeysWithValues: tagColorPalette.map { ($0.name, $0.color) })
+    }()
+
     func tagColor(for tag: String) -> Color {
         if let colorName = tagColors[tag],
-           let match = Self.tagColorPalette.first(where: { $0.name == colorName }) {
-            return match.color
+           let color = Self.tagColorPaletteMap[colorName] {
+            return color
         }
         // Fallback: assign based on index in sorted unique tags
         let sorted = allUniqueTags()
@@ -4140,6 +4174,7 @@ class AppState: ObservableObject {
         if filterTag == oldName {
             filterTag = trimmed
         }
+        invalidateTagCache()
     }
 
     func deleteTag(_ tag: String) {
@@ -4157,57 +4192,63 @@ class AppState: ObservableObject {
         }
     }
 
-    /// Generate contextual quick-reply suggestions based on the assistant's response.
-    /// Public method for external use (e.g. previews, tests).
-    func generateQuickReplies(for message: String) -> [String] {
-        let lower = message.lowercased()
-
-        // Detect message type patterns
-        let hasQuestion = lower.contains("?")
-        let hasList = lower.contains("1.") || lower.contains("- ") || lower.contains("step ")
-            || lower.contains("plan") || lower.contains("here's what")
-            || lower.contains("option") || lower.contains("alternative")
-        let hasCode = lower.contains("```") || lower.contains("function ") || lower.contains("def ")
-            || lower.contains("class ") || lower.contains("import ") || lower.contains("var ")
-            || lower.contains("let ") || lower.contains("const ") || lower.contains("return ")
-            || lower.contains("print(") || lower.contains("console.log")
-        let hasComparison = lower.contains("vs") || lower.contains("versus") || lower.contains("compared to")
-            || lower.contains("difference between") || lower.contains("pros and cons")
-            || lower.contains("advantages") || lower.contains("disadvantages")
-        let hasExplanation = lower.contains("means") || lower.contains("because") || lower.contains("essentially")
-            || lower.contains("in other words") || lower.contains("basically")
-            || lower.contains("this is") || lower.contains("that is")
-
-        // Priority-based pattern matching for contextual suggestions
-        if hasCode && hasQuestion {
-            return ["Run this code", "Modify it to...", "Explain this code"]
-        } else if hasCode {
-            return ["Run this code", "Modify it to...", "Explain this code"]
-        } else if hasComparison {
-            return ["Compare more options", "Which do you recommend?", "Go deeper"]
-        } else if hasQuestion && hasList {
-            return ["Yes", "No", "Tell me more"]
-        } else if hasQuestion {
-            return ["Yes", "No", "Tell me more"]
-        } else if hasList {
-            return ["Compare more options", "Which do you recommend?", "Go deeper"]
-        } else if hasExplanation {
-            return ["Give me an example", "Simplify this", "Go deeper"]
-        } else {
-            return ["Tell me more", "Show me an example", "Explain in detail"]
-        }
-    }
-
-    /// Generate and store contextual quick-reply suggestions based on the assistant's response.
+    /// Generate and store contextual quick-reply suggestions using AI.
+    /// Calls the user's configured model to generate relevant follow-up suggestions
+    /// in the same language as the conversation.
     private func generateSuggestedReplies(from content: String) {
         guard showQuickReplies else {
             suggestedReplies = []
             return
         }
-        suggestedReplies = generateQuickReplies(for: content)
+
+        // Truncate to keep the prompt small (~500 chars of context)
+        let truncated = String(content.suffix(500))
+
+        // Detect conversation language from user's last message
+        let userLang = activeConversation?.messages.last(where: { $0.role == .user })?.content ?? ""
+
+        let prompt = """
+        Given this assistant response and the user's last message, suggest exactly 3 short follow-up replies the user might want to send. Each reply must be 2-5 words, contextual, and in the SAME language as the user's message.
+
+        User's message: \(String(userLang.prefix(200)))
+        Assistant's response: \(truncated)
+
+        Reply with ONLY a JSON array of 3 strings, nothing else. Example: ["Reply 1","Reply 2","Reply 3"]
+        """
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let modelId = self.selectedModel
+            let cfg = self.config
+
+            let result = await self.service.quickCompletion(
+                prompt: prompt,
+                systemPrompt: "You generate short follow-up reply suggestions. Reply ONLY with a JSON array of 3 strings.",
+                modelId: modelId,
+                config: cfg,
+                maxTokens: 100
+            )
+
+            // Parse JSON array from response
+            if let text = result,
+               let jsonData = text.data(using: .utf8),
+               let array = try? JSONSerialization.jsonObject(with: jsonData) as? [String],
+               array.count >= 2 {
+                self.suggestedReplies = Array(array.prefix(3))
+            } else {
+                // Silent fallback — no suggestions if AI call fails
+                self.suggestedReplies = []
+            }
+        }
     }
 
     /// Common words to ignore when extracting topic keywords.
+    private static let codeKeywordPrefixes: [String] = [
+        "write a function", "write a script", "write code", "create a function",
+        "implement", "refactor", "debug", "fix the bug", "code review",
+        "write a class", "create a class", "write a method"
+    ]
+
     private static let titleStopWords: Set<String> = [
         "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
         "have", "has", "had", "do", "does", "did", "will", "would", "could",
@@ -4254,15 +4295,7 @@ class AppState: ObservableObject {
     /// Generate a short auto-title (3-5 words max) from the first user message, locally.
     /// Capitalizes the first letter for a polished appearance.
     func generateAutoTitle(from message: String) -> String {
-        let cleaned = message
-            .replacingOccurrences(of: "File: [^\n]*```[\\s\\S]*?```", with: "", options: .regularExpression)
-            .replacingOccurrences(of: "\\[Attached: [^\\]]*\\]", with: "", options: .regularExpression)
-            .replacingOccurrences(of: "\\[Image: [^\\]]*\\]", with: "", options: .regularExpression)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .replacingOccurrences(of: "\n", with: " ")
-            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-
+        let cleaned = Self.cleanTextForTitle(message)
         guard !cleaned.isEmpty else { return "New Chat" }
 
         // If short enough, use as-is
@@ -4271,7 +4304,7 @@ class AppState: ObservableObject {
         }
 
         // Extract first meaningful phrase — split by punctuation, take first clause
-        let separators = CharacterSet(charactersIn: ".!?,;:-")
+        let separators = Self.sentenceSeparatorCharSet
         let firstClause = cleaned.components(separatedBy: separators).first ?? cleaned
 
         if firstClause.count <= 50 {
@@ -4293,13 +4326,7 @@ class AppState: ObservableObject {
     /// Generate a meaningful title (max 50 chars) from the first user message.
     func generateSmartTitle(from text: String) -> String {
         // Clean up: collapse newlines, strip file attachments, and trim
-        let cleaned = text
-            .replacingOccurrences(of: "File: [^\n]*```[\\s\\S]*?```", with: "", options: .regularExpression)
-            .replacingOccurrences(of: "\\[Attached: [^\\]]*\\]", with: "", options: .regularExpression)
-            .replacingOccurrences(of: "\\[Image: [^\\]]*\\]", with: "", options: .regularExpression)
-            .replacingOccurrences(of: "\n", with: " ")
-            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleaned = Self.cleanTextForTitle(text)
 
         guard !cleaned.isEmpty else { return "New Chat" }
 
@@ -4332,10 +4359,7 @@ class AppState: ObservableObject {
         }
 
         // Code request detection with language hints
-        let codeKeywords = ["write a function", "write a script", "write code", "create a function",
-                            "implement", "refactor", "debug", "fix the bug", "code review",
-                            "write a class", "create a class", "write a method"]
-        for keyword in codeKeywords {
+        for keyword in Self.codeKeywordPrefixes {
             if lower.hasPrefix(keyword) {
                 let langAction = detectCodeLanguageAndAction(from: text, cleaned: cleaned)
                 return truncateTitle("Code: \(langAction)")
@@ -4366,7 +4390,7 @@ class AppState: ObservableObject {
         }
 
         // First sentence (split on . ! or ?)
-        let sentenceEnd = cleaned.rangeOfCharacter(from: CharacterSet(charactersIn: ".!"))
+        let sentenceEnd = cleaned.rangeOfCharacter(from: Self.dotBangCharSet)
         if let end = sentenceEnd, cleaned.distance(from: cleaned.startIndex, to: end.lowerBound) < 60 {
             let sentence = String(cleaned[cleaned.startIndex...end.lowerBound])
             return truncateTitle(sentence)
@@ -4417,9 +4441,7 @@ class AppState: ObservableObject {
             let langHint = String(original[match]).replacingOccurrences(of: "```", with: "").lowercased()
             if let langName = Self.codeLanguages[langHint] {
                 // Extract the action from the non-code portion
-                let textOnly = cleaned
-                    .replacingOccurrences(of: "```[\\s\\S]*?```", with: "", options: .regularExpression)
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                let textOnly = Self.stripCodeBlocks(cleaned).trimmingCharacters(in: .whitespacesAndNewlines)
                 if textOnly.isEmpty {
                     return langName
                 }
@@ -4435,9 +4457,7 @@ class AppState: ObservableObject {
         let lower = cleaned.lowercased()
         for (key, name) in Self.codeLanguages {
             if key.count > 2, lower.contains(key) {
-                let textOnly = cleaned
-                    .replacingOccurrences(of: "```[\\s\\S]*?```", with: "", options: .regularExpression)
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                let textOnly = Self.stripCodeBlocks(cleaned).trimmingCharacters(in: .whitespacesAndNewlines)
                 let actionWords = textOnly.components(separatedBy: " ")
                     .filter { $0.lowercased() != key && !Self.titleStopWords.contains($0.lowercased()) }
                     .prefix(3)
@@ -4447,9 +4467,7 @@ class AppState: ObservableObject {
         }
 
         // Fallback: just use cleaned text minus code blocks
-        let textOnly = cleaned
-            .replacingOccurrences(of: "```[\\s\\S]*?```", with: "", options: .regularExpression)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let textOnly = Self.stripCodeBlocks(cleaned).trimmingCharacters(in: .whitespacesAndNewlines)
         return textOnly.isEmpty ? "snippet" : textOnly
     }
 
@@ -4516,7 +4534,7 @@ class AppState: ObservableObject {
         if let firstAssistant = messages.first(where: { $0.role == .assistant && !$0.isStreaming }) {
             let text = firstAssistant.content.trimmingCharacters(in: .whitespacesAndNewlines)
             // Extract first sentence (split on . ! ? or newline)
-            let sentenceEnders = CharacterSet(charactersIn: ".!?\n")
+            let sentenceEnders = Self.sentenceEndCharSet
             let parts = text.components(separatedBy: sentenceEnders)
             let firstSentence = (parts.first ?? text).trimmingCharacters(in: .whitespacesAndNewlines)
             if !firstSentence.isEmpty {
@@ -5057,12 +5075,8 @@ class AppState: ObservableObject {
     }
 
     func exportAsMarkdown(conversation conv: Conversation, options: ExportOptions = ExportOptions()) -> String {
-        let dateFormatter = DateFormatter()
-        dateFormatter.dateStyle = .long
-        dateFormatter.timeStyle = .short
-
         var md = "# \(conv.title)\n\n"
-        md += "**Date:** \(dateFormatter.string(from: conv.createdAt))"
+        md += "**Date:** \(Self.longDateShortTimeFormatter.string(from: conv.createdAt))"
         if let agent = conv.agentName {
             md += "  \n**Agent:** \(agent)"
         }
@@ -5072,8 +5086,7 @@ class AppState: ObservableObject {
         }
         md += "\n\n---\n"
 
-        let timeFormatter = DateFormatter()
-        timeFormatter.dateFormat = "HH:mm:ss"
+        let timeFormatter = Self.timeWithSecondsFormatter
 
         for msg in conv.messages {
             guard msg.role == .user || msg.role == .assistant else { continue }
@@ -5244,7 +5257,7 @@ class AppState: ObservableObject {
         var dict: [String: Any] = [
             "id": conv.id,
             "title": conv.title,
-            "createdAt": ISO8601DateFormatter().string(from: conv.createdAt)
+            "createdAt": AppState.isoFormatter.string(from: conv.createdAt)
         ]
         if let agent = conv.agentName { dict["agentName"] = agent }
         if options.includeTokenStats {
@@ -5253,7 +5266,7 @@ class AppState: ObservableObject {
             dict["estimatedCost"] = conv.estimatedCost
         }
 
-        let timeFormatter = ISO8601DateFormatter()
+        let timeFormatter = AppState.isoFormatter
         var messagesArray: [[String: Any]] = []
         for msg in conv.messages {
             guard msg.role == .user || msg.role == .assistant else { continue }
@@ -5287,13 +5300,9 @@ class AppState: ObservableObject {
     }
 
     func exportAsPlainText(conversation conv: Conversation, options: ExportOptions = ExportOptions()) -> String {
-        let dateFormatter = DateFormatter()
-        dateFormatter.dateStyle = .long
-        dateFormatter.timeStyle = .short
-
         var text = "\(conv.title)\n"
         text += String(repeating: "=", count: conv.title.count) + "\n"
-        text += "Date: \(dateFormatter.string(from: conv.createdAt))\n"
+        text += "Date: \(Self.longDateShortTimeFormatter.string(from: conv.createdAt))\n"
         if let agent = conv.agentName {
             text += "Agent: \(agent)\n"
         }
@@ -5303,8 +5312,7 @@ class AppState: ObservableObject {
         }
         text += "\n"
 
-        let timeFormatter = DateFormatter()
-        timeFormatter.dateFormat = "HH:mm:ss"
+        let timeFormatter = Self.timeWithSecondsFormatter
 
         for msg in conv.messages {
             guard msg.role == .user || msg.role == .assistant else { continue }
@@ -5337,12 +5345,8 @@ class AppState: ObservableObject {
     }
 
     func exportAsHTML(conversation conv: Conversation, options: ExportOptions = ExportOptions()) -> String {
-        let dateFormatter = DateFormatter()
-        dateFormatter.dateStyle = .long
-        dateFormatter.timeStyle = .short
-
-        let timeFormatter = DateFormatter()
-        timeFormatter.dateFormat = "HH:mm:ss"
+        let dateFormatter = Self.longDateShortTimeFormatter
+        let timeFormatter = Self.timeWithSecondsFormatter
 
         func escapeHTML(_ text: String) -> String {
             text.replacingOccurrences(of: "&", with: "&amp;")
@@ -5357,8 +5361,8 @@ class AppState: ObservableObject {
             var result = escaped
 
             // Fenced code blocks: ```lang\n...\n```
-            let codeBlockPattern = #"```(\w*)\n([\s\S]*?)```"#
-            if let regex = try? NSRegularExpression(pattern: codeBlockPattern, options: []) {
+            let regex = Self.htmlCodeBlockRegex
+            do {
                 let ns = result as NSString
                 var output = ""
                 var lastEnd = 0
@@ -5376,13 +5380,9 @@ class AppState: ObservableObject {
             }
 
             // Inline code
-            if let regex = try? NSRegularExpression(pattern: #"`([^`]+)`"#, options: []) {
-                result = regex.stringByReplacingMatches(in: result, range: NSRange(location: 0, length: (result as NSString).length), withTemplate: "<code>$1</code>")
-            }
+            result = Self.htmlInlineCodeRegex.stringByReplacingMatches(in: result, range: NSRange(location: 0, length: (result as NSString).length), withTemplate: "<code>$1</code>")
             // Bold
-            if let regex = try? NSRegularExpression(pattern: #"\*\*(.+?)\*\*"#, options: []) {
-                result = regex.stringByReplacingMatches(in: result, range: NSRange(location: 0, length: (result as NSString).length), withTemplate: "<strong>$1</strong>")
-            }
+            result = Self.htmlBoldRegex.stringByReplacingMatches(in: result, range: NSRange(location: 0, length: (result as NSString).length), withTemplate: "<strong>$1</strong>")
             // Line breaks (outside of pre blocks) — simple approach: convert double newlines to <p> boundaries
             result = result.replacingOccurrences(of: "\n\n", with: "</p><p>")
             result = result.replacingOccurrences(of: "\n", with: "<br>")
@@ -5537,11 +5537,10 @@ class AppState: ObservableObject {
     func searchInCurrentConversation(query: String) -> [Int] {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, let conv = activeConversation else { return [] }
-        let lower = trimmed.lowercased()
         var indices: [Int] = []
         for (index, msg) in conv.messages.enumerated() {
             guard msg.role == .user || msg.role == .assistant else { continue }
-            if msg.content.lowercased().contains(lower) {
+            if msg.content.localizedCaseInsensitiveContains(trimmed) {
                 indices.append(index)
             }
         }
@@ -5594,7 +5593,7 @@ class AppState: ObservableObject {
                 guard msg.role == .user || msg.role == .assistant else { continue }
 
                 // Text query filter
-                if !trimmed.isEmpty && !msg.content.lowercased().contains(trimmed) {
+                if !trimmed.isEmpty && !msg.content.localizedCaseInsensitiveContains(trimmed) {
                     continue
                 }
 
@@ -5651,7 +5650,7 @@ class AppState: ObservableObject {
         for conv in conversations {
             let matchingMessages = conv.messages.filter { msg in
                 (msg.role == .user || msg.role == .assistant) &&
-                msg.content.lowercased().contains(lower)
+                msg.content.localizedCaseInsensitiveContains(lower)
             }
             if !matchingMessages.isEmpty {
                 results.append(ConversationSearchResult(conversation: conv, matches: matchingMessages))
@@ -5662,24 +5661,17 @@ class AppState: ObservableObject {
     }
 
     func exportConversation(_ conv: Conversation) -> String {
-        let dateFormatter = DateFormatter()
-        dateFormatter.dateStyle = .long
-        dateFormatter.timeStyle = .short
-
         var md = "# \(conv.title)\n"
-        md += "Date: \(dateFormatter.string(from: conv.createdAt))"
+        md += "Date: \(Self.longDateShortTimeFormatter.string(from: conv.createdAt))"
         if let agent = conv.agentName {
             md += " | Agent: \(agent)"
         }
         md += "\n\n---\n"
 
-        let timeFormatter = DateFormatter()
-        timeFormatter.dateFormat = "HH:mm"
-
         for msg in conv.messages {
             guard msg.role == .user || msg.role == .assistant else { continue }
             let label = msg.role == .user ? "User" : "Assistant"
-            md += "\n**\(label)** _(\(timeFormatter.string(from: msg.timestamp)))_:\n\n"
+            md += "\n**\(label)** _(\(Self.timeOnlyFormatter.string(from: msg.timestamp)))_:\n\n"
             md += msg.content.trimmingCharacters(in: .whitespacesAndNewlines)
             md += "\n\n---\n"
         }
@@ -5719,9 +5711,7 @@ class AppState: ObservableObject {
     func exportAndSave(_ conv: Conversation) {
         let panel = NSSavePanel()
         panel.title = "Export Conversation"
-        let safeName = conv.title
-            .replacingOccurrences(of: "[^a-zA-Z0-9_ -]", with: "", options: .regularExpression)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let safeName = Self.sanitizeFilename(conv.title)
         panel.nameFieldStringValue = String(safeName.prefix(60)) + ".md"
         panel.allowedContentTypes = [.plainText]
         panel.canCreateDirectories = true
@@ -5778,58 +5768,101 @@ class AppState: ObservableObject {
         speakingMessageId = nil
     }
 
+    /// Strip fenced code blocks from text using cached regex
+    private static func stripCodeBlocks(_ text: String) -> String {
+        codeBlockStripRegex.stringByReplacingMatches(in: text, range: NSRange(text.startIndex..., in: text), withTemplate: "")
+    }
+
+    /// Clean text for title generation (strip attachments, code blocks, normalize whitespace)
+    private static func cleanTextForTitle(_ text: String) -> String {
+        var result = text
+        for (regex, template) in titleCleanRegexes {
+            result = regex.stringByReplacingMatches(in: result, range: NSRange(result.startIndex..., in: result), withTemplate: template)
+        }
+        result = result.replacingOccurrences(of: "\n", with: " ")
+        result = multiSpaceRegex.stringByReplacingMatches(in: result, range: NSRange(result.startIndex..., in: result), withTemplate: " ")
+        return result.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    // Title cleaning regexes
+    private static let titleCleanRegexes: [(NSRegularExpression, String)] = [
+        (try! NSRegularExpression(pattern: "File: [^\n]*```[\\s\\S]*?```"), ""),
+        (try! NSRegularExpression(pattern: "\\[Attached: [^\\]]*\\]"), ""),
+        (try! NSRegularExpression(pattern: "\\[Image: [^\\]]*\\]"), ""),
+    ]
+    private static let multiSpaceRegex = try! NSRegularExpression(pattern: "\\s+")
+    private static let codeBlockStripRegex = try! NSRegularExpression(pattern: "```[\\s\\S]*?```", options: [.dotMatchesLineSeparators])
+
+    /// Branch count per conversation ID (cached, invalidated on conversation changes)
+    private var _branchCountCache: [String: Int]?
+    func branchCount(for convId: String) -> Int {
+        if _branchCountCache == nil {
+            var cache: [String: Int] = [:]
+            for conv in conversations {
+                if let parentId = conv.branchedFromId {
+                    cache[parentId, default: 0] += 1
+                }
+            }
+            _branchCountCache = cache
+        }
+        return _branchCountCache?[convId] ?? 0
+    }
+    func invalidateBranchCache() { _branchCountCache = nil }
+
+    // Cached DateFormatters
+    static let dateKeyFormatter: DateFormatter = { let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"; return f }()
+    static let shortDayFormatter: DateFormatter = { let f = DateFormatter(); f.dateFormat = "EEE"; return f }()
+    static let mediumDateTimeFormatter: DateFormatter = { let f = DateFormatter(); f.dateStyle = .medium; f.timeStyle = .short; return f }()
+    static let dateOnlyFormatter: DateFormatter = { let f = DateFormatter(); f.dateFormat = "MMM d, yyyy"; return f }()
+    static let timeOnlyFormatter: DateFormatter = { let f = DateFormatter(); f.dateFormat = "HH:mm"; return f }()
+    static let longDateShortTimeFormatter: DateFormatter = { let f = DateFormatter(); f.dateStyle = .long; f.timeStyle = .short; return f }()
+    static let timeWithSecondsFormatter: DateFormatter = { let f = DateFormatter(); f.dateFormat = "HH:mm:ss"; return f }()
+    static let monthDayYearFormatter: DateFormatter = { let f = DateFormatter(); f.dateFormat = "MMM d, yyyy"; return f }()
+    static let fullMonthYearFormatter: DateFormatter = { let f = DateFormatter(); f.dateFormat = "MMMM yyyy"; return f }()
+
+    // Cached CharacterSets
+    private static let sentenceSeparatorCharSet = CharacterSet(charactersIn: ".!?,;:-")
+    private static let dotBangCharSet = CharacterSet(charactersIn: ".!")
+    private static let sentenceEndCharSet = CharacterSet(charactersIn: ".!?\n")
+
+    /// Sanitize a string for use as filename (remove non-alnum except space/dash/underscore)
+    static func sanitizeFilename(_ text: String) -> String {
+        sanitizeFilenameRegex.stringByReplacingMatches(in: text, range: NSRange(text.startIndex..., in: text), withTemplate: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    // Sanitization regexes
+    private static let sanitizeFilenameRegex = try! NSRegularExpression(pattern: "[^a-zA-Z0-9_ -]")
+    private static let slugifySpaceRegex = try! NSRegularExpression(pattern: "\\s+")
+    private static let slugifyNonAlnumRegex = try! NSRegularExpression(pattern: "[^a-z0-9\\-]")
+
+    // HTML export regexes
+    private static let htmlCodeBlockRegex = try! NSRegularExpression(pattern: #"```(\w*)\n([\s\S]*?)```"#)
+    private static let htmlInlineCodeRegex = try! NSRegularExpression(pattern: #"`([^`]+)`"#)
+    private static let htmlBoldRegex = try! NSRegularExpression(pattern: #"\*\*(.+?)\*\*"#)
+
+    /// Cached regex patterns for markdown stripping (compiled once)
+    private static let mdStripPairs: [(NSRegularExpression, String)] = [
+        (try! NSRegularExpression(pattern: "```[\\s\\S]*?```", options: [.dotMatchesLineSeparators]), ""),
+        (try! NSRegularExpression(pattern: "`[^`]+`"), ""),
+        (try! NSRegularExpression(pattern: "<[^>]+>"), ""),
+        (try! NSRegularExpression(pattern: "\\[([^\\]]+)\\]\\([^)]+\\)"), "$1"),
+        (try! NSRegularExpression(pattern: "^#{1,6}\\s+", options: [.anchorsMatchLines]), ""),
+        (try! NSRegularExpression(pattern: "(\\*\\*|__)(.+?)(\\*\\*|__)"), "$2"),
+        (try! NSRegularExpression(pattern: "(?<![\\*_])(\\*|_)(.+?)(\\*|_)(?![\\*_])"), "$2"),
+        (try! NSRegularExpression(pattern: "~~(.+?)~~"), "$1"),
+        (try! NSRegularExpression(pattern: "^[\\-\\*_]{3,}$", options: [.anchorsMatchLines]), ""),
+        (try! NSRegularExpression(pattern: "^\\s*[\\-\\*\\+]\\s+", options: [.anchorsMatchLines]), ""),
+        (try! NSRegularExpression(pattern: "^\\s*\\d+\\.\\s+", options: [.anchorsMatchLines]), ""),
+        (try! NSRegularExpression(pattern: "\\n{3,}"), "\n\n"),
+    ]
+
     /// Strips markdown formatting from text for clean speech output.
     func stripMarkdown(_ text: String) -> String {
         var result = text
-
-        // Remove code blocks (```...```)
-        if let regex = try? NSRegularExpression(pattern: "```[\\s\\S]*?```", options: [.dotMatchesLineSeparators]) {
-            result = regex.stringByReplacingMatches(in: result, range: NSRange(result.startIndex..., in: result), withTemplate: "")
+        for (regex, template) in Self.mdStripPairs {
+            result = regex.stringByReplacingMatches(in: result, range: NSRange(result.startIndex..., in: result), withTemplate: template)
         }
-        // Remove inline code (`...`)
-        if let regex = try? NSRegularExpression(pattern: "`[^`]+`", options: []) {
-            result = regex.stringByReplacingMatches(in: result, range: NSRange(result.startIndex..., in: result), withTemplate: "")
-        }
-        // Remove HTML tags
-        if let regex = try? NSRegularExpression(pattern: "<[^>]+>", options: []) {
-            result = regex.stringByReplacingMatches(in: result, range: NSRange(result.startIndex..., in: result), withTemplate: "")
-        }
-        // Convert markdown links [text](url) -> text
-        if let regex = try? NSRegularExpression(pattern: "\\[([^\\]]+)\\]\\([^)]+\\)", options: []) {
-            result = regex.stringByReplacingMatches(in: result, range: NSRange(result.startIndex..., in: result), withTemplate: "$1")
-        }
-        // Remove headers (# ## ### etc.)
-        if let regex = try? NSRegularExpression(pattern: "^#{1,6}\\s+", options: [.anchorsMatchLines]) {
-            result = regex.stringByReplacingMatches(in: result, range: NSRange(result.startIndex..., in: result), withTemplate: "")
-        }
-        // Remove bold (**text** or __text__)
-        if let regex = try? NSRegularExpression(pattern: "(\\*\\*|__)(.+?)(\\*\\*|__)", options: []) {
-            result = regex.stringByReplacingMatches(in: result, range: NSRange(result.startIndex..., in: result), withTemplate: "$2")
-        }
-        // Remove italic (*text* or _text_)
-        if let regex = try? NSRegularExpression(pattern: "(?<![\\*_])(\\*|_)(.+?)(\\*|_)(?![\\*_])", options: []) {
-            result = regex.stringByReplacingMatches(in: result, range: NSRange(result.startIndex..., in: result), withTemplate: "$2")
-        }
-        // Remove strikethrough (~~text~~)
-        if let regex = try? NSRegularExpression(pattern: "~~(.+?)~~", options: []) {
-            result = regex.stringByReplacingMatches(in: result, range: NSRange(result.startIndex..., in: result), withTemplate: "$1")
-        }
-        // Remove horizontal rules
-        if let regex = try? NSRegularExpression(pattern: "^[\\-\\*_]{3,}$", options: [.anchorsMatchLines]) {
-            result = regex.stringByReplacingMatches(in: result, range: NSRange(result.startIndex..., in: result), withTemplate: "")
-        }
-        // Remove list markers (- * + and numbered)
-        if let regex = try? NSRegularExpression(pattern: "^\\s*[\\-\\*\\+]\\s+", options: [.anchorsMatchLines]) {
-            result = regex.stringByReplacingMatches(in: result, range: NSRange(result.startIndex..., in: result), withTemplate: "")
-        }
-        if let regex = try? NSRegularExpression(pattern: "^\\s*\\d+\\.\\s+", options: [.anchorsMatchLines]) {
-            result = regex.stringByReplacingMatches(in: result, range: NSRange(result.startIndex..., in: result), withTemplate: "")
-        }
-        // Collapse multiple newlines
-        if let regex = try? NSRegularExpression(pattern: "\\n{3,}", options: []) {
-            result = regex.stringByReplacingMatches(in: result, range: NSRange(result.startIndex..., in: result), withTemplate: "\n\n")
-        }
-
         return result.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }

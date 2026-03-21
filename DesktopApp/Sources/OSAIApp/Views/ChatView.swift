@@ -210,9 +210,8 @@ struct ChatView: View {
 
         if appState.searchScope == .currentChat {
             guard let conv = appState.activeConversation else { return [] }
-            let query = searchInConversation.lowercased()
             return conv.messages
-                .filter { $0.content.lowercased().contains(query) }
+                .filter { $0.content.localizedCaseInsensitiveContains(searchInConversation) }
                 .map { $0.id }
         } else {
             // All Chats mode: return matching message IDs across all conversations
@@ -226,9 +225,8 @@ struct ChatView: View {
         guard appState.searchScope == .currentChat,
               !searchInConversation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               let conv = appState.activeConversation else { return [] }
-        let query = searchInConversation.lowercased()
         return Set(conv.messages
-            .filter { $0.content.lowercased().contains(query) }
+            .filter { $0.content.localizedCaseInsensitiveContains(searchInConversation) }
             .map { $0.id })
     }
 
@@ -672,7 +670,7 @@ struct ChatView: View {
                                 .font(.system(size: 10, design: .monospaced))
                                 .foregroundColor(AppTheme.textMuted)
                         }
-                        .help("Context window usage")
+                        .help(L10n[.contextUsage])
                     }
 
                     if !focusMode {
@@ -682,7 +680,7 @@ struct ChatView: View {
                                     .font(.system(size: 14))
                                     .foregroundColor(showNotificationPanel ? AppTheme.accent : AppTheme.textSecondary)
 
-                                let unreadNotifCount = notifications.filter { !readNotificationIds.contains($0.id) }.count
+                                let unreadNotifCount = notifications.count { !readNotificationIds.contains($0.id) }
                                 if unreadNotifCount > 0 {
                                     Text("\(unreadNotifCount)")
                                         .font(.system(size: 8, weight: .bold, design: .rounded))
@@ -696,7 +694,7 @@ struct ChatView: View {
                             }
                         }
                         .buttonStyle(.plain)
-                        .help("Notifications")
+                        .help(L10n[.notifications])
 
                         Button(action: { withAnimation(.easeInOut(duration: 0.2)) { showBookmarksPanel.toggle(); showNotificationPanel = false } }) {
                             ZStack(alignment: .topTrailing) {
@@ -717,7 +715,7 @@ struct ChatView: View {
                             }
                         }
                         .buttonStyle(.plain)
-                        .help("Bookmarks (\(appState.bookmarkedMessages.count))")
+                        .help("\(L10n[.bookmarks]) (\(appState.bookmarkedMessages.count))")
                     }
 
                     if !focusMode, let conv = appState.activeConversation, !conv.messages.isEmpty {
@@ -732,7 +730,7 @@ struct ChatView: View {
                                 .foregroundColor(shareMode ? AppTheme.accent : AppTheme.textSecondary)
                         }
                         .buttonStyle(.plain)
-                        .help(shareMode ? "Exit share mode" : "Select messages to share")
+                        .help(shareMode ? L10n[.exitShareMode] : L10n[.selectToShare])
 
                         Button(action: { showCodeBlocksSheet = true }) {
                             Image(systemName: "curlybraces")
@@ -740,7 +738,7 @@ struct ChatView: View {
                                 .foregroundColor(AppTheme.textSecondary)
                         }
                         .buttonStyle(.plain)
-                        .help("Extract code blocks")
+                        .help(L10n[.extractCode])
 
                         Button(action: {
                             withAnimation(.easeInOut(duration: 0.15)) {
@@ -752,7 +750,7 @@ struct ChatView: View {
                                 .foregroundColor(appState.showRawMarkdown ? AppTheme.accent : AppTheme.textSecondary)
                         }
                         .buttonStyle(.plain)
-                        .help(appState.showRawMarkdown ? "Show rendered markdown (\u{2318}\u{21E7}R)" : "Show raw markdown (\u{2318}\u{21E7}R)")
+                        .help((appState.showRawMarkdown ? L10n[.showRendered] : L10n[.showRawMarkdown]) + " (\u{2318}\u{21E7}R)")
 
                         Button(action: { appState.presentExportSheet(for: conv) }) {
                             Image(systemName: "square.and.arrow.up")
@@ -760,7 +758,7 @@ struct ChatView: View {
                                 .foregroundColor(AppTheme.textSecondary)
                         }
                         .buttonStyle(.plain)
-                        .help("Export conversation")
+                        .help(L10n[.exportConversation])
 
                         Button(action: {
                             snapshotNameText = ""
@@ -771,13 +769,13 @@ struct ChatView: View {
                                 .foregroundColor(AppTheme.textSecondary)
                         }
                         .buttonStyle(.plain)
-                        .help("Save snapshot")
+                        .help(L10n[.saveSnapshot])
                         .popover(isPresented: $showSnapshotNamePopover, arrowEdge: .bottom) {
                             VStack(spacing: 12) {
-                                Text("Save Snapshot")
+                                Text(L10n[.saveSnapshotTitle])
                                     .font(.system(size: 14, weight: .semibold))
                                     .foregroundColor(AppTheme.textPrimary)
-                                TextField("Snapshot name", text: $snapshotNameText)
+                                TextField(L10n[.snapshotName], text: $snapshotNameText)
                                     .textFieldStyle(.roundedBorder)
                                     .frame(width: 220)
                                     .onSubmit {
@@ -788,9 +786,9 @@ struct ChatView: View {
                                         }
                                     }
                                 HStack(spacing: 12) {
-                                    Button("Cancel") { showSnapshotNamePopover = false }
+                                    Button(L10n[.cancel]) { showSnapshotNamePopover = false }
                                         .keyboardShortcut(.cancelAction)
-                                    Button("Save") {
+                                    Button(L10n[.save]) {
                                         let name = snapshotNameText.trimmingCharacters(in: .whitespacesAndNewlines)
                                         if !name.isEmpty {
                                             appState.createSnapshot(conversationId: conv.id, name: name)
@@ -814,7 +812,7 @@ struct ChatView: View {
                                 .foregroundColor(AppTheme.textSecondary)
                         }
                         .buttonStyle(.plain)
-                        .help("Conversation statistics")
+                        .help(L10n[.conversationStats])
 
                         Button(action: {
                             withAnimation(.easeInOut(duration: 0.2)) {
@@ -826,7 +824,7 @@ struct ChatView: View {
                                 .foregroundColor(appState.showConversationInfo ? AppTheme.accent : AppTheme.textSecondary)
                         }
                         .buttonStyle(.plain)
-                        .help("Conversation info")
+                        .help(L10n[.conversationInfo])
                     }
 
                     Button(action: { withAnimation(.easeInOut(duration: 0.25)) {
@@ -838,7 +836,7 @@ struct ChatView: View {
                             .foregroundColor(focusMode ? AppTheme.accent : AppTheme.textSecondary)
                     }
                     .buttonStyle(.plain)
-                    .help("Toggle focus mode (\u{2318}\u{21E7}F)")
+                    .help("\(L10n[.focusMode]) (\u{2318}\u{21E7}F)")
 
                     if !focusMode {
                         Button(action: { appState.startNewChat() }) {
@@ -847,7 +845,7 @@ struct ChatView: View {
                                 .foregroundColor(AppTheme.textSecondary)
                         }
                         .buttonStyle(.plain)
-                        .help("New Chat (Cmd+N)")
+                        .help("\(L10n[.newChat]) (\u{2318}N)")
                     }
                 }
                 .padding(.horizontal, AppTheme.paddingLg)
@@ -1662,7 +1660,7 @@ struct ChatView: View {
             conversationWorkspaceIds: appState.workspacesForConversation(conv.id).map { $0.id },
             onAddToWorkspace: { wsId in appState.addToWorkspace(conversationId: conv.id, workspaceId: wsId) },
             onRemoveFromWorkspace: { wsId in appState.removeFromWorkspace(conversationId: conv.id, workspaceId: wsId) },
-            branchCount: appState.conversations.filter { $0.branchedFromId == conv.id }.count,
+            branchCount: appState.branchCount(for: conv.id),
             onViewParent: conv.branchedFromId != nil ? {
                 if let parentId = conv.branchedFromId,
                    let parent = appState.conversations.first(where: { $0.id == parentId }) {
@@ -1684,7 +1682,7 @@ struct ChatView: View {
                 .frame(width: 200)
                 .onSubmit { commitNewTag() }
             HStack(spacing: 12) {
-                Button("Cancel") { showNewTagPopover = nil }
+                Button(L10n[.cancel]) { showNewTagPopover = nil }
                     .keyboardShortcut(.cancelAction)
                 Button("Add") { commitNewTag() }
                     .keyboardShortcut(.defaultAction)
@@ -1728,7 +1726,7 @@ struct ChatView: View {
         guard !query.isEmpty else { return [] }
         let allExisting = appState.allUniqueTags()
         return allExisting.filter { tag in
-            tag.lowercased().contains(query) && !current.contains(tag)
+            tag.localizedCaseInsensitiveContains(query) && !current.contains(tag)
         }
     }
 
@@ -1935,7 +1933,7 @@ struct ChatView: View {
                         .frame(width: 200)
                         .onSubmit { commitNewWorkspace() }
                     HStack(spacing: 12) {
-                        Button("Cancel") { showNewWorkspacePopover = false }
+                        Button(L10n[.cancel]) { showNewWorkspacePopover = false }
                             .keyboardShortcut(.cancelAction)
                         Button("Create") { commitNewWorkspace() }
                             .keyboardShortcut(.defaultAction)
@@ -2591,6 +2589,37 @@ struct ChatView: View {
         )
     }
 
+    private static let dateSeparatorFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "EEEE, MMMM d"
+        return f
+    }()
+
+    private static let bookmarkFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "MMM d, HH:mm"
+        return f
+    }()
+
+    private static let shortDateTimeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .short
+        f.timeStyle = .short
+        return f
+    }()
+
+    private static let monthYearFormatter: DateFormatter = {
+        let f = DateFormatter(); f.dateFormat = "MMMM yyyy"; return f
+    }()
+
+    static let ddMmmFormatter: DateFormatter = {
+        let f = DateFormatter(); f.dateFormat = "dd MMM"; return f
+    }()
+
+    static let mmmDFormatter: DateFormatter = {
+        let f = DateFormatter(); f.dateFormat = "MMM d"; return f
+    }()
+
     private func dateSeparatorText(for date: Date) -> String {
         let cal = Calendar.current
         if cal.isDateInToday(date) {
@@ -2598,10 +2627,7 @@ struct ChatView: View {
         } else if cal.isDateInYesterday(date) {
             return "Yesterday"
         } else {
-            let formatter = DateFormatter()
-            // Show weekday + full date, e.g. "Monday, March 10"
-            formatter.dateFormat = "EEEE, MMMM d"
-            return formatter.string(from: date)
+            return Self.dateSeparatorFormatter.string(from: date)
         }
     }
 
@@ -2726,17 +2752,19 @@ struct ChatView: View {
     @ViewBuilder
     private func conversationInfoPanel(_ conv: Conversation) -> some View {
         let summary = conv.summary ?? appState.generateSummary(for: conv)
-        let userCount = conv.messages.filter { $0.role == .user }.count
-        let assistantCount = conv.messages.filter { $0.role == .assistant }.count
+        let (userCount, assistantCount) = conv.messages.reduce((0, 0)) { counts, msg in
+            (counts.0 + (msg.role == .user ? 1 : 0), counts.1 + (msg.role == .assistant ? 1 : 0))
+        }
 
         // Collect unique tools
         let toolNames: [String] = {
+            var seen = Set<String>()
             var names: [String] = []
             for msg in conv.messages {
                 for activity in msg.activities where activity.type == .toolCall {
-                    if !names.contains(activity.label) { names.append(activity.label) }
+                    if seen.insert(activity.label).inserted { names.append(activity.label) }
                 }
-                if let tool = msg.toolName, !names.contains(tool) { names.append(tool) }
+                if let tool = msg.toolName, seen.insert(tool).inserted { names.append(tool) }
             }
             return names
         }()
@@ -2784,19 +2812,8 @@ struct ChatView: View {
 
             // Details
             VStack(alignment: .leading, spacing: 6) {
-                infoRow(icon: "calendar", label: "Created", value: {
-                    let f = DateFormatter()
-                    f.dateStyle = .medium
-                    f.timeStyle = .short
-                    return f.string(from: conv.createdAt)
-                }())
-
-                infoRow(icon: "clock", label: "Last updated", value: {
-                    let f = DateFormatter()
-                    f.dateStyle = .medium
-                    f.timeStyle = .short
-                    return f.string(from: conv.lastUpdated)
-                }())
+                infoRow(icon: "calendar", label: "Created", value: AppState.mediumDateTimeFormatter.string(from: conv.createdAt))
+                infoRow(icon: "clock", label: "Last updated", value: AppState.mediumDateTimeFormatter.string(from: conv.lastUpdated))
 
                 if conv.totalInputTokens > 0 || conv.totalOutputTokens > 0 {
                     infoRow(icon: "number", label: "Tokens", value: "\(abbreviatedTokens(conv.totalInputTokens)) in / \(abbreviatedTokens(conv.totalOutputTokens)) out")
@@ -2867,12 +2884,7 @@ struct ChatView: View {
                                     .foregroundColor(AppTheme.textPrimary)
                                     .lineLimit(1)
                                 HStack(spacing: 6) {
-                                    Text({
-                                        let f = DateFormatter()
-                                        f.dateStyle = .short
-                                        f.timeStyle = .short
-                                        return f.string(from: snapshot.timestamp)
-                                    }())
+                                    Text(Self.shortDateTimeFormatter.string(from: snapshot.timestamp))
                                         .font(.system(size: 10))
                                         .foregroundColor(AppTheme.textMuted)
                                     Text("\(snapshot.messageCount) msgs")
@@ -2965,11 +2977,11 @@ struct ChatView: View {
     /// All bookmarked messages, optionally filtered by the bookmark search text
     private var filteredBookmarks: [(conversation: Conversation, message: ChatMessage)] {
         let all = appState.allBookmarkedMessages()
-        let query = bookmarkSearchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let query = bookmarkSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return all }
         return all.filter { pair in
-            pair.1.content.lowercased().contains(query) ||
-            pair.0.title.lowercased().contains(query)
+            pair.1.content.localizedCaseInsensitiveContains(query) ||
+            pair.0.title.localizedCaseInsensitiveContains(query)
         }
     }
 
@@ -3016,7 +3028,7 @@ struct ChatView: View {
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundColor(AppTheme.textPrimary)
 
-                let unreadNotifCount = notifications.filter { !readNotificationIds.contains($0.id) }.count
+                let unreadNotifCount = notifications.count { !readNotificationIds.contains($0.id) }
                 if unreadNotifCount > 0 {
                     Text("\(unreadNotifCount)")
                         .font(.system(size: 10, weight: .bold, design: .rounded))
@@ -3389,9 +3401,7 @@ struct ChatView: View {
     }
 
     private func bookmarkTimeString(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "MMM d, HH:mm"
-        return formatter.string(from: date)
+        Self.bookmarkFormatter.string(from: date)
     }
 
     // MARK: - Search Filter Chips
@@ -3573,12 +3583,12 @@ struct ChatView: View {
                         }) {
                             Label("Delete Unpinned", systemImage: "pin.slash")
                         }
-                        .disabled(appState.conversations.filter({ !$0.isPinned }).isEmpty)
+                        .disabled(!appState.conversations.contains(where: { !$0.isPinned }))
                         Divider()
                         Button(action: { appState.autoArchiveOldConversations(olderThan: 7) }) {
                             Label("Archive Old (>7 days)", systemImage: "archivebox")
                         }
-                        .disabled(appState.conversations.filter({ !$0.isArchived }).isEmpty)
+                        .disabled(!appState.conversations.contains(where: { !$0.isArchived }))
                         Divider()
                         Button(action: { exportAllConversations() }) {
                             Label("Export All", systemImage: "square.and.arrow.up")
@@ -4075,15 +4085,11 @@ struct ChatView: View {
                                     // Group archived conversations by month
                                     let filtered = archivedFilteredConversations
                                     let grouped = Dictionary(grouping: filtered) { conv -> String in
-                                        let formatter = DateFormatter()
-                                        formatter.dateFormat = "MMMM yyyy"
-                                        return formatter.string(from: conv.lastUpdated)
+                                        Self.monthYearFormatter.string(from: conv.lastUpdated)
                                     }
                                     let sortedKeys = grouped.keys.sorted { k1, k2 in
-                                        let formatter = DateFormatter()
-                                        formatter.dateFormat = "MMMM yyyy"
-                                        let d1 = formatter.date(from: k1) ?? Date.distantPast
-                                        let d2 = formatter.date(from: k2) ?? Date.distantPast
+                                        let d1 = Self.monthYearFormatter.date(from: k1) ?? Date.distantPast
+                                        let d2 = Self.monthYearFormatter.date(from: k2) ?? Date.distantPast
                                         return d1 > d2
                                     }
                                     ForEach(sortedKeys, id: \.self) { monthKey in
@@ -4925,15 +4931,11 @@ struct ConversationRow: View {
     private func timeLabel(_ date: Date) -> String {
         let cal = Calendar.current
         if cal.isDateInToday(date) {
-            let f = DateFormatter()
-            f.dateFormat = "HH:mm"
-            return f.string(from: date)
+            return AppState.timeOnlyFormatter.string(from: date)
         } else if cal.isDateInYesterday(date) {
             return "Yesterday"
         } else {
-            let f = DateFormatter()
-            f.dateFormat = "dd MMM"
-            return f.string(from: date)
+            return ChatView.ddMmmFormatter.string(from: date)
         }
     }
 }
@@ -5477,8 +5479,7 @@ struct ConversationStatsSheet: View {
     private var messagesPerDay: [(day: String, userCount: Int, assistantCount: Int)] {
         guard !messages.isEmpty else { return [] }
         let calendar = Calendar.current
-        let formatter = DateFormatter()
-        formatter.dateFormat = "MMM d"
+        let formatter = ChatView.mmmDFormatter
 
         var dayBuckets: [(date: Date, label: String, userCount: Int, assistantCount: Int)] = []
         var bucketMap: [String: Int] = [:]

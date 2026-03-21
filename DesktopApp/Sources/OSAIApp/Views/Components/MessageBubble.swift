@@ -2,6 +2,43 @@ import SwiftUI
 import AppKit
 import Quartz
 
+// MARK: - Cached Regex Patterns (compiled once, reused globally)
+
+private let _fileURLRegex = try! NSRegularExpression(pattern: #"file:///[^\s\"\]\)>]+"#)
+private let _absPathRegex = try! NSRegularExpression(pattern: #"(?<!\w)/(?:Users|tmp|var|private)[^\s\"\]\)>]*\.(?:png|jpg|jpeg|gif|webp|bmp|tiff|heic)"#)
+private let _mdImageRegex = try! NSRegularExpression(pattern: #"!\[([^\]]*)\]\(([^)]+)\)"#)
+private let _rawURLRegex = try! NSRegularExpression(pattern: #"https?://[^\s\"\]\)>]+\.(?:png|jpg|jpeg|gif|webp|svg|bmp|tiff)"#, options: [.caseInsensitive])
+private let _inlineMathRegex = try! NSRegularExpression(pattern: #"(?<!\$)\$(?!\$)(.+?)(?<!\$)\$(?!\$)"#)
+
+// LaTeX rendering
+private let _fracRegex = try! NSRegularExpression(pattern: #"\\frac\{([^}]*)\}\{([^}]*)\}"#)
+private let _supBraceRegex = try! NSRegularExpression(pattern: #"\^\{([^}]*)\}"#)
+private let _supSingleRegex = try! NSRegularExpression(pattern: #"\^([^{\s])"#)
+private let _subBraceRegex = try! NSRegularExpression(pattern: #"_\{([^}]*)\}"#)
+private let _subSingleRegex = try! NSRegularExpression(pattern: #"_([^{\s])"#)
+
+// Footnotes & paths
+private let _footnoteRefRegex = try! NSRegularExpression(pattern: #"\[\^([^\]]+)\](?!:)"#)
+private let _pathDetectionRegex = try! NSRegularExpression(pattern: "(?:/(?:Users|tmp|var|Applications|System|Library|opt|usr|Volumes)[^\\s,;\"'\\]\\)]*|~/[^\\s,;\"'\\]\\)]+)")
+private let _inlineCodeTokenRegex = try! NSRegularExpression(pattern: #"\"[^\"]*\"|'[^']*'|\b\d+(?:\.\d+)?\b|\b[A-Za-z_]\w*\b|[^\s\w]|\s+"#)
+private let _arrowLabelRegex = try! NSRegularExpression(pattern: #"^\|([^|]*)\|"#)
+
+// Footnote parsing
+private let _footnoteDefRegex = try! NSRegularExpression(pattern: #"^\[\^([^\]]+)\]:\s*(.+)$"#, options: [.anchorsMatchLines])
+private let _footnoteDefStripRegex = try! NSRegularExpression(pattern: #"^\[\^[^\]]+\]:\s*.+$"#, options: [.anchorsMatchLines])
+
+// URL/code extraction helpers
+private let _codeBlockExtrRegex = try! NSRegularExpression(pattern: #"```[\w]*\n?([\s\S]*?)```"#, options: [.dotMatchesLineSeparators])
+private let _inlineCodeExtrRegex = try! NSRegularExpression(pattern: #"`([^`]+)`"#)
+private let _urlExtrRegex = try! NSRegularExpression(pattern: #"https?://[^\s\"\]\)>',]+"#)
+
+// CharacterSets
+private let _pathTrimCharSet = CharacterSet(charactersIn: ".,;:")
+private let _sentenceEndCharSet2 = CharacterSet(charactersIn: ".!?,;:-")
+private let _boldInlineCodeRegex = try! NSRegularExpression(pattern: #"\*\*(.+?)\*\*|`([^`]+)`"#)
+private let _extractPathsRegex = try! NSRegularExpression(pattern: "(?:/(?:Users|tmp|var|Applications|System|Library|opt|usr|Volumes)[^\\s,;\"'\\]\\)]*|~[^\\s,;\"'\\]\\)]+)")
+private let _sentenceEndCharSet = CharacterSet(charactersIn: ".!?\n")
+
 // MARK: - Zen Mode Environment Key
 
 private struct ZenModeKey: EnvironmentKey {
@@ -24,13 +61,9 @@ private let imageExtensions: Set<String> = ["png", "jpg", "jpeg", "gif", "webp",
 private func extractImagePaths(from text: String) -> [String] {
     var paths: [String] = []
     // Match file:///... URLs ending with image extension
-    let fileURLPattern = #"file:///[^\s\"\]\)>]+"#
-    // Match absolute paths like /Users/.../screenshot.png
-    let absPathPattern = #"(?<!\w)/(?:Users|tmp|var|private)[^\s\"\]\)>]*\.(?:png|jpg|jpeg|gif|webp|bmp|tiff|heic)"#
-    for pattern in [fileURLPattern, absPathPattern] {
-        if let regex = try? NSRegularExpression(pattern: pattern, options: []) {
-            let range = NSRange(text.startIndex..., in: text)
-            for match in regex.matches(in: text, range: range) {
+    for regex in [_fileURLRegex, _absPathRegex] {
+        let range = NSRange(text.startIndex..., in: text)
+        for match in regex.matches(in: text, range: range) {
                 if let r = Range(match.range, in: text) {
                     var path = String(text[r])
                     if path.hasPrefix("file://") {
@@ -47,7 +80,6 @@ private func extractImagePaths(from text: String) -> [String] {
                 }
             }
         }
-    }
     return paths
 }
 
@@ -75,10 +107,9 @@ private func extractAllImageRefs(from text: String) -> [InlineImageRef] {
     var seenIds = Set<String>()
 
     // 1. Markdown image syntax: ![alt](url)
-    let mdPattern = #"!\[([^\]]*)\]\(([^)]+)\)"#
-    if let mdRegex = try? NSRegularExpression(pattern: mdPattern, options: []) {
+    do {
         let range = NSRange(text.startIndex..., in: text)
-        for match in mdRegex.matches(in: text, range: range) {
+        for match in _mdImageRegex.matches(in: text, range: range) {
             if let altRange = Range(match.range(at: 1), in: text),
                let urlRange = Range(match.range(at: 2), in: text) {
                 let alt = String(text[altRange])
@@ -109,10 +140,9 @@ private func extractAllImageRefs(from text: String) -> [InlineImageRef] {
     }
 
     // 2. Raw image URLs (not already captured by markdown syntax)
-    let rawURLPattern = #"(?<!\()https?://[^\s\"\]\)>',]+\.(?:png|jpg|jpeg|gif|webp)(?:\?[^\s\"\]\)>',]*)?"#
-    if let rawRegex = try? NSRegularExpression(pattern: rawURLPattern, options: [.caseInsensitive]) {
+    do {
         let range = NSRange(text.startIndex..., in: text)
-        for match in rawRegex.matches(in: text, range: range) {
+        for match in _rawURLRegex.matches(in: text, range: range) {
             if let r = Range(match.range, in: text) {
                 var raw = String(text[r])
                 while raw.last == "." || raw.last == "," || raw.last == ";" || raw.last == ":" {
@@ -147,36 +177,12 @@ private func extractAllImageRefs(from text: String) -> [InlineImageRef] {
 /// and URLs that point to image files (those are handled by inline image rendering).
 private func extractPreviewURLs(from text: String) -> [URL] {
     // Strip code blocks first so we don't detect URLs inside them
-    let codeBlockPattern = #"```[\s\S]*?```"#
     var strippedText = text
-    if let codeRegex = try? NSRegularExpression(pattern: codeBlockPattern, options: [.dotMatchesLineSeparators]) {
-        strippedText = codeRegex.stringByReplacingMatches(
-            in: strippedText,
-            range: NSRange(strippedText.startIndex..., in: strippedText),
-            withTemplate: ""
-        )
-    }
-    // Also strip inline code
-    let inlineCodePattern = #"`[^`]+`"#
-    if let inlineRegex = try? NSRegularExpression(pattern: inlineCodePattern, options: []) {
-        strippedText = inlineRegex.stringByReplacingMatches(
-            in: strippedText,
-            range: NSRange(strippedText.startIndex..., in: strippedText),
-            withTemplate: ""
-        )
-    }
-    // Strip markdown image syntax so image URLs don't appear as link previews
-    let mdImagePattern = #"!\[[^\]]*\]\([^)]+\)"#
-    if let mdImageRegex = try? NSRegularExpression(pattern: mdImagePattern, options: []) {
-        strippedText = mdImageRegex.stringByReplacingMatches(
-            in: strippedText,
-            range: NSRange(strippedText.startIndex..., in: strippedText),
-            withTemplate: ""
-        )
-    }
+    strippedText = _codeBlockExtrRegex.stringByReplacingMatches(in: strippedText, range: NSRange(strippedText.startIndex..., in: strippedText), withTemplate: "")
+    strippedText = _inlineCodeExtrRegex.stringByReplacingMatches(in: strippedText, range: NSRange(strippedText.startIndex..., in: strippedText), withTemplate: "")
+    strippedText = _mdImageRegex.stringByReplacingMatches(in: strippedText, range: NSRange(strippedText.startIndex..., in: strippedText), withTemplate: "")
 
-    let urlPattern = #"https?://[^\s\"\]\)>',]+"#
-    guard let regex = try? NSRegularExpression(pattern: urlPattern, options: []) else { return [] }
+    let regex = _urlExtrRegex
     let range = NSRange(strippedText.startIndex..., in: strippedText)
 
     var seen = Set<String>()
@@ -201,10 +207,11 @@ private func extractPreviewURLs(from text: String) -> [URL] {
 
 // MARK: - Code Block Extraction
 
+private let _codeBlockRegex = try! NSRegularExpression(pattern: #"```(?:\w*)\n?([\s\S]*?)```"#, options: [.dotMatchesLineSeparators])
+
 /// Extracts fenced code blocks from markdown text, returning the code content of each block.
 private func extractCodeBlocks(from text: String) -> [String] {
-    let pattern = #"```(?:\w*)\n?([\s\S]*?)```"#
-    guard let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]) else { return [] }
+    let regex = _codeBlockRegex
     let nsText = text as NSString
     let range = NSRange(location: 0, length: nsText.length)
     return regex.matches(in: text, range: range).compactMap { match in
@@ -216,8 +223,7 @@ private func extractCodeBlocks(from text: String) -> [String] {
 
 /// Extracts the first http/https URL found in message text (including inside code blocks).
 private func extractFirstURL(from text: String) -> String? {
-    let pattern = #"https?://[^\s\"\]\)>',]+"#
-    guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else { return nil }
+    let regex = _urlExtrRegex
     let range = NSRange(text.startIndex..., in: text)
     guard let match = regex.firstMatch(in: text, range: range),
           let r = Range(match.range, in: text) else { return nil }
@@ -546,10 +552,15 @@ struct InlineImageView: View {
             resolvedPath = (resolvedPath as NSString).expandingTildeInPath
         }
         let url = URL(fileURLWithPath: resolvedPath)
-        if let img = NSImage(contentsOf: url) {
-            nsImage = img
-        } else {
-            loadFailed = true
+        DispatchQueue.global(qos: .userInitiated).async {
+            let img = NSImage(contentsOf: url)
+            DispatchQueue.main.async {
+                if let img = img {
+                    self.nsImage = img
+                } else {
+                    self.loadFailed = true
+                }
+            }
         }
     }
 
@@ -1173,12 +1184,7 @@ struct MessageBubble: View {
             .foregroundColor: NSColor.labelColor
         ]
 
-        let pattern = #"\*\*(.+?)\*\*|`([^`]+)`"#
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else {
-            result.append(NSAttributedString(string: content, attributes: bodyAttrs))
-            return result
-        }
-
+        let regex = _boldInlineCodeRegex
         let nsContent = content as NSString
         var lastEnd = 0
         for match in regex.matches(in: content, range: NSRange(location: 0, length: nsContent.length)) {
@@ -1209,13 +1215,21 @@ struct MessageBubble: View {
         return result
     }
 
+    private static let mdStripRegexes: [(NSRegularExpression, String)] = {
+        [
+            (try! NSRegularExpression(pattern: #"\*\*(.+?)\*\*"#), "$1"),
+            (try! NSRegularExpression(pattern: #"\*(.+?)\*"#), "$1"),
+            (try! NSRegularExpression(pattern: #"`([^`]+)`"#), "$1"),
+            (try! NSRegularExpression(pattern: #"```[\w]*\n?"#), ""),
+            (try! NSRegularExpression(pattern: #"^#{1,6}\s+"#, options: .anchorsMatchLines), ""),
+        ]
+    }()
+
     private func stripMarkdownFormatting(_ text: String) -> String {
         var result = text
-        result = result.replacingOccurrences(of: #"\*\*(.+?)\*\*"#, with: "$1", options: .regularExpression)
-        result = result.replacingOccurrences(of: #"\*(.+?)\*"#, with: "$1", options: .regularExpression)
-        result = result.replacingOccurrences(of: #"`([^`]+)`"#, with: "$1", options: .regularExpression)
-        result = result.replacingOccurrences(of: #"```[\w]*\n?"#, with: "", options: .regularExpression)
-        result = result.replacingOccurrences(of: #"^#{1,6}\s+"#, with: "", options: .regularExpression)
+        for (regex, template) in Self.mdStripRegexes {
+            result = regex.stringByReplacingMatches(in: result, range: NSRange(result.startIndex..., in: result), withTemplate: template)
+        }
         return result
     }
 
@@ -1730,11 +1744,15 @@ struct MessageBubble: View {
         .animation(.easeInOut(duration: 0.2), value: diffTargetRecordId)
     }
 
+    private static let shortDateTimeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .short
+        f.timeStyle = .short
+        return f
+    }()
+
     private func editHistoryTimeString(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .short
-        formatter.timeStyle = .short
-        return formatter.string(from: date)
+        Self.shortDateTimeFormatter.string(from: date)
     }
 
     private var assistantBubble: some View {
@@ -2284,8 +2302,14 @@ struct MessageBubble: View {
         }
     }
 
+    private static let timeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm"
+        return f
+    }()
+
     private func timeString(_ date: Date) -> String {
-        let f = DateFormatter(); f.dateFormat = "HH:mm"; return f.string(from: date)
+        Self.timeFormatter.string(from: date)
     }
 
     /// Returns a human-readable relative timestamp string.
@@ -2352,14 +2376,21 @@ struct ActivityStrip: View {
     var onCancel: (() -> Void)? = nil
     @State private var expandedOutputId: String?
 
-    private var completedCount: Int { activities.filter(\.isComplete).count }
-    private var failedCount: Int { activities.filter { $0.success == false }.count }
-    private var toolActivities: [ActivityItem] { activities.filter { $0.type == .toolCall } }
+    private var activityStats: (completed: Int, failed: Int, tools: [ActivityItem]) {
+        var completed = 0, failed = 0
+        var tools: [ActivityItem] = []
+        for a in activities {
+            if a.isComplete { completed += 1 }
+            if a.success == false { failed += 1 }
+            if a.type == .toolCall { tools.append(a) }
+        }
+        return (completed, failed, tools)
+    }
 
     /// Deduplicate consecutive same-name tools into counts
     private var groupedTools: [(name: String, count: Int, activities: [ActivityItem])] {
         var result: [(name: String, count: Int, activities: [ActivityItem])] = []
-        for activity in toolActivities {
+        for activity in activityStats.tools {
             if let last = result.last, last.name == activity.label {
                 result[result.count - 1].count += 1
                 result[result.count - 1].activities.append(activity)
@@ -2371,19 +2402,12 @@ struct ActivityStrip: View {
     }
 
     private var totalDurationMs: Int {
-        toolActivities.compactMap(\.durationMs).reduce(0, +)
-    }
-
-    @State private var showAllTasks = false
-
-    /// Auto-expand when streaming and there are active tasks
-    private var shouldAutoExpand: Bool {
-        isStreaming && toolActivities.count > 1
+        activityStats.tools.compactMap(\.durationMs).reduce(0, +)
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            // Special events row (doom loop, compaction, delegations)
+        VStack(alignment: .leading, spacing: 4) {
+            // Special events (doom loop, compaction, delegations)
             let specialActivities = activities.filter { $0.type == .doomLoop || $0.type == .compaction || $0.type == .agentDelegate }
             if !specialActivities.isEmpty {
                 FlowLayout(spacing: 5) {
@@ -2398,139 +2422,39 @@ struct ActivityStrip: View {
                 }
             }
 
-            // Tool pills row
-            HStack(spacing: 0) {
-                FlowLayout(spacing: 5) {
-                    ForEach(Array(groupedTools.enumerated()), id: \.offset) { _, group in
-                        toolPill(name: group.name, count: group.count, activities: group.activities)
-                    }
-                    if let current = activities.last(where: { !$0.isComplete && $0.type == .toolCall }),
-                       !groupedTools.contains(where: { $0.activities.contains(where: { $0.id == current.id }) }) {
-                        activePill(current)
-                    }
+            // Compact pills only — no auto-expand of individual rows
+            FlowLayout(spacing: 5) {
+                ForEach(Array(groupedTools.enumerated()), id: \.offset) { _, group in
+                    toolPill(name: group.name, count: group.count, activities: group.activities)
                 }
-
-                Spacer(minLength: 4)
-
-                // Expand/collapse toggle
-                if toolActivities.count > 1 {
-                    Button(action: { withAnimation(.easeInOut(duration: 0.2)) { showAllTasks.toggle() } }) {
-                        Image(systemName: (showAllTasks || shouldAutoExpand) ? "chevron.up" : "chevron.down")
-                            .font(.system(size: 8, weight: .medium))
-                            .foregroundColor(AppTheme.textMuted)
-                            .frame(width: 20, height: 20)
-                            .background(AppTheme.bgCard.opacity(0.5))
-                            .clipShape(Circle())
+                if let current = activities.last(where: { !$0.isComplete && $0.type == .toolCall }),
+                   !groupedTools.contains(where: { $0.activities.contains(where: { $0.id == current.id }) }) {
+                    activePill(current)
+                }
+                // Stop button during streaming
+                if isStreaming, onCancel != nil {
+                    Button(action: { onCancel?() }) {
+                        HStack(spacing: 3) {
+                            Image(systemName: "stop.fill").font(.system(size: 7))
+                            Text("Stop").font(.system(size: 9, weight: .medium))
+                        }
+                        .foregroundColor(AppTheme.error)
+                        .padding(.horizontal, 8).padding(.vertical, 4)
+                        .background(AppTheme.error.opacity(0.1))
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
                     }
                     .buttonStyle(.plain)
-                    .help(showAllTasks ? "Hide tasks" : "Show all tasks")
                 }
             }
+            .padding(.horizontal, 2)
 
-            // Expanded task list — auto-expand while streaming, or manual toggle
-            if showAllTasks || shouldAutoExpand {
-                VStack(spacing: 3) {
-                    ForEach(toolActivities) { activity in
-                        taskRow(activity)
-                    }
-                }
-                .padding(.top, 2)
-                .transition(.opacity.combined(with: .move(edge: .top)))
-            }
-
-            // Expanded output panel for selected task
+            // Output panel — shown when user taps a pill
             if let expandedId = expandedOutputId,
                let activity = activities.first(where: { $0.id == expandedId }) {
                 expandedOutputView(activity)
                     .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .top)))
             }
         }
-    }
-
-    // MARK: - Individual Task Row (detailed, with cancel)
-
-    @ViewBuilder
-    private func taskRow(_ activity: ActivityItem) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 6) {
-                // Status icon
-                if activity.isComplete {
-                    Image(systemName: activity.success == false ? "xmark.circle.fill" : "checkmark.circle.fill")
-                        .font(.system(size: 11))
-                        .foregroundColor(activity.success == false ? AppTheme.error : AppTheme.success)
-                } else {
-                    ProgressView().controlSize(.mini).scaleEffect(0.6)
-                }
-
-                // Tool icon + name
-                Image(systemName: toolCategoryIcon(activity.label))
-                    .font(.system(size: 10))
-                    .foregroundColor(AppTheme.textMuted)
-                Text(toolDisplayName(activity.label))
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundColor(AppTheme.textSecondary)
-
-                // Detail (the command/input — shown prominently)
-                if !activity.detail.isEmpty {
-                    Text(activity.detail)
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundColor(AppTheme.textPrimary.opacity(0.7))
-                        .lineLimit(1)
-                        .frame(maxWidth: 350, alignment: .leading)
-                }
-
-                Spacer()
-
-                // Duration
-                if let ms = activity.durationMs {
-                    Text(formatMs(ms))
-                        .font(.system(size: 9, design: .monospaced))
-                        .foregroundColor(AppTheme.textMuted)
-                }
-
-                // Cancel button for active tasks
-                if !activity.isComplete {
-                    Button(action: { onCancel?() }) {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 11))
-                            .foregroundColor(AppTheme.error.opacity(0.6))
-                    }
-                    .buttonStyle(.plain)
-                }
-
-                // Expand output toggle
-                if activity.output != nil || !activity.detail.isEmpty {
-                    Button(action: {
-                        withAnimation(.easeInOut(duration: 0.15)) {
-                            expandedOutputId = expandedOutputId == activity.id ? nil : activity.id
-                        }
-                    }) {
-                        Image(systemName: expandedOutputId == activity.id ? "chevron.down" : "chevron.right")
-                            .font(.system(size: 8))
-                            .foregroundColor(AppTheme.textMuted)
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-
-            // Inline output preview for completed tasks (first 120 chars)
-            if activity.isComplete, let output = activity.output, !output.isEmpty,
-               output != "(no output)" && output != "OK (no output)",
-               expandedOutputId != activity.id {
-                Text(String(output.prefix(120)).replacingOccurrences(of: "\n", with: " "))
-                    .font(.system(size: 9, design: .monospaced))
-                    .foregroundColor(AppTheme.textMuted.opacity(0.7))
-                    .lineLimit(1)
-                    .padding(.leading, 27)
-            }
-        }
-        .padding(.horizontal, 8).padding(.vertical, 4)
-        .background(
-            expandedOutputId == activity.id
-                ? AppTheme.accent.opacity(0.05)
-                : AppTheme.bgCard.opacity(0.3)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 
     // MARK: - Tool Pill Card
@@ -2872,20 +2796,19 @@ struct ClickableOutputView: View {
 
     private func extractPaths(from line: String) -> [String] {
         // Match absolute paths: /Users/..., /tmp/..., ~/...
-        let pattern = "(?:/(?:Users|tmp|var|Applications|System|Library|opt|usr|Volumes)[^\\s,;\"'\\]\\)]*|~[^\\s,;\"'\\]\\)]+)"
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+        let regex = _extractPathsRegex
         let range = NSRange(line.startIndex..., in: line)
         return regex.matches(in: line, range: range).compactMap {
             Range($0.range, in: line).map { String(line[$0]) }
         }.filter { path in
             // Only include paths that look like real files (have extension or end without trailing punctuation)
-            let clean = path.trimmingCharacters(in: CharacterSet(charactersIn: ".,;:"))
+            let clean = path.trimmingCharacters(in: _pathTrimCharSet)
             return FileManager.default.fileExists(atPath: clean) || clean.contains(".")
         }
     }
 
     private func openPath(_ path: String) {
-        let clean = path.trimmingCharacters(in: CharacterSet(charactersIn: ".,;:"))
+        let clean = path.trimmingCharacters(in: _pathTrimCharSet)
         let ext = (clean as NSString).pathExtension.lowercased()
         let imageExts = ["png", "jpg", "jpeg", "gif", "webp", "tiff", "bmp", "heic"]
         if imageExts.contains(ext) {
@@ -2996,7 +2919,7 @@ struct ImagePreviewView: View {
     private func loadImage() {
         isLoading = true
         DispatchQueue.global(qos: .userInitiated).async {
-            let clean = path.trimmingCharacters(in: CharacterSet(charactersIn: ".,;:"))
+            let clean = path.trimmingCharacters(in: _pathTrimCharSet)
             let image = NSImage(contentsOfFile: clean)
             DispatchQueue.main.async {
                 loadedImage = image
@@ -3006,7 +2929,7 @@ struct ImagePreviewView: View {
     }
 
     private func openInPreview() {
-        let clean = path.trimmingCharacters(in: CharacterSet(charactersIn: ".,;:"))
+        let clean = path.trimmingCharacters(in: _pathTrimCharSet)
         NSWorkspace.shared.open(URL(fileURLWithPath: clean))
     }
 }
@@ -3016,16 +2939,14 @@ struct ImagePreviewView: View {
 struct RawMarkdownView: View {
     let text: String
 
-    private var lines: [String] {
-        text.components(separatedBy: "\n")
-    }
-
-    private var lineNumberWidth: CGFloat {
-        let digits = String(lines.count).count
+    private static func lineNumberWidth(count: Int) -> CGFloat {
+        let digits = String(count).count
         return CGFloat(max(digits, 2)) * 8 + 12
     }
 
     var body: some View {
+        let lines = text.components(separatedBy: "\n")
+        let lnWidth = Self.lineNumberWidth(count: lines.count)
         ZStack(alignment: .topTrailing) {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(alignment: .top, spacing: 0) {
@@ -3038,7 +2959,7 @@ struct RawMarkdownView: View {
                                 .frame(height: 18)
                         }
                     }
-                    .frame(width: lineNumberWidth)
+                    .frame(width: lnWidth)
                     .padding(.trailing, 8)
 
                     // Separator
@@ -3098,8 +3019,7 @@ struct FootnoteDefinition: Identifiable {
 /// Parses footnote definitions from the full message text.
 /// Matches lines like: [^1]: Some footnote text
 private func parseFootnoteDefinitions(from text: String) -> [FootnoteDefinition] {
-    let pattern = #"^\[\^([^\]]+)\]:\s*(.+)$"#
-    guard let regex = try? NSRegularExpression(pattern: pattern, options: [.anchorsMatchLines]) else { return [] }
+    let regex = _footnoteDefRegex
     let nsText = text as NSString
     let range = NSRange(location: 0, length: nsText.length)
     var defs: [FootnoteDefinition] = []
@@ -3118,8 +3038,7 @@ private func parseFootnoteDefinitions(from text: String) -> [FootnoteDefinition]
 
 /// Removes footnote definition lines from text so they don't render inline.
 private func stripFootnoteDefinitions(from text: String) -> String {
-    let pattern = #"^\[\^[^\]]+\]:\s*.+$"#
-    guard let regex = try? NSRegularExpression(pattern: pattern, options: [.anchorsMatchLines]) else { return text }
+    let regex = _footnoteDefStripRegex
     let nsText = text as NSString
     let range = NSRange(location: 0, length: nsText.length)
     return regex.stringByReplacingMatches(in: text, range: range, withTemplate: "")
@@ -3128,8 +3047,7 @@ private func stripFootnoteDefinitions(from text: String) -> String {
 /// Collects footnote reference keys [^key] in the order they appear in text.
 /// Returns an ordered mapping from key -> display index.
 private func footnoteReferenceOrder(from text: String) -> [String: Int] {
-    let pattern = #"\[\^([^\]]+)\](?!:)"# // Match [^key] but not [^key]: (definitions)
-    guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else { return [:] }
+    let regex = _footnoteRefRegex
     let nsText = text as NSString
     let range = NSRange(location: 0, length: nsText.length)
     var order: [String: Int] = [:]
@@ -3468,7 +3386,9 @@ struct ResponseView: View {
             }
         }
         .onAppear {
-            performParse()  // Initial parse
+            if cachedTextHash != text.hashValue {
+                performParse()  // Initial parse only if not already cached
+            }
             startCursorTimer()
             // Auto-collapse sections after the first 2 on first appearance
             if !didAutoCollapse && headingCount >= 3 {
@@ -3993,6 +3913,16 @@ private struct SyntaxHighlighter {
         "static", "readonly", "public", "private", "protected"
     ]
 
+    // Cached regex patterns for syntax highlighting (compiled once)
+    private static let blockCommentRegex = try! NSRegularExpression(pattern: #"/\*[\s\S]*?\*/"#, options: [.dotMatchesLineSeparators])
+    private static let slashCommentRegex = try! NSRegularExpression(pattern: #"//.*$"#, options: [.anchorsMatchLines])
+    private static let hashCommentRegex = try! NSRegularExpression(pattern: #"#.*$"#, options: [.anchorsMatchLines])
+    private static let doubleQuoteStringRegex = try! NSRegularExpression(pattern: #""(?:[^"\\]|\\.)*""#)
+    private static let singleQuoteStringRegex = try! NSRegularExpression(pattern: #"'(?:[^'\\]|\\.)*'"#)
+    private static let numberRegex = try! NSRegularExpression(pattern: #"\b(?:0x[0-9a-fA-F]+|0b[01]+|0o[0-7]+|\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\b"#)
+    private static let typeRegex = try! NSRegularExpression(pattern: #"\b[A-Z][a-zA-Z0-9]+\b"#)
+    private static let functionCallRegex = try! NSRegularExpression(pattern: #"\b([a-zA-Z_]\w*)\s*\("#)
+
     private static let genericKeywords: Set<String> = [
         "func", "function", "def", "let", "var", "const", "if", "else", "elif",
         "for", "while", "return", "import", "from", "class", "struct", "enum",
@@ -4028,8 +3958,24 @@ private struct SyntaxHighlighter {
         var protectedRanges: [NSRange] = []
 
         // Block comments /* ... */
-        if let regex = try? NSRegularExpression(pattern: #"/\*[\s\S]*?\*/"#, options: [.dotMatchesLineSeparators]) {
+        for match in Self.blockCommentRegex.matches(in: code, range: fullRange) {
+            if let swiftRange = Range(match.range, in: code) {
+                applyColor(to: &result, in: code, swiftRange: swiftRange, color: theme.comment)
+                protectedRanges.append(match.range)
+            }
+        }
+
+        // Single-line comments
+        let commentRegexes: [NSRegularExpression]
+        switch language.lowercased() {
+        case "python", "py", "bash", "sh", "zsh", "shell", "ruby", "rb", "yaml", "yml":
+            commentRegexes = [Self.slashCommentRegex, Self.hashCommentRegex]
+        default:
+            commentRegexes = [Self.slashCommentRegex]
+        }
+        for regex in commentRegexes {
             for match in regex.matches(in: code, range: fullRange) {
+                if isProtected(match.range, by: protectedRanges) { continue }
                 if let swiftRange = Range(match.range, in: code) {
                     applyColor(to: &result, in: code, swiftRange: swiftRange, color: theme.comment)
                     protectedRanges.append(match.range)
@@ -4037,41 +3983,19 @@ private struct SyntaxHighlighter {
             }
         }
 
-        // Single-line comments
-        let commentPatterns: [String]
-        switch language.lowercased() {
-        case "python", "py", "bash", "sh", "zsh", "shell", "ruby", "rb", "yaml", "yml":
-            commentPatterns = [#"//.*$"#, #"#.*$"#]
-        default:
-            commentPatterns = [#"//.*$"#]
-        }
-        for pattern in commentPatterns {
-            if let regex = try? NSRegularExpression(pattern: pattern, options: [.anchorsMatchLines]) {
-                for match in regex.matches(in: code, range: fullRange) {
-                    if isProtected(match.range, by: protectedRanges) { continue }
-                    if let swiftRange = Range(match.range, in: code) {
-                        applyColor(to: &result, in: code, swiftRange: swiftRange, color: theme.comment)
-                        protectedRanges.append(match.range)
-                    }
-                }
-            }
-        }
-
         // Strings
-        for strPattern in [#""(?:[^"\\]|\\.)*""#, #"'(?:[^'\\]|\\.)*'"#] {
-            if let regex = try? NSRegularExpression(pattern: strPattern, options: []) {
-                for match in regex.matches(in: code, range: fullRange) {
-                    if isProtected(match.range, by: protectedRanges) { continue }
-                    if let swiftRange = Range(match.range, in: code) {
-                        applyColor(to: &result, in: code, swiftRange: swiftRange, color: theme.string)
-                        protectedRanges.append(match.range)
-                    }
+        for regex in [Self.doubleQuoteStringRegex, Self.singleQuoteStringRegex] {
+            for match in regex.matches(in: code, range: fullRange) {
+                if isProtected(match.range, by: protectedRanges) { continue }
+                if let swiftRange = Range(match.range, in: code) {
+                    applyColor(to: &result, in: code, swiftRange: swiftRange, color: theme.string)
+                    protectedRanges.append(match.range)
                 }
             }
         }
 
         // Numbers
-        if let regex = try? NSRegularExpression(pattern: #"\b(?:0x[0-9a-fA-F]+|0b[01]+|0o[0-7]+|\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\b"#, options: []) {
+        do { let regex = Self.numberRegex
             for match in regex.matches(in: code, range: fullRange) {
                 if isProtected(match.range, by: protectedRanges) { continue }
                 if let swiftRange = Range(match.range, in: code) {
@@ -4095,7 +4019,7 @@ private struct SyntaxHighlighter {
         }
 
         // Types (PascalCase identifiers)
-        if let regex = try? NSRegularExpression(pattern: #"\b[A-Z][a-zA-Z0-9]+\b"#, options: []) {
+        do { let regex = Self.typeRegex
             for match in regex.matches(in: code, range: fullRange) {
                 if isProtected(match.range, by: protectedRanges) { continue }
                 if let swiftRange = Range(match.range, in: code) {
@@ -4108,7 +4032,7 @@ private struct SyntaxHighlighter {
         }
 
         // Function calls: identifier followed by (
-        if let regex = try? NSRegularExpression(pattern: #"\b([a-zA-Z_]\w*)\s*\("#, options: []) {
+        do { let regex = Self.functionCallRegex
             for match in regex.matches(in: code, range: fullRange) {
                 let nameRange = match.range(at: 1)
                 if isProtected(nameRange, by: protectedRanges) { continue }
@@ -4868,7 +4792,7 @@ struct StreamingStatusBar: View {
                 return active.label
             }
         }
-        let completed = activities.filter { $0.isComplete && $0.type == .toolCall }.count
+        let completed = activities.count { $0.isComplete && $0.type == .toolCall }
         if completed > 0 {
             return "Analyzing \(completed) results..."
         }
@@ -5016,7 +4940,7 @@ func isMarkdownTable(_ text: String) -> Bool {
     for i in 0..<(lines.count - 1) {
         let row = lines[i]
         let sep = lines[i + 1]
-        if row.hasPrefix("|") && row.filter({ $0 == "|" }).count >= 2 {
+        if ResponseParser.isTableRow(row) {
             let inner = sep.replacingOccurrences(of: "|", with: "")
                           .replacingOccurrences(of: "-", with: "")
                           .replacingOccurrences(of: ":", with: "")
@@ -5042,7 +4966,7 @@ func parseMarkdownTable(from text: String) -> MarkdownTable? {
     for i in 0..<(lines.count - 1) {
         let row = lines[i]
         let sep = lines[i + 1]
-        if row.hasPrefix("|") && row.filter({ $0 == "|" }).count >= 2 {
+        if ResponseParser.isTableRow(row) {
             let inner = sep.replacingOccurrences(of: "|", with: "")
                           .replacingOccurrences(of: "-", with: "")
                           .replacingOccurrences(of: ":", with: "")
@@ -5088,7 +5012,7 @@ func parseMarkdownTable(from text: String) -> MarkdownTable? {
     var rows: [[String]] = []
     for i in (headerIdx + 2)..<lines.count {
         let line = lines[i]
-        guard line.hasPrefix("|") && line.filter({ $0 == "|" }).count >= 2 else { break }
+        guard ResponseParser.isTableRow(line) else { break }
         rows.append(parseCells(line))
     }
 
@@ -5165,7 +5089,7 @@ struct LaTeXRenderer {
         var result = latex.trimmingCharacters(in: .whitespacesAndNewlines)
 
         // \frac{a}{b} -> a/b
-        if let fracRegex = try? NSRegularExpression(pattern: #"\\frac\{([^}]*)\}\{([^}]*)\}"#, options: []) {
+        do { let fracRegex = _fracRegex
             var nsResult = result as NSString
             var offset = 0
             let matches = fracRegex.matches(in: result, range: NSRange(location: 0, length: nsResult.length))
@@ -5186,7 +5110,7 @@ struct LaTeXRenderer {
         }
 
         // ^{...} -> superscript
-        if let supRegex = try? NSRegularExpression(pattern: #"\^\{([^}]*)\}"#, options: []) {
+        do { let supRegex = _supBraceRegex
             var nsResult = result as NSString
             var offset = 0
             let matches = supRegex.matches(in: result, range: NSRange(location: 0, length: nsResult.length))
@@ -5201,7 +5125,7 @@ struct LaTeXRenderer {
         }
 
         // Single char superscript: ^x where x is a single char (not {)
-        if let supSingleRegex = try? NSRegularExpression(pattern: #"\^([^{\s])"#, options: []) {
+        do { let supSingleRegex = _supSingleRegex
             var nsResult = result as NSString
             var offset = 0
             let matches = supSingleRegex.matches(in: result, range: NSRange(location: 0, length: nsResult.length))
@@ -5217,7 +5141,7 @@ struct LaTeXRenderer {
         }
 
         // _{...} -> subscript
-        if let subRegex = try? NSRegularExpression(pattern: #"_\{([^}]*)\}"#, options: []) {
+        do { let subRegex = _subBraceRegex
             var nsResult = result as NSString
             var offset = 0
             let matches = subRegex.matches(in: result, range: NSRange(location: 0, length: nsResult.length))
@@ -5232,7 +5156,7 @@ struct LaTeXRenderer {
         }
 
         // Single char subscript: _x where x is a single char (not {)
-        if let subSingleRegex = try? NSRegularExpression(pattern: #"_([^{\s])"#, options: []) {
+        do { let subSingleRegex = _subSingleRegex
             var nsResult = result as NSString
             var offset = 0
             let matches = subSingleRegex.matches(in: result, range: NSRange(location: 0, length: nsResult.length))
@@ -5247,26 +5171,25 @@ struct LaTeXRenderer {
             result = nsResult as String
         }
 
-        // Clean up remaining braces
-        result = result.replacingOccurrences(of: "\\left", with: "")
-        result = result.replacingOccurrences(of: "\\right", with: "")
-        result = result.replacingOccurrences(of: "\\,", with: " ")
-        result = result.replacingOccurrences(of: "\\;", with: " ")
-        result = result.replacingOccurrences(of: "\\quad", with: "  ")
-        result = result.replacingOccurrences(of: "\\qquad", with: "    ")
-        result = result.replacingOccurrences(of: "\\\\", with: "\n")
-        result = result.replacingOccurrences(of: "\\text{", with: "").replacingOccurrences(of: "}", with: "")
+        // Clean up remaining LaTeX commands
+        for (find, repl) in Self.latexCleanupPairs {
+            result = result.replacingOccurrences(of: find, with: repl)
+        }
 
         return result
     }
 
     /// Checks whether a string contains inline math delimiters.
+    private static let latexCleanupPairs: [(String, String)] = [
+        ("\\left", ""), ("\\right", ""), ("\\,", " "), ("\\;", " "),
+        ("\\quad", "  "), ("\\qquad", "    "), ("\\\\", "\n"),
+        ("\\text{", ""), ("}", ""),
+    ]
+
     static func containsInlineMath(_ text: String) -> Bool {
         // $...$ (single dollar, not $$)
-        if let regex = try? NSRegularExpression(pattern: #"(?<!\$)\$(?!\$)(.+?)(?<!\$)\$(?!\$)"#, options: []) {
-            let range = NSRange(text.startIndex..., in: text)
-            if regex.firstMatch(in: text, range: range) != nil { return true }
-        }
+        let range = NSRange(text.startIndex..., in: text)
+        if _inlineMathRegex.firstMatch(in: text, range: range) != nil { return true }
         // \(...\)
         if text.contains("\\(") && text.contains("\\)") { return true }
         return false
@@ -5759,16 +5682,32 @@ struct ResponseParser {
     }
 
     private static func sectionIconAndColor(_ line: String) -> (String, Color) {
-        if line.contains("🏛") || line.contains("🗳") { return ("building.columns", Color(red: 0.8, green: 0.4, blue: 0.4)) }
-        if line.contains("🌍") || line.contains("🌎") || line.contains("🌏") || line.contains("🗺") { return ("globe", Color(red: 0.3, green: 0.6, blue: 0.9)) }
-        if line.contains("🧪") || line.contains("💻") || line.contains("🔬") { return ("flask", Color(red: 0.5, green: 0.8, blue: 0.5)) }
-        if line.contains("🎬") || line.contains("🎭") || line.contains("🎨") || line.contains("🎵") { return ("film", Color(red: 0.9, green: 0.6, blue: 0.3)) }
-        if line.contains("💰") || line.contains("📈") || line.contains("💹") { return ("chart.line.uptrend.xyaxis", Color(red: 0.3, green: 0.8, blue: 0.5)) }
-        if line.contains("⚽") || line.contains("🏀") || line.contains("🏈") { return ("sportscourt", Color(red: 0.3, green: 0.7, blue: 0.3)) }
-        if line.contains("🏥") || line.contains("💊") || line.contains("🩺") { return ("heart", Color(red: 0.9, green: 0.3, blue: 0.3)) }
-        if line.contains("📋") || line.contains("📝") { return ("doc.text", AppTheme.accent) }
-        if line.contains("📰") || line.contains("🗞") { return ("newspaper", Color(red: 0.6, green: 0.6, blue: 0.8)) }
-        if line.contains("🔒") || line.contains("🛡") { return ("lock.shield", Color(red: 0.5, green: 0.5, blue: 0.8)) }
+        // Extract leading emoji scalar values to match against — O(1) instead of
+        // scanning the entire line with .contains() which triggers expensive
+        // Unicode normalization and can freeze the UI on long text.
+        let scalars = line.trimmingCharacters(in: .whitespaces).unicodeScalars
+        var emojiValues = Set<UInt32>()
+        for s in scalars {
+            let v = s.value
+            if (v >= 0x1F300 && v <= 0x1FAFF) || (v >= 0x2600 && v <= 0x27BF) {
+                emojiValues.insert(v)
+            } else if v == 0xFE0F || v == 0x200D {
+                continue // skip variation selectors and ZWJ
+            } else {
+                break // stop at first non-emoji character
+            }
+        }
+
+        if !emojiValues.isDisjoint(with: [0x1F3DB, 0x1F5F3]) { return ("building.columns", Color(red: 0.8, green: 0.4, blue: 0.4)) } // 🏛🗳
+        if !emojiValues.isDisjoint(with: [0x1F30D, 0x1F30E, 0x1F30F, 0x1F5FA]) { return ("globe", Color(red: 0.3, green: 0.6, blue: 0.9)) } // 🌍🌎🌏🗺
+        if !emojiValues.isDisjoint(with: [0x1F9EA, 0x1F4BB, 0x1F52C]) { return ("flask", Color(red: 0.5, green: 0.8, blue: 0.5)) } // 🧪💻🔬
+        if !emojiValues.isDisjoint(with: [0x1F3AC, 0x1F3AD, 0x1F3A8, 0x1F3B5]) { return ("film", Color(red: 0.9, green: 0.6, blue: 0.3)) } // 🎬🎭🎨🎵
+        if !emojiValues.isDisjoint(with: [0x1F4B0, 0x1F4C8, 0x1F4B9]) { return ("chart.line.uptrend.xyaxis", Color(red: 0.3, green: 0.8, blue: 0.5)) } // 💰📈💹
+        if !emojiValues.isDisjoint(with: [0x26BD, 0x1F3C0, 0x1F3C8]) { return ("sportscourt", Color(red: 0.3, green: 0.7, blue: 0.3)) } // ⚽🏀🏈
+        if !emojiValues.isDisjoint(with: [0x1F3E5, 0x1F48A, 0x1FA7A]) { return ("heart", Color(red: 0.9, green: 0.3, blue: 0.3)) } // 🏥💊🩺
+        if !emojiValues.isDisjoint(with: [0x1F4CB, 0x1F4DD]) { return ("doc.text", AppTheme.accent) } // 📋📝
+        if !emojiValues.isDisjoint(with: [0x1F4F0, 0x1F5DE]) { return ("newspaper", Color(red: 0.6, green: 0.6, blue: 0.8)) } // 📰🗞
+        if !emojiValues.isDisjoint(with: [0x1F512, 0x1F6E1]) { return ("lock.shield", Color(red: 0.5, green: 0.5, blue: 0.8)) } // 🔒🛡
         return ("sparkles", AppTheme.accent)
     }
 
@@ -5782,9 +5721,15 @@ struct ResponseParser {
         line.hasPrefix("✅") || line.contains("Listo:") || line.contains("¡Listo")
     }
 
-    private static func isTableRow(_ line: String) -> Bool {
+    static func isTableRow(_ line: String) -> Bool {
         let trimmed = line.trimmingCharacters(in: .whitespaces)
-        return trimmed.hasPrefix("|") && trimmed.filter({ $0 == "|" }).count >= 2
+        guard trimmed.hasPrefix("|") else { return false }
+        var pipeCount = 0
+        for c in trimmed where c == "|" {
+            pipeCount += 1
+            if pipeCount >= 2 { return true }
+        }
+        return false
     }
 
     private static func isTableSeparator(_ line: String) -> Bool {
@@ -5851,7 +5796,7 @@ struct RichTextView: View {
                         footnoteAwareText(str)
                     case .path(let path):
                         Button(action: {
-                            let clean = path.trimmingCharacters(in: CharacterSet(charactersIn: ".,;:"))
+                            let clean = path.trimmingCharacters(in: _pathTrimCharSet)
                             NSWorkspace.shared.selectFile(clean, inFileViewerRootedAtPath: "")
                         }) {
                             HStack(spacing: 3) {
@@ -5938,10 +5883,7 @@ struct RichTextView: View {
 
     /// Splits text into alternating plain text and footnote reference segments.
     private func splitFootnoteReferences(_ text: String) -> [FootnoteSegment] {
-        let pattern = #"\[\^([^\]]+)\](?!:)"# // Match [^key] but not [^key]: (definitions)
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else {
-            return [.text(text)]
-        }
+        let regex = _footnoteRefRegex
         let nsText = text as NSString
         let range = NSRange(location: 0, length: nsText.length)
         let matches = regex.matches(in: text, range: range)
@@ -6187,15 +6129,7 @@ struct RichTextView: View {
         let defaultColor = AppTheme.textPrimary
 
         // Tokenize with regex: strings, numbers, words, other
-        let tokenPattern = #"\"[^\"]*\"|'[^']*'|\b\d+(?:\.\d+)?\b|\b[A-Za-z_]\w*\b|[^\s\w]|\s+"#
-        guard let regex = try? NSRegularExpression(pattern: tokenPattern, options: []) else {
-            var attr = AttributedString(code)
-            attr.font = .system(size: fontSize, design: .monospaced)
-            attr.foregroundColor = defaultColor
-            attr.backgroundColor = AppTheme.bgSecondary
-            return attr
-        }
-
+        let regex = _inlineCodeTokenRegex
         let nsCode = code as NSString
         let range = NSRange(location: 0, length: nsCode.length)
         let matches = regex.matches(in: code, range: range)
@@ -6295,8 +6229,7 @@ struct RichTextView: View {
     }
 
     private func splitByPaths(_ text: String) -> [TextPart] {
-        let pattern = "(?:/(?:Users|tmp|var|Applications|System|Library|opt|usr|Volumes)[^\\s,;\"'\\]\\)]*|~/[^\\s,;\"'\\]\\)]+)"
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [.plain(text)] }
+        let regex = _pathDetectionRegex
         let nsText = text as NSString
         let range = NSRange(location: 0, length: nsText.length)
         let matches = regex.matches(in: text, range: range)
@@ -6491,8 +6424,7 @@ struct MermaidParser {
 
                 // Check for label on arrow: -->|text| or ---|text|
                 let afterArrow = nsLine.substring(from: lastEnd).trimmingCharacters(in: .whitespaces)
-                if let labelRegex = try? NSRegularExpression(pattern: #"^\|([^|]*)\|"#, options: []),
-                   let labelMatch = labelRegex.firstMatch(in: afterArrow, range: NSRange(location: 0, length: (afterArrow as NSString).length)) {
+                if let labelMatch = _arrowLabelRegex.firstMatch(in: afterArrow, range: NSRange(location: 0, length: (afterArrow as NSString).length)) {
                     let lbl = (afterArrow as NSString).substring(with: labelMatch.range(at: 1))
                     arrowLabels.append(lbl)
                     lastEnd += labelMatch.range.length

@@ -683,11 +683,11 @@ struct SettingsView: View {
             (4200, 1800), (6100, 2900), (3500, 1200),
             (8300, 3700), (5600, 2400), (2100, 900), (7400, 3100)
         ]
+        let dateKeyFormatter = DateFormatter()
+        dateKeyFormatter.dateFormat = "yyyy-MM-dd"
         return (0..<7).map { offset in
             let date = calendar.date(byAdding: .day, value: offset - 6, to: today)!
-            let formatter = DateFormatter()
-            formatter.dateFormat = "yyyy-MM-dd"
-            let key = formatter.string(from: date)
+            let key = dateKeyFormatter.string(from: date)
             return DailyTokenUsage(
                 dateKey: key, date: date,
                 inputTokens: samples[offset].0,
@@ -1185,6 +1185,26 @@ struct SettingsView: View {
 
                 Divider().background(AppTheme.borderGlass)
 
+                // Language / Idioma
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Language / Idioma")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(AppTheme.textPrimary)
+
+                    Picker("Language", selection: $appState.appLanguage) {
+                        ForEach(AppLanguage.allCases) { lang in
+                            Text(lang.displayName).tag(lang.rawValue)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .onChange(of: appState.appLanguage) { _ in
+                        L10n.current = AppLanguage(rawValue: appState.appLanguage) ?? .system
+                    }
+                }
+
+                Divider().background(AppTheme.borderGlass)
+
                 // Code Theme
                 VStack(alignment: .leading, spacing: 10) {
                     Text("Code Theme")
@@ -1613,10 +1633,7 @@ struct SettingsView: View {
                         if panel.runModal() == .OK, let url = panel.url {
                             let data = appState.exportSettings()
                             try? data.write(to: url)
-                            let formatter = DateFormatter()
-                            formatter.dateStyle = .medium
-                            formatter.timeStyle = .short
-                            appState.lastBackupDate = formatter.string(from: Date())
+                            appState.lastBackupDate = AppState.mediumDateTimeFormatter.string(from: Date())
                             appState.showToast("Settings exported successfully", type: .success)
                         }
                     }) {

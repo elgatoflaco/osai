@@ -1,5 +1,7 @@
 import SwiftUI
 
+private let _dashTimeWithSecsFormatter: DateFormatter = { let f = DateFormatter(); f.dateFormat = "HH:mm:ss"; return f }()
+
 struct DashboardView: View {
     @EnvironmentObject var appState: AppState
     @State private var taskInput = ""
@@ -287,15 +289,24 @@ struct DashboardView: View {
         }
     }
 
+    /// Pre-compute title counts once, then look up per template
+    private var titleCounts: [String: Int] {
+        var counts: [String: Int] = [:]
+        for conv in appState.conversations { counts[conv.title, default: 0] += 1 }
+        return counts
+    }
+
     /// Count how many conversations were started from a given template (by matching title).
     private func templateUseCount(_ template: ConversationTemplate) -> Int {
-        appState.conversations.filter { $0.title == template.name }.count
+        titleCounts[template.name] ?? 0
     }
 
     /// The template ID with the highest use count among the current filtered list.
     private func mostUsedTemplateId(in templates: [ConversationTemplate]) -> UUID? {
-        templates.max(by: { templateUseCount($0) < templateUseCount($1) })
-            .flatMap { templateUseCount($0) > 0 ? $0.id : nil }
+        let tc = titleCounts
+        guard let best = templates.max(by: { (tc[$0.name] ?? 0) < (tc[$1.name] ?? 0) }),
+              (tc[best.name] ?? 0) > 0 else { return nil }
+        return best.id
     }
 
     // MARK: - Quick Start Content
@@ -726,9 +737,7 @@ struct DashboardView: View {
     private var gatewayTimestampDisplay: String {
         let date = appState.gatewayRunning ? gatewayStartedAt : gatewayStoppedAt
         guard let date = date else { return "—" }
-        let formatter = DateFormatter()
-        formatter.dateFormat = "HH:mm:ss"
-        return formatter.string(from: date)
+        return _dashTimeWithSecsFormatter.string(from: date)
     }
 
     private func startUptimeTimer() {
@@ -2240,8 +2249,7 @@ struct AnalyticsSectionView: View {
 
         // Build array of last 7 days
         var days: [DayCount] = []
-        let dayFormatter = DateFormatter()
-        dayFormatter.dateFormat = "EEE"
+        let dayFormatter = AppState.shortDayFormatter
 
         for offset in stride(from: -6, through: 0, by: 1) {
             guard let date = calendar.date(byAdding: .day, value: offset, to: today) else { continue }
@@ -2249,11 +2257,13 @@ struct AnalyticsSectionView: View {
             days.append(DayCount(label: label, date: date, count: 0))
         }
 
-        // Count messages per day
+        // Count messages per day — use dictionary index for O(1) lookup
+        var dateIndex: [Date: Int] = [:]
+        for (i, day) in days.enumerated() { dateIndex[day.date] = i }
         for conv in conversations {
             for msg in conv.messages {
                 let msgDay = calendar.startOfDay(for: msg.timestamp)
-                if let idx = days.firstIndex(where: { $0.date == msgDay }) {
+                if let idx = dateIndex[msgDay] {
                     days[idx].count += 1
                 }
             }
@@ -2573,7 +2583,7 @@ struct TokenStatsSection: View {
     }
 
     private var totalUserMessages: Int {
-        conversations.reduce(0) { $0 + $1.messages.filter { $0.role == .user }.count }
+        conversations.reduce(0) { $0 + $1.messages.count { $0.role == .user } }
     }
 
     /// Conversations sorted by cost descending, only those with tokens
@@ -2587,8 +2597,7 @@ struct TokenStatsSection: View {
     var dailyTokenUsage: [DailyTokenData] {
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: Date())
-        let dayFormatter = DateFormatter()
-        dayFormatter.dateFormat = "EEE"
+        let dayFormatter = AppState.shortDayFormatter
 
         var days: [DailyTokenData] = []
         for offset in stride(from: -6, through: 0, by: 1) {
@@ -2597,9 +2606,11 @@ struct TokenStatsSection: View {
             days.append(DailyTokenData(label: label, date: date, inputTokens: 0, outputTokens: 0, cost: 0))
         }
 
+        var tokenDateIndex: [Date: Int] = [:]
+        for (i, day) in days.enumerated() { tokenDateIndex[day.date] = i }
         for conv in conversations {
             let convDay = calendar.startOfDay(for: conv.createdAt)
-            if let idx = days.firstIndex(where: { $0.date == convDay }) {
+            if let idx = tokenDateIndex[convDay] {
                 days[idx].inputTokens += conv.totalInputTokens
                 days[idx].outputTokens += conv.totalOutputTokens
                 days[idx].cost += conv.estimatedCost
@@ -2611,7 +2622,7 @@ struct TokenStatsSection: View {
 
     /// Number of days that actually have usage data (for projection accuracy)
     private var daysWithUsage: Int {
-        max(dailyTokenUsage.filter { $0.totalTokens > 0 }.count, 1)
+        max(dailyTokenUsage.count { $0.totalTokens > 0 }, 1)
     }
 
     /// Projected monthly cost based on average daily spend
@@ -2923,8 +2934,7 @@ struct ChatInsightsSection: View {
     private var insightMostActiveDay: String {
         guard !conversations.isEmpty else { return "--" }
         let calendar = Calendar.current
-        let dayFormatter = DateFormatter()
-        dayFormatter.dateFormat = "EEE"
+        let dayFormatter = AppState.shortDayFormatter
 
         var dayCounts: [Int: Int] = [:] // weekday number -> count
         for conv in conversations {
@@ -3457,9 +3467,7 @@ struct PerformanceSection: View {
     }
 
     private func dayLabel(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "EEE"
-        return formatter.string(from: date)
+        AppState.shortDayFormatter.string(from: date)
     }
 }
 
@@ -3639,12 +3647,8 @@ struct ActivityStreakContent: View {
     }
 
     private func shortDayLabel(_ dateStr: String) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd"
-        guard let date = formatter.date(from: dateStr) else { return "" }
-        let dayFormatter = DateFormatter()
-        dayFormatter.dateFormat = "EEE"
-        return String(dayFormatter.string(from: date).prefix(2))
+        guard let date = AppState.dateKeyFormatter.date(from: dateStr) else { return "" }
+        return String(AppState.shortDayFormatter.string(from: date).prefix(2))
     }
 }
 
@@ -4270,22 +4274,23 @@ struct ProductivityWeatherContent: View {
     @EnvironmentObject var appState: AppState
 
     private var todayMessageCount: Int {
-        let calendar = Calendar.current
-        let startOfDay = calendar.startOfDay(for: Date())
+        let startOfDay = Calendar.current.startOfDay(for: Date())
         return appState.conversations.reduce(0) { total, conv in
-            total + conv.messages.filter { $0.role == .user && $0.timestamp >= startOfDay }.count
+            total + conv.messages.lazy.filter { $0.role == .user && $0.timestamp >= startOfDay }.count
         }
     }
 
     private var last7DayCounts: [Int] {
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: Date())
+        // Pre-collect all user message timestamps to avoid repeated nested iteration
+        let userTimestamps = appState.conversations.flatMap { conv in
+            conv.messages.lazy.filter { $0.role == .user }.map { $0.timestamp }
+        }
         return (0..<7).reversed().map { daysAgo in
             guard let dayStart = calendar.date(byAdding: .day, value: -daysAgo, to: today),
                   let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) else { return 0 }
-            return appState.conversations.reduce(0) { total, conv in
-                total + conv.messages.filter { $0.role == .user && $0.timestamp >= dayStart && $0.timestamp < dayEnd }.count
-            }
+            return userTimestamps.count { $0 >= dayStart && $0 < dayEnd }
         }
     }
 
@@ -4379,14 +4384,16 @@ struct ProductivityWeatherContent: View {
         }
     }
 
+    private static let dayLabelFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "E"
+        return f
+    }()
+
     private func dayLabel(daysAgo: Int) -> String {
         if daysAgo == 0 { return "T" }
-        let calendar = Calendar.current
-        guard let date = calendar.date(byAdding: .day, value: -daysAgo, to: Date()) else { return "" }
-        let formatter = DateFormatter()
-        formatter.dateFormat = "E"
-        let s = formatter.string(from: date)
-        return String(s.prefix(1))
+        guard let date = Calendar.current.date(byAdding: .day, value: -daysAgo, to: Date()) else { return "" }
+        return String(Self.dayLabelFormatter.string(from: date).prefix(1))
     }
 }
 

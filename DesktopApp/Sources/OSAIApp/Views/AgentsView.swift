@@ -1,6 +1,16 @@
 import SwiftUI
 import AppKit
 
+private let _slugSpaceRegex = try! NSRegularExpression(pattern: "\\s+")
+private let _slugNonAlnumRegex = try! NSRegularExpression(pattern: "[^a-z0-9\\-]")
+
+private func slugify(_ name: String) -> String {
+    var result = name.lowercased()
+    result = _slugSpaceRegex.stringByReplacingMatches(in: result, range: NSRange(result.startIndex..., in: result), withTemplate: "-")
+    result = _slugNonAlnumRegex.stringByReplacingMatches(in: result, range: NSRange(result.startIndex..., in: result), withTemplate: "")
+    return result
+}
+
 struct AgentsView: View {
     @EnvironmentObject var appState: AppState
     @State private var showCreateSheet = false
@@ -466,11 +476,7 @@ struct AgentCard: View {
             .filter { !$0.isEmpty }
     }
 
-    private var editSlug: String {
-        editName.lowercased()
-            .replacingOccurrences(of: "\\s+", with: "-", options: .regularExpression)
-            .replacingOccurrences(of: "[^a-z0-9\\-]", with: "", options: .regularExpression)
-    }
+    private var editSlug: String { slugify(editName) }
 
     private var agentFilePath: String {
         "~/.desktop-agent/agents/\(agent.name).md"
@@ -1187,10 +1193,7 @@ struct ImportAgentPreviewSheet: View {
     }
 
     private func importRenamed() {
-        let newName = renameTo.trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-            .replacingOccurrences(of: "\\s+", with: "-", options: .regularExpression)
-            .replacingOccurrences(of: "[^a-z0-9\\-]", with: "", options: .regularExpression)
+        let newName = slugify(renameTo.trimmingCharacters(in: .whitespacesAndNewlines))
         guard !newName.isEmpty else {
             appState.showToast("Please enter a valid name", type: .error)
             return
@@ -1556,11 +1559,12 @@ struct TestAgentSheet: View {
         lines.append("Hello! I'm \(name), \(role).")
         lines.append("")
 
-        if message.lowercased().contains("self-check") || message.lowercased().contains("working") {
+        let messageLower = message.lowercased()
+        if messageLower.contains("self-check") || messageLower.contains("working") {
             lines.append("Systems check: All operational. Model: \(agent.displayModel), Backend: \(agent.backendLabel).")
             lines.append("")
             lines.append("I'm ready to assist you. My capabilities are triggered by keywords such as: \(agent.triggers.prefix(3).joined(separator: ", ")).")
-        } else if message.lowercased().contains("capabilities") || message.lowercased().contains("what can you do") {
+        } else if messageLower.contains("capabilities") || messageLower.contains("what can you do") {
             lines.append("I specialize in tasks related to: \(agent.triggers.joined(separator: ", ")).")
             lines.append("")
             lines.append("I use the \(agent.displayModel) model via \(agent.backendLabel) to process your requests.")
@@ -1717,8 +1721,12 @@ private var agentModelOptions: [String] {
     allModelDefinitions.map { $0.id }
 }
 
+private let modelDisplayNameCache: [String: String] = {
+    Dictionary(uniqueKeysWithValues: allModelDefinitions.map { ($0.id, $0.displayName) })
+}()
+
 private func agentModelDisplayName(_ id: String) -> String {
-    allModelDefinitions.first(where: { $0.id == id })?.displayName ?? id.components(separatedBy: "/").last ?? id
+    modelDisplayNameCache[id] ?? id.components(separatedBy: "/").last ?? id
 }
 
 private var agentModelsByProvider: [(provider: String, models: [ModelDefinition])] {
@@ -1770,11 +1778,7 @@ struct CreateAgentSheet: View {
     @State private var systemPrompt = ""
     @State private var attemptedAdvance = false
 
-    private var slug: String {
-        name.lowercased()
-            .replacingOccurrences(of: "\\s+", with: "-", options: .regularExpression)
-            .replacingOccurrences(of: "[^a-z0-9\\-]", with: "", options: .regularExpression)
-    }
+    private var slug: String { slugify(name) }
 
     private var triggerList: [String] {
         triggers.split(separator: ",")
