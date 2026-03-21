@@ -1393,6 +1393,328 @@ final class ToolExecutor {
             }
         }
 
+        // MARK: - Contacts Lookup
+        handlers["contacts_lookup"] = { exe, input in
+            let action = input["action"]?.stringValue ?? ""
+            let query = input["query"]?.stringValue ?? ""
+            let contactId = input["contact_id"]?.stringValue ?? ""
+
+            let safeQuery = query.replacingOccurrences(of: "\"", with: "\\\"")
+            let safeContactId = contactId.replacingOccurrences(of: "\"", with: "\\\"")
+
+            switch action {
+            case "search":
+                guard !safeQuery.isEmpty else {
+                    return (ToolResult(success: false, output: "Missing required field: query", screenshot: nil), nil)
+                }
+                let script = """
+                set output to ""
+                tell application "Contacts"
+                    set matchedPeople to every person whose name contains "\(safeQuery)"
+                    repeat with p in matchedPeople
+                        set pName to name of p
+                        set pPhone to ""
+                        set pEmail to ""
+                        try
+                            set pPhone to value of first phone of p
+                        end try
+                        try
+                            set pEmail to value of first email of p
+                        end try
+                        set output to output & pName & " | Phone: " & pPhone & " | Email: " & pEmail & linefeed
+                    end repeat
+                end tell
+                if output is "" then return "No contacts found matching \\"\(safeQuery)\\"."
+                return output
+                """
+                return (exe.applescript.execute(script), nil)
+
+            case "get_details":
+                guard !safeContactId.isEmpty else {
+                    return (ToolResult(success: false, output: "Missing required field: contact_id (contact name)", screenshot: nil), nil)
+                }
+                let script = """
+                set output to ""
+                tell application "Contacts"
+                    set p to first person whose name is "\(safeContactId)"
+                    set output to "Name: " & name of p & linefeed
+                    try
+                        set output to output & "Company: " & organization of p & linefeed
+                    end try
+                    try
+                        set output to output & "Job Title: " & job title of p & linefeed
+                    end try
+                    try
+                        set output to output & "Notes: " & note of p & linefeed
+                    end try
+                    set phoneList to every phone of p
+                    repeat with ph in phoneList
+                        set output to output & "Phone (" & label of ph & "): " & value of ph & linefeed
+                    end repeat
+                    set emailList to every email of p
+                    repeat with em in emailList
+                        set output to output & "Email (" & label of em & "): " & value of em & linefeed
+                    end repeat
+                    set addrList to every address of p
+                    repeat with addr in addrList
+                        set output to output & "Address (" & label of addr & "): " & formatted address of addr & linefeed
+                    end repeat
+                end tell
+                return output
+                """
+                return (exe.applescript.execute(script), nil)
+
+            default:
+                return (ToolResult(success: false, output: "Unknown contacts_lookup action: \(action). Valid: search, get_details", screenshot: nil), nil)
+            }
+        }
+
+        // MARK: - iMessage Send
+        handlers["imessage_send"] = { exe, input in
+            let action = input["action"]?.stringValue ?? ""
+            let recipient = input["recipient"]?.stringValue ?? ""
+            let message = input["message"]?.stringValue ?? ""
+            let count = input["count"]?.intValue ?? 5
+
+            let safeRecipient = recipient.replacingOccurrences(of: "\"", with: "\\\"")
+            let safeMessage = message.replacingOccurrences(of: "\"", with: "\\\"")
+
+            switch action {
+            case "send":
+                guard !safeRecipient.isEmpty else {
+                    return (ToolResult(success: false, output: "Missing required field: recipient", screenshot: nil), nil)
+                }
+                guard !safeMessage.isEmpty else {
+                    return (ToolResult(success: false, output: "Missing required field: message", screenshot: nil), nil)
+                }
+                let script = """
+                tell application "Messages"
+                    set targetBuddy to buddy "\(safeRecipient)" of service "iMessage"
+                    send "\(safeMessage)" to targetBuddy
+                end tell
+                return "Message sent to \(safeRecipient)"
+                """
+                return (exe.applescript.execute(script), nil)
+
+            case "read_recent":
+                let script = """
+                set output to ""
+                set msgCount to 0
+                tell application "Messages"
+                    set targetChat to chat 1
+                    set msgs to messages of targetChat
+                    set totalMsgs to count of msgs
+                    set startIdx to totalMsgs - \(count) + 1
+                    if startIdx < 1 then set startIdx to 1
+                    repeat with i from startIdx to totalMsgs
+                        set msg to item i of msgs
+                        set senderName to ""
+                        try
+                            set senderName to name of sender of msg
+                        on error
+                            set senderName to "Me"
+                        end try
+                        set msgText to text of msg
+                        set msgDate to date of msg as string
+                        set output to output & "[" & msgDate & "] " & senderName & ": " & msgText & linefeed
+                    end repeat
+                end tell
+                if output is "" then return "No recent messages found."
+                return output
+                """
+                return (exe.applescript.execute(script), nil)
+
+            default:
+                return (ToolResult(success: false, output: "Unknown imessage_send action: \(action). Valid: send, read_recent", screenshot: nil), nil)
+            }
+        }
+
+        // --- Notes Control ---
+        handlers["notes_control"] = { exe, input in
+            let action = input["action"]?.stringValue ?? ""
+            let folder = input["folder"]?.stringValue ?? "Notes"
+            let title = input["title"]?.stringValue ?? ""
+            let content = input["content"]?.stringValue ?? ""
+            let query = input["query"]?.stringValue ?? ""
+
+            let safeFolder = folder.replacingOccurrences(of: "\"", with: "\\\"")
+            let safeTitle = title.replacingOccurrences(of: "\"", with: "\\\"")
+            let safeContent = content.replacingOccurrences(of: "\"", with: "\\\"")
+            let safeQuery = query.replacingOccurrences(of: "\"", with: "\\\"")
+
+            switch action {
+            case "list_folders":
+                let script = "tell application \"Notes\" to get name of every folder"
+                return (exe.applescript.execute(script), nil)
+
+            case "list_notes":
+                let script = """
+                tell application "Notes"
+                    set noteList to ""
+                    set theNotes to every note of folder "\(safeFolder)"
+                    repeat with n in theNotes
+                        set noteList to noteList & name of n & linefeed
+                    end repeat
+                    if noteList is "" then return "No notes in folder: \(safeFolder)"
+                    return noteList
+                end tell
+                """
+                return (exe.applescript.execute(script), nil)
+
+            case "read_note":
+                guard !safeTitle.isEmpty else {
+                    return (ToolResult(success: false, output: "Missing required field: title", screenshot: nil), nil)
+                }
+                let script = """
+                tell application "Notes"
+                    set theNote to first note of folder "\(safeFolder)" whose name is "\(safeTitle)"
+                    return plaintext of theNote
+                end tell
+                """
+                return (exe.applescript.execute(script), nil)
+
+            case "create_note":
+                guard !safeTitle.isEmpty else {
+                    return (ToolResult(success: false, output: "Missing required field: title", screenshot: nil), nil)
+                }
+                let body = safeContent.isEmpty ? "" : safeContent
+                let script = """
+                tell application "Notes"
+                    make new note at folder "\(safeFolder)" with properties {name:"\(safeTitle)", body:"\(body)"}
+                end tell
+                return "Note created: \(safeTitle)"
+                """
+                return (exe.applescript.execute(script), nil)
+
+            case "append_note":
+                guard !safeTitle.isEmpty, !safeContent.isEmpty else {
+                    return (ToolResult(success: false, output: "Missing required fields: title, content", screenshot: nil), nil)
+                }
+                let script = """
+                tell application "Notes"
+                    set theNote to first note of folder "\(safeFolder)" whose name is "\(safeTitle)"
+                    set currentBody to body of theNote
+                    set body of theNote to currentBody & "<br>" & "\(safeContent)"
+                end tell
+                return "Appended to note: \(safeTitle)"
+                """
+                return (exe.applescript.execute(script), nil)
+
+            case "search":
+                guard !safeQuery.isEmpty else {
+                    return (ToolResult(success: false, output: "Missing required field: query", screenshot: nil), nil)
+                }
+                let script = """
+                tell application "Notes"
+                    set matchingNotes to name of notes whose name contains "\(safeQuery)"
+                    if (count of matchingNotes) is 0 then return "No notes matching: \(safeQuery)"
+                    set output to ""
+                    repeat with n in matchingNotes
+                        set output to output & n & linefeed
+                    end repeat
+                    return output
+                end tell
+                """
+                return (exe.applescript.execute(script), nil)
+
+            default:
+                return (ToolResult(success: false, output: "Unknown notes_control action: \(action). Valid: list_folders, list_notes, read_note, create_note, append_note, search", screenshot: nil), nil)
+            }
+        }
+
+        // --- Timer Control ---
+        handlers["timer_control"] = { exe, input in
+            let action = input["action"]?.stringValue ?? ""
+            let seconds = input["seconds"]?.intValue ?? 0
+            let time = input["time"]?.stringValue ?? ""
+            let label = input["label"]?.stringValue ?? "Timer"
+
+            let safeLabel = label.replacingOccurrences(of: "'", with: "'\\''")
+
+            switch action {
+            case "set_timer":
+                guard seconds > 0 else {
+                    return (ToolResult(success: false, output: "Missing or invalid required field: seconds (must be > 0)", screenshot: nil), nil)
+                }
+                let shellCmd = "(sleep \(seconds) && osascript -e 'display notification \"\(safeLabel) done! (\(seconds)s)\" with title \"Timer\" sound name \"Glass\"') &"
+                let result = exe.shell.execute(command: shellCmd, timeout: 5)
+                if result.success {
+                    let mins = seconds / 60
+                    let secs = seconds % 60
+                    let formatted = mins > 0 ? "\(mins)m \(secs)s" : "\(secs)s"
+                    return (ToolResult(success: true, output: "Timer set: \(safeLabel) for \(formatted). You'll get a notification when it's done.", screenshot: nil), nil)
+                }
+                return (result, nil)
+
+            case "set_alarm":
+                guard !time.isEmpty else {
+                    return (ToolResult(success: false, output: "Missing required field: time (HH:MM format)", screenshot: nil), nil)
+                }
+                // Calculate seconds until the target time
+                let calcCmd = """
+                target="\(time)"
+                now_epoch=$(date +%s)
+                target_epoch=$(date -j -f "%H:%M" "$target" +%s 2>/dev/null)
+                if [ -z "$target_epoch" ]; then echo "ERROR"; exit 1; fi
+                diff=$((target_epoch - now_epoch))
+                if [ $diff -le 0 ]; then diff=$((diff + 86400)); fi
+                echo $diff
+                """
+                let calcResult = exe.shell.execute(command: calcCmd, timeout: 5)
+                guard calcResult.success, let alarmSeconds = Int(calcResult.output.trimmingCharacters(in: .whitespacesAndNewlines)), alarmSeconds > 0 else {
+                    return (ToolResult(success: false, output: "Invalid time format. Use HH:MM (24h), e.g. 14:30", screenshot: nil), nil)
+                }
+                let alarmCmd = "(sleep \(alarmSeconds) && osascript -e 'display notification \"\(safeLabel) - it is \(time)\" with title \"Alarm\" sound name \"Glass\"') &"
+                let alarmResult = exe.shell.execute(command: alarmCmd, timeout: 5)
+                if alarmResult.success {
+                    let hrs = alarmSeconds / 3600
+                    let mins = (alarmSeconds % 3600) / 60
+                    let formatted = hrs > 0 ? "\(hrs)h \(mins)m" : "\(mins)m"
+                    return (ToolResult(success: true, output: "Alarm set: \(safeLabel) for \(time) (in \(formatted)). You'll get a notification.", screenshot: nil), nil)
+                }
+                return (alarmResult, nil)
+
+            case "stopwatch_start":
+                let cmd = "date +%s > /tmp/osai_stopwatch && echo 'started'"
+                let result = exe.shell.execute(command: cmd, timeout: 5)
+                if result.success {
+                    return (ToolResult(success: true, output: "Stopwatch started.", screenshot: nil), nil)
+                }
+                return (result, nil)
+
+            case "stopwatch_stop":
+                let cmd = """
+                if [ ! -f /tmp/osai_stopwatch ]; then echo "ERROR: No stopwatch running"; exit 1; fi
+                start=$(cat /tmp/osai_stopwatch)
+                now=$(date +%s)
+                elapsed=$((now - start))
+                hrs=$((elapsed / 3600))
+                mins=$(( (elapsed % 3600) / 60 ))
+                secs=$((elapsed % 60))
+                rm -f /tmp/osai_stopwatch
+                if [ $hrs -gt 0 ]; then
+                    echo "${hrs}h ${mins}m ${secs}s"
+                elif [ $mins -gt 0 ]; then
+                    echo "${mins}m ${secs}s"
+                else
+                    echo "${secs}s"
+                fi
+                """
+                let result = exe.shell.execute(command: cmd, timeout: 5)
+                if result.success {
+                    let elapsed = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if elapsed.starts(with: "ERROR") {
+                        return (ToolResult(success: false, output: elapsed, screenshot: nil), nil)
+                    }
+                    return (ToolResult(success: true, output: "Stopwatch stopped. Elapsed: \(elapsed)", screenshot: nil), nil)
+                }
+                return (result, nil)
+
+            default:
+                return (ToolResult(success: false, output: "Unknown timer_control action: \(action). Valid: set_timer, set_alarm, stopwatch_start, stopwatch_stop", screenshot: nil), nil)
+            }
+        }
+
         return handlers
     }
 

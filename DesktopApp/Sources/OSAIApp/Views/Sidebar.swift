@@ -1011,6 +1011,88 @@ struct SidebarConversationList: View {
     let onReorder: (Int, Int) -> Void
     let appState: AppState
 
+    /// Whether conversations should be grouped by date (only for lastUpdated sort).
+    private var shouldGroupByDate: Bool {
+        appState.conversationSortOrder == .lastUpdated
+    }
+
+    /// Groups conversations into date-based sections: Today, Yesterday, This Week, This Month, Older.
+    private func groupConversationsByDate(_ convs: [Conversation]) -> [(title: String, conversations: [Conversation])] {
+        let cal = Calendar.current
+        var today: [Conversation] = []
+        var yesterday: [Conversation] = []
+        var thisWeek: [Conversation] = []
+        var thisMonth: [Conversation] = []
+        var older: [Conversation] = []
+
+        for conv in convs {
+            if cal.isDateInToday(conv.lastUpdated) { today.append(conv) }
+            else if cal.isDateInYesterday(conv.lastUpdated) { yesterday.append(conv) }
+            else if cal.isDate(conv.lastUpdated, equalTo: Date(), toGranularity: .weekOfYear) { thisWeek.append(conv) }
+            else if cal.isDate(conv.lastUpdated, equalTo: Date(), toGranularity: .month) { thisMonth.append(conv) }
+            else { older.append(conv) }
+        }
+
+        return [
+            ("Today", today), ("Yesterday", yesterday),
+            ("This Week", thisWeek), ("This Month", thisMonth), ("Older", older)
+        ].filter { !$0.1.isEmpty }
+    }
+
+    /// A single conversation row with drop indicators and drag support.
+    @ViewBuilder
+    private func conversationRow(_ conv: Conversation) -> some View {
+        VStack(spacing: 0) {
+            // Drop indicator above
+            if isCustomSort,
+               dropTargetId == conv.id,
+               dropTargetIsAbove {
+                Rectangle()
+                    .fill(AppTheme.accent)
+                    .frame(height: 2)
+                    .padding(.horizontal, 4)
+                    .transition(.opacity)
+            }
+
+            SidebarConversationRow(
+                conv: conv,
+                isActive: activeConversationId == conv.id,
+                isHovered: hoveredId == conv.id,
+                showDragHandle: isCustomSort && hoveredId == conv.id,
+                onSelect: { onSelect(conv) }
+            )
+            .onHover { hovering in
+                withAnimation(.easeOut(duration: 0.1)) {
+                    hoveredId = hovering ? conv.id : nil
+                }
+            }
+
+            // Drop indicator below
+            if isCustomSort,
+               dropTargetId == conv.id,
+               !dropTargetIsAbove {
+                Rectangle()
+                    .fill(AppTheme.accent)
+                    .frame(height: 2)
+                    .padding(.horizontal, 4)
+                    .transition(.opacity)
+            }
+        }
+        .onDrag {
+            guard isCustomSort else { return NSItemProvider() }
+            draggedId = conv.id
+            return NSItemProvider(object: conv.id as NSString)
+        }
+        .onDrop(of: [UTType.text], delegate: SidebarConversationDropDelegate(
+            conversationId: conv.id,
+            appState: appState,
+            draggedId: $draggedId,
+            dropTargetId: $dropTargetId,
+            dropTargetIsAbove: $dropTargetIsAbove,
+            onReorder: onReorder
+        ))
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             // Toggle header
@@ -1059,56 +1141,25 @@ struct SidebarConversationList: View {
             if showList {
                 ScrollView(.vertical, showsIndicators: false) {
                     LazyVStack(spacing: 2) {
-                        ForEach(conversations) { conv in
-                            VStack(spacing: 0) {
-                                // Drop indicator above
-                                if isCustomSort,
-                                   dropTargetId == conv.id,
-                                   dropTargetIsAbove {
-                                    Rectangle()
-                                        .fill(AppTheme.accent)
-                                        .frame(height: 2)
-                                        .padding(.horizontal, 4)
-                                        .transition(.opacity)
-                                }
+                        if shouldGroupByDate {
+                            let grouped = groupConversationsByDate(conversations)
+                            ForEach(Array(grouped.enumerated()), id: \.element.title) { _, group in
+                                Text(group.title)
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .foregroundColor(AppTheme.textMuted)
+                                    .padding(.horizontal, 16)
+                                    .padding(.top, 8)
+                                    .padding(.bottom, 2)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
 
-                                SidebarConversationRow(
-                                    conv: conv,
-                                    isActive: activeConversationId == conv.id,
-                                    isHovered: hoveredId == conv.id,
-                                    showDragHandle: isCustomSort && hoveredId == conv.id,
-                                    onSelect: { onSelect(conv) }
-                                )
-                                .onHover { hovering in
-                                    withAnimation(.easeOut(duration: 0.1)) {
-                                        hoveredId = hovering ? conv.id : nil
-                                    }
-                                }
-
-                                // Drop indicator below
-                                if isCustomSort,
-                                   dropTargetId == conv.id,
-                                   !dropTargetIsAbove {
-                                    Rectangle()
-                                        .fill(AppTheme.accent)
-                                        .frame(height: 2)
-                                        .padding(.horizontal, 4)
-                                        .transition(.opacity)
+                                ForEach(group.conversations) { conv in
+                                    conversationRow(conv)
                                 }
                             }
-                            .onDrag {
-                                guard isCustomSort else { return NSItemProvider() }
-                                draggedId = conv.id
-                                return NSItemProvider(object: conv.id as NSString)
+                        } else {
+                            ForEach(conversations) { conv in
+                                conversationRow(conv)
                             }
-                            .onDrop(of: [UTType.text], delegate: SidebarConversationDropDelegate(
-                                conversationId: conv.id,
-                                appState: appState,
-                                draggedId: $draggedId,
-                                dropTargetId: $dropTargetId,
-                                dropTargetIsAbove: $dropTargetIsAbove,
-                                onReorder: onReorder
-                            ))
                         }
                     }
                     .padding(.vertical, 4)

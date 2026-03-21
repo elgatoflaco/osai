@@ -17,7 +17,7 @@ enum ToolCategory: String, CaseIterable {
     case applescript    // run_applescript
     case adaptive       // adaptive_stats, ui_cache_lookup, clear_ui_cache
     case claudeCode     // claude_code
-    case apps           // list_apps, get_frontmost_app, activate_app, open_app, calendar_control, reminders_control
+    case apps           // list_apps, get_frontmost_app, activate_app, open_app, calendar_control, reminders_control, contacts_lookup, imessage_send, notes_control, timer_control
     case files          // list_directory, file_info, read_clipboard, write_clipboard
     case system         // system_info, notify, web_search, process_manager, network_info, battery_info, media_control
 }
@@ -93,7 +93,7 @@ struct ToolDefinitions {
         map["claude_code"] = .claudeCode
 
         // Apps
-        for name in ["list_apps", "get_frontmost_app", "activate_app", "open_app", "calendar_control", "reminders_control"] {
+        for name in ["list_apps", "get_frontmost_app", "activate_app", "open_app", "calendar_control", "reminders_control", "contacts_lookup", "imessage_send", "notes_control", "timer_control"] {
             map[name] = .apps
         }
 
@@ -468,6 +468,70 @@ struct ToolDefinitions {
                     "list_name": PropertySchema(type: "string", description: "Reminders list name (default: Reminders)", enumValues: nil),
                     "due_date": PropertySchema(type: "string", description: "Due date in ISO 8601 format (for create)", enumValues: nil),
                     "notes": PropertySchema(type: "string", description: "Reminder notes (for create)", enumValues: nil)
+                ],
+                required: ["action"]
+            )
+        ),
+
+        // --- Contacts Lookup ---
+        ClaudeTool(
+            name: "contacts_lookup",
+            description: "Search and read macOS Contacts via AppleScript. Search by name or get full details for a contact.",
+            inputSchema: InputSchema(
+                type: "object",
+                properties: [
+                    "action": PropertySchema(type: "string", description: "Action to perform", enumValues: ["search", "get_details"]),
+                    "query": PropertySchema(type: "string", description: "Name to search for (for search action)", enumValues: nil),
+                    "contact_id": PropertySchema(type: "string", description: "Contact name to get full details for (for get_details action)", enumValues: nil)
+                ],
+                required: ["action"]
+            )
+        ),
+
+        // --- iMessage Send ---
+        ClaudeTool(
+            name: "imessage_send",
+            description: "Send iMessages or read recent messages via AppleScript.",
+            inputSchema: InputSchema(
+                type: "object",
+                properties: [
+                    "action": PropertySchema(type: "string", description: "Action to perform", enumValues: ["send", "read_recent"]),
+                    "recipient": PropertySchema(type: "string", description: "Phone number or email of recipient (for send)", enumValues: nil),
+                    "message": PropertySchema(type: "string", description: "Message text to send (for send)", enumValues: nil),
+                    "count": PropertySchema(type: "integer", description: "Number of recent messages to read (default: 5, for read_recent)", enumValues: nil)
+                ],
+                required: ["action"]
+            )
+        ),
+
+        // --- Notes Control ---
+        ClaudeTool(
+            name: "notes_control",
+            description: "Control macOS Notes app: list folders, list/read/create/append/search notes.",
+            inputSchema: InputSchema(
+                type: "object",
+                properties: [
+                    "action": PropertySchema(type: "string", description: "Action to perform", enumValues: ["list_folders", "list_notes", "read_note", "create_note", "append_note", "search"]),
+                    "folder": PropertySchema(type: "string", description: "Folder name (default: Notes)", enumValues: nil),
+                    "title": PropertySchema(type: "string", description: "Note title (for read_note, create_note, append_note)", enumValues: nil),
+                    "content": PropertySchema(type: "string", description: "Note content/body (for create_note, append_note)", enumValues: nil),
+                    "query": PropertySchema(type: "string", description: "Search query (for search action)", enumValues: nil)
+                ],
+                required: ["action"]
+            )
+        ),
+
+        // --- Timer Control ---
+        ClaudeTool(
+            name: "timer_control",
+            description: "Set timers, alarms, and stopwatch. Timers and alarms show a macOS notification when done.",
+            inputSchema: InputSchema(
+                type: "object",
+                properties: [
+                    "action": PropertySchema(type: "string", description: "Action to perform", enumValues: ["set_timer", "set_alarm", "stopwatch_start", "stopwatch_stop"]),
+                    "seconds": PropertySchema(type: "integer", description: "Timer duration in seconds (for set_timer)", enumValues: nil),
+                    "time": PropertySchema(type: "string", description: "Alarm time in HH:MM 24h format (for set_alarm)", enumValues: nil),
+                    "label": PropertySchema(type: "string", description: "Optional label for the timer/alarm", enumValues: nil)
                 ],
                 required: ["action"]
             )
