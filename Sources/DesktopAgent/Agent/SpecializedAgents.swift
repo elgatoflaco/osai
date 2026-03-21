@@ -55,136 +55,112 @@ final class AgentRegistry {
     struct RouteResult {
         let agent: SpecializedAgentDef
         let score: Double
-        let matchType: MatchType  // how we matched
+        let matchType: MatchType
         let reason: String
 
         enum MatchType: String {
-            case exact      // trigger keyword matched
-            case fuzzy      // fuzzy/levenshtein match
-            case intent     // matched via IntentAnalyzer category
+            case ai         // AI model chose the agent
             case fallback   // no match, using general assistant
         }
     }
 
-    /// Find the best matching agent for a user input using fuzzy matching + intent fallback
+    /// AI-powered routing: ask the model which agent is best for this task.
+    /// Falls back to nil (general assistant) if the AI call fails or no agents are configured.
     static func route(input: String) -> RouteResult? {
         let agents = loadAll()
+        guard !agents.isEmpty else { return nil }
 
-        let normalized = normalizeText(input)
-        let inputWords = normalized.split(separator: " ").map(String.init)
+        // Build the agent catalog for the prompt
+        let agentList = agents.enumerated().map { (i, a) in
+            "\(i + 1). **\(a.name)**: \(a.description)"
+        }.joined(separator: "\n")
 
-        // Log to file for debugging
-        let debugLines = agents.map { "  \($0.name): triggers=\($0.triggers)" }.joined(separator: "\n")
-        let debugMsg = "[ROUTE-DETAIL] normalized='\(normalized)' words=\(inputWords)\n\(debugLines)\n"
-        if let data = debugMsg.data(using: .utf8) {
+        let prompt = """
+        You are a router. Given the user's message, decide which specialist agent should handle it.
+
+        Available agents:
+        \(agentList)
+
+        User message: "\(String(input.prefix(500)))"
+
+        Rules:
+        - Pick the SINGLE best agent, or "none" if the general assistant is better.
+        - If the task involves multiple domains (e.g. "check news and send via WhatsApp"), pick the agent for the PRIMARY task.
+        - Respond with ONLY a JSON object: {"agent": "name", "reason": "brief explanation"}
+        - Use "none" as agent name if no specialist fits.
+        """
+
+        // Synchronous wrapper for async AI call (routing must be sync in current architecture)
+        let config = AgentConfig.load()
+        guard !config.apiKey.isEmpty else {
+            logRoute(input: input, result: "no-api-key", agents: agents)
+            return nil
+        }
+
+        let client = AIClient(
+            apiKey: config.apiKey,
+            model: config.model,
+            maxTokens: 150,
+            baseURL: config.baseURL,
+            format: config.apiFormat,
+            authType: config.authType
+        )
+
+        var routeResult: RouteResult? = nil
+        let semaphore = DispatchSemaphore(value: 0)
+
+        Task {
+            defer { semaphore.signal() }
+            do {
+                let messages = [ClaudeMessage(role: "user", content: [.text(prompt)])]
+                let response = try await client.sendMessage(messages: messages, system: "You are a router that outputs JSON only. No explanation, no markdown, just {\"agent\":\"name\",\"reason\":\"why\"}.", tools: nil)
+
+                let responseText: String? = response.content.compactMap { if case .text(let t) = $0 { return t } else { return nil } }.first
+                if let text = responseText {
+                    // Parse JSON response — handle markdown-wrapped JSON too
+                    let cleaned = text
+                        .replacingOccurrences(of: "```json", with: "")
+                        .replacingOccurrences(of: "```", with: "")
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+
+                    if let data = cleaned.data(using: .utf8),
+                       let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                       let agentName = json["agent"] as? String,
+                       agentName != "none" {
+                        let reason = json["reason"] as? String ?? ""
+                        if let agent = agents.first(where: { $0.name.lowercased() == agentName.lowercased() }) {
+                            routeResult = RouteResult(agent: agent, score: 1.0, matchType: .ai, reason: reason)
+                        }
+                    }
+                }
+            } catch {
+                // AI call failed — fall through to nil (general assistant)
+            }
+        }
+
+        // Wait max 8 seconds for routing decision
+        let timeout = semaphore.wait(timeout: .now() + 8)
+        if timeout == .timedOut {
+            logRoute(input: input, result: "timeout", agents: agents)
+            return nil
+        }
+
+        logRoute(input: input, result: routeResult?.agent.name ?? "none", agents: agents)
+        return routeResult
+    }
+
+    /// Log routing decision to file for debugging
+    private static func logRoute(input: String, result: String, agents: [SpecializedAgentDef]) {
+        let agentNames = agents.map { $0.name }.joined(separator: ", ")
+        let logMsg = "[ROUTE-AI] input='\(String(input.prefix(80)))' result=\(result) agents=[\(agentNames)]\n"
+        if let data = logMsg.data(using: .utf8) {
             let logPath = NSHomeDirectory() + "/.desktop-agent/routing.log"
-            if let fh = FileHandle(forWritingAtPath: logPath) { fh.seekToEndOfFile(); fh.write(data); fh.closeFile() }
-            else { FileManager.default.createFile(atPath: logPath, contents: data) }
-        }
-
-        // Score each agent by trigger match count + earliest position in input
-        var bestAgent: SpecializedAgentDef? = nil
-        var bestScore: Double = 0
-        var bestPosition: Int = Int.max  // lower = earlier in input = higher priority
-        var bestReason = ""
-        var bestMatchType: RouteResult.MatchType = .exact
-
-        for agent in agents {
-            var score: Double = 0
-            var earliestPosition: Int = Int.max
-            var matchedTriggers: [String] = []
-            var fuzzyTriggers: [String] = []
-
-            for trigger in agent.triggers {
-                let normTrigger = normalizeText(trigger)
-                let triggerWords = normTrigger.split(separator: " ").map(String.init)
-
-                // Multi-word triggers: check if all words appear in input as whole words
-                if triggerWords.count > 1 {
-                    let allFound = triggerWords.allSatisfy { tw in
-                        inputWords.contains(where: { $0 == tw })
-                    }
-                    if allFound {
-                        score += 1
-                        matchedTriggers.append(trigger)
-                        // Track earliest position of first trigger word
-                        if let pos = inputWords.firstIndex(where: { triggerWords.contains($0) }) {
-                            earliestPosition = min(earliestPosition, pos)
-                        }
-                        continue
-                    }
-                } else {
-                    // Single-word trigger: match as whole word
-                    if let pos = inputWords.firstIndex(of: normTrigger) {
-                        score += 1
-                        matchedTriggers.append(trigger)
-                        earliestPosition = min(earliestPosition, pos)
-                        continue
-                    }
-                }
-
-                // Fuzzy matching: only for triggers longer than 4 chars, Levenshtein distance ≤ 2
-                if normTrigger.count > 4 {
-                    for (wordIdx, word) in inputWords.enumerated() {
-                        if word.count > 4 && levenshteinDistance(word, normTrigger) <= 2 {
-                            score += 0.5
-                            fuzzyTriggers.append("\(trigger)~\(word)")
-                            earliestPosition = min(earliestPosition, wordIdx)
-                            break
-                        }
-                    }
-                }
-            }
-
-            // Prefer: higher score, then earlier position in input (tiebreaker)
-            let isBetter = score > bestScore || (score == bestScore && earliestPosition < bestPosition)
-            if isBetter && score > 0 {
-                bestScore = score
-                bestPosition = earliestPosition
-                bestAgent = agent
-                var parts: [String] = []
-                if !matchedTriggers.isEmpty { parts.append("exact: \(matchedTriggers.joined(separator: ", "))") }
-                if !fuzzyTriggers.isEmpty { parts.append("fuzzy: \(fuzzyTriggers.joined(separator: ", "))") }
-                bestReason = parts.joined(separator: " | ")
-                bestMatchType = matchedTriggers.isEmpty ? .fuzzy : .exact
+            if FileManager.default.fileExists(atPath: logPath) {
+                if let fh = FileHandle(forWritingAtPath: logPath) { fh.seekToEndOfFile(); fh.write(data); fh.closeFile() }
+            } else {
+                FileManager.default.createFile(atPath: logPath, contents: data)
             }
         }
-
-        // Direct match (score >= 1.0)
-        if bestScore >= 1.0, let agent = bestAgent {
-            return RouteResult(agent: agent, score: bestScore, matchType: bestMatchType, reason: bestReason)
-        }
-
-        // Fuzzy match with lower threshold (score > 0 but < 1.0)
-        if bestScore > 0, let agent = bestAgent {
-            return RouteResult(agent: agent, score: bestScore, matchType: .fuzzy, reason: bestReason)
-        }
-
-        // Intent-based fallback: map ToolCategory to likely agents
-        if !agents.isEmpty {
-            let toolCategories = IntentAnalyzer.requiredToolCategories(for: input)
-            let categoryToAgent: [ToolCategory: [String]] = [
-                .email: ["writer", "organizer"],
-                .scheduling: ["organizer"],
-                .web: ["research", "news"],
-                .gui: ["design"],
-                .config: ["code"],
-            ]
-            // Only trigger intent fallback if we detected non-core categories
-            let nonCore = toolCategories.subtracting([.core])
-            for cat in nonCore {
-                if let agentNames = categoryToAgent[cat] {
-                    for name in agentNames {
-                        if let agent = agents.first(where: { $0.name == name }) {
-                            return RouteResult(agent: agent, score: 0.3, matchType: .intent, reason: "intent: \(cat.rawValue)")
-                        }
-                    }
-                }
-            }
-        }
-
-        // No match at all — caller handles fallback
-        return nil
     }
 
     // MARK: - Text Normalization & Fuzzy Matching

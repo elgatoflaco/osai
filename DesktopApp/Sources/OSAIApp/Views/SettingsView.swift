@@ -441,19 +441,21 @@ struct SettingsView: View {
                             HStack {
                                 Image(systemName: gw.icon)
                                     .font(.system(size: 14))
-                                    .foregroundColor(AppTheme.textSecondary)
+                                    .foregroundColor(gw.enabled ? AppTheme.textSecondary : AppTheme.textMuted)
                                     .frame(width: 20)
                                 Text(name.capitalized)
                                     .font(AppTheme.fontBody)
-                                    .foregroundColor(AppTheme.textPrimary)
+                                    .foregroundColor(gw.enabled ? AppTheme.textPrimary : AppTheme.textMuted)
                                 Spacer()
-                                Text(gw.enabled ? "Enabled" : "Disabled")
-                                    .font(.system(size: 11, weight: .medium))
-                                    .foregroundColor(gw.enabled ? AppTheme.success : AppTheme.textMuted)
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 3)
-                                    .background((gw.enabled ? AppTheme.success : AppTheme.textMuted).opacity(0.1))
-                                    .clipShape(Capsule())
+                                Toggle("", isOn: Binding(
+                                    get: { gw.enabled },
+                                    set: { newValue in
+                                        appState.setGatewayEnabled(name: name, enabled: newValue)
+                                    }
+                                ))
+                                .toggleStyle(.switch)
+                                .labelsHidden()
+                                .tint(AppTheme.success)
                             }
                         }
                     }

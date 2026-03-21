@@ -413,6 +413,106 @@ final class ToolExecutor {
             return (ToolResult(success: true, output: "No results found for: \(query)", screenshot: nil), nil)
         }
 
+        // --- System Control ---
+        handlers["system_control"] = { exe, input in
+            let action = input["action"]?.stringValue ?? ""
+            let value = input["value"]?.intValue
+
+            switch action {
+            case "set_volume":
+                let vol = min(max(value ?? 50, 0), 100)
+                let result = exe.shell.execute(command: "osascript -e 'set volume output volume \(vol)'", timeout: 5)
+                return (result.success
+                    ? ToolResult(success: true, output: "Volume set to \(vol)%", screenshot: nil)
+                    : result, nil)
+
+            case "toggle_wifi":
+                // Determine current state and toggle
+                let statusResult = exe.shell.execute(command: "networksetup -getairportpower en0 2>/dev/null", timeout: 5)
+                let isOn = statusResult.output.lowercased().contains("on")
+                let newState = isOn ? "off" : "on"
+                let result = exe.shell.execute(command: "networksetup -setairportpower en0 \(newState)", timeout: 10)
+                return (result.success
+                    ? ToolResult(success: true, output: "WiFi turned \(newState)", screenshot: nil)
+                    : result, nil)
+
+            case "toggle_bluetooth":
+                // Try blueutil first, fall back to defaults
+                let statusResult = exe.shell.execute(command: "blueutil --power 2>/dev/null", timeout: 5)
+                if statusResult.success {
+                    let isOn = statusResult.output.trimmingCharacters(in: .whitespacesAndNewlines) == "1"
+                    let newState = isOn ? "0" : "1"
+                    let result = exe.shell.execute(command: "blueutil --power \(newState)", timeout: 5)
+                    return (result.success
+                        ? ToolResult(success: true, output: "Bluetooth turned \(isOn ? "off" : "on")", screenshot: nil)
+                        : result, nil)
+                } else {
+                    // Fallback: use AppleScript to open Bluetooth preferences
+                    let result = exe.shell.execute(command: "open 'x-apple.systempreferences:com.apple.BluetoothSettings'", timeout: 5)
+                    return (ToolResult(success: result.success, output: result.success
+                        ? "Opened Bluetooth settings (install `blueutil` via Homebrew for direct toggle)"
+                        : "Failed to toggle Bluetooth. Install blueutil: brew install blueutil", screenshot: nil), nil)
+                }
+
+            case "toggle_dnd":
+                // Try Shortcuts first, fall back to Focus menu
+                let result = exe.shell.execute(command: "shortcuts run 'Toggle Do Not Disturb' 2>/dev/null", timeout: 10)
+                if result.success {
+                    return (ToolResult(success: true, output: "Do Not Disturb toggled", screenshot: nil), nil)
+                }
+                // Fallback: use AppleScript to toggle via Control Center
+                let fallback = exe.shell.execute(command: "osascript -e 'tell application \"System Events\" to tell process \"ControlCenter\" to click menu bar item \"Focus\" of menu bar 1' 2>/dev/null", timeout: 5)
+                return (ToolResult(success: fallback.success, output: fallback.success
+                    ? "Do Not Disturb toggled via Control Center"
+                    : "Failed to toggle DND. Create a Shortcut named 'Toggle Do Not Disturb' for reliable toggling.", screenshot: nil), nil)
+
+            case "set_brightness":
+                let brightness = min(max(value ?? 50, 0), 100)
+                let normalized = Double(brightness) / 100.0
+                // Try brightness CLI first
+                let result = exe.shell.execute(command: "brightness \(normalized) 2>/dev/null", timeout: 5)
+                if result.success {
+                    return (ToolResult(success: true, output: "Brightness set to \(brightness)%", screenshot: nil), nil)
+                }
+                // Fallback: AppleScript via System Events
+                let asResult = exe.shell.execute(command: "osascript -e 'tell application \"System Preferences\" to quit' -e 'delay 0.5' -e 'do shell script \"brightness \(normalized)\"' 2>/dev/null || echo 'Install brightness: brew install brightness'", timeout: 10)
+                return (ToolResult(success: asResult.success, output: asResult.success
+                    ? "Brightness set to \(brightness)%"
+                    : "Failed to set brightness. Install: brew install brightness", screenshot: nil), nil)
+
+            case "toggle_dark_mode":
+                let result = exe.shell.execute(command: "osascript -e 'tell application \"System Events\" to tell appearance preferences to set dark mode to not dark mode'", timeout: 5)
+                if result.success {
+                    // Read current state after toggle
+                    let stateResult = exe.shell.execute(command: "osascript -e 'tell application \"System Events\" to tell appearance preferences to get dark mode'", timeout: 5)
+                    let mode = stateResult.output.trimmingCharacters(in: .whitespacesAndNewlines) == "true" ? "Dark" : "Light"
+                    return (ToolResult(success: true, output: "\(mode) mode activated", screenshot: nil), nil)
+                }
+                return (result, nil)
+
+            case "lock_screen":
+                let result = exe.shell.execute(command: "/System/Library/CoreServices/Menu\\ Extras/User.menu/Contents/Resources/CGSession -suspend", timeout: 5)
+                return (result.success
+                    ? ToolResult(success: true, output: "Screen locked", screenshot: nil)
+                    : result, nil)
+
+            case "empty_trash":
+                let result = exe.shell.execute(command: "osascript -e 'tell application \"Finder\" to empty trash'", timeout: 15)
+                return (result.success
+                    ? ToolResult(success: true, output: "Trash emptied", screenshot: nil)
+                    : result, nil)
+
+            case "sleep_display":
+                let result = exe.shell.execute(command: "pmset displaysleepnow", timeout: 5)
+                return (result.success
+                    ? ToolResult(success: true, output: "Display going to sleep", screenshot: nil)
+                    : result, nil)
+
+            default:
+                return (ToolResult(success: false, output: "Unknown system_control action: \(action). Valid actions: set_volume, toggle_wifi, toggle_bluetooth, toggle_dnd, set_brightness, toggle_dark_mode, lock_screen, empty_trash, sleep_display", screenshot: nil), nil)
+            }
+        }
+
         // --- Email (via gws CLI) ---
         handlers["send_email"] = { exe, input in
             let to = input["to"]?.stringValue ?? ""

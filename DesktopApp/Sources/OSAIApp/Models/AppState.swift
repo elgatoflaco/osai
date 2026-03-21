@@ -4659,6 +4659,11 @@ class AppState: ObservableObject {
         return Array(suggestions.prefix(3))
     }
 
+    func setGatewayEnabled(name: String, enabled: Bool) {
+        configService.toggleGateway(name, enabled: enabled)
+        config.gateways[name] = GatewayConfig(name: name, enabled: enabled)
+    }
+
     func toggleGateway() {
         let wasRunning = gatewayRunning
         Task {

@@ -103,7 +103,7 @@ struct ToolDefinitions {
         }
 
         // System
-        for name in ["system_info", "notify", "web_search"] {
+        for name in ["system_info", "notify", "web_search", "system_control"] {
             map[name] = .system
         }
 
@@ -746,6 +746,20 @@ struct ToolDefinitions {
                     "max_results": PropertySchema(type: "integer", description: "Maximum number of results to return (default: 10)", enumValues: nil)
                 ],
                 required: ["query"]
+            )
+        ),
+
+        // --- System Control ---
+        ClaudeTool(
+            name: "system_control",
+            description: "Control macOS system settings: volume, WiFi, Bluetooth, Do Not Disturb, brightness, dark mode, lock screen, empty trash, sleep display.",
+            inputSchema: InputSchema(
+                type: "object",
+                properties: [
+                    "action": PropertySchema(type: "string", description: "System action to perform", enumValues: ["set_volume", "toggle_wifi", "toggle_bluetooth", "toggle_dnd", "set_brightness", "toggle_dark_mode", "lock_screen", "empty_trash", "sleep_display"]),
+                    "value": PropertySchema(type: "integer", description: "Value for set_volume (0-100) or set_brightness (0-100)", enumValues: nil)
+                ],
+                required: ["action"]
             )
         ),
 
