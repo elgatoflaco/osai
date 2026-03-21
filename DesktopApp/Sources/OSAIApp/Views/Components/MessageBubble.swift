@@ -1953,6 +1953,25 @@ struct MessageBubble: View {
                                 .accessibilityHint("Double tap to regenerate this response")
                             }
 
+                            if let onBranch = onBranch {
+                                Button(action: onBranch) {
+                                    HStack(spacing: 3) {
+                                        Image(systemName: "arrow.triangle.branch").font(.system(size: 9))
+                                        Text("Branch").font(.system(size: 9))
+                                    }
+                                    .foregroundColor(AppTheme.textMuted)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 3)
+                                    .background(AppTheme.bgCard.opacity(0.9))
+                                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(AppTheme.borderGlass, lineWidth: 0.5))
+                                }
+                                .buttonStyle(.plain)
+                                .transition(.opacity)
+                                .accessibilityLabel("Branch conversation from this message")
+                                .accessibilityHint("Double tap to create a new conversation branch")
+                            }
+
                             replyActionButton
 
                             if onAnnotate != nil && message.annotation == nil {

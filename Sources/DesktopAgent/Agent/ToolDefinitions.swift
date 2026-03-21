@@ -19,7 +19,7 @@ enum ToolCategory: String, CaseIterable {
     case claudeCode     // claude_code
     case apps           // list_apps, get_frontmost_app, activate_app, open_app
     case files          // list_directory, file_info, read_clipboard, write_clipboard
-    case system         // system_info, notify, web_search
+    case system         // system_info, notify, web_search, process_manager, network_info, battery_info
 }
 
 // MARK: - Tool Definitions for Claude
@@ -103,7 +103,7 @@ struct ToolDefinitions {
         }
 
         // System
-        for name in ["system_info", "notify", "web_search", "system_control"] {
+        for name in ["system_info", "notify", "web_search", "system_control", "process_manager", "network_info", "battery_info"] {
             map[name] = .system
         }
 
@@ -805,6 +805,45 @@ struct ToolDefinitions {
                     "value": PropertySchema(type: "integer", description: "Value for set_volume (0-100) or set_brightness (0-100)", enumValues: nil)
                 ],
                 required: ["action"]
+            )
+        ),
+
+        // --- Process Manager ---
+        ClaudeTool(
+            name: "process_manager",
+            description: "Manage macOS processes: list top CPU consumers, kill/launch/quit apps, get process info, check CPU/memory/disk usage.",
+            inputSchema: InputSchema(
+                type: "object",
+                properties: [
+                    "action": PropertySchema(type: "string", description: "Action to perform", enumValues: ["list", "kill", "launch", "quit", "info", "cpu_usage", "disk_usage"]),
+                    "target": PropertySchema(type: "string", description: "App name or PID (required for kill, launch, quit, info)", enumValues: nil)
+                ],
+                required: ["action"]
+            )
+        ),
+
+        // --- Network Info ---
+        ClaudeTool(
+            name: "network_info",
+            description: "Get network information: connection status, public/local IP, WiFi name, DNS servers, ping, or a quick download speed test.",
+            inputSchema: InputSchema(
+                type: "object",
+                properties: [
+                    "action": PropertySchema(type: "string", description: "What network info to retrieve", enumValues: ["status", "ip", "wifi_name", "speed_test", "dns", "ping"]),
+                    "target": PropertySchema(type: "string", description: "Host to ping (default: google.com)", enumValues: nil)
+                ],
+                required: ["action"]
+            )
+        ),
+
+        // --- Battery Info ---
+        ClaudeTool(
+            name: "battery_info",
+            description: "Get battery and power information: percentage, charging status, and time remaining.",
+            inputSchema: InputSchema(
+                type: "object",
+                properties: [:],
+                required: nil
             )
         ),
 

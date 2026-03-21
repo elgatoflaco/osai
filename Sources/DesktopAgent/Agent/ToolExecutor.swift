@@ -769,6 +769,173 @@ final class ToolExecutor {
             }
         }
 
+        // --- Process Manager ---
+        handlers["process_manager"] = { exe, input in
+            let action = input["action"]?.stringValue ?? ""
+            let target = input["target"]?.stringValue ?? ""
+
+            switch action {
+            case "list":
+                let result = exe.shell.execute(command: "ps aux --sort=-%cpu | head -21", timeout: 10)
+                return (result.success
+                    ? ToolResult(success: true, output: result.output, screenshot: nil)
+                    : result, nil)
+
+            case "kill":
+                guard !target.isEmpty else {
+                    return (ToolResult(success: false, output: "Missing 'target': provide a process name or PID to kill", screenshot: nil), nil)
+                }
+                // If target is numeric, use kill; otherwise use killall
+                let command: String
+                if target.allSatisfy({ $0.isNumber }) {
+                    command = "kill \(target)"
+                } else {
+                    command = "killall \(target)"
+                }
+                let result = exe.shell.execute(command: command, timeout: 10)
+                return (result.success
+                    ? ToolResult(success: true, output: "Process '\(target)' killed", screenshot: nil)
+                    : result, nil)
+
+            case "launch":
+                guard !target.isEmpty else {
+                    return (ToolResult(success: false, output: "Missing 'target': provide an app name to launch", screenshot: nil), nil)
+                }
+                let result = exe.shell.execute(command: "open -a \"\(target)\"", timeout: 15)
+                return (result.success
+                    ? ToolResult(success: true, output: "Launched '\(target)'", screenshot: nil)
+                    : result, nil)
+
+            case "quit":
+                guard !target.isEmpty else {
+                    return (ToolResult(success: false, output: "Missing 'target': provide an app name to quit", screenshot: nil), nil)
+                }
+                let escaped = target.replacingOccurrences(of: "\"", with: "\\\"")
+                let result = exe.shell.execute(command: "osascript -e 'tell application \"\(escaped)\" to quit'", timeout: 10)
+                return (result.success
+                    ? ToolResult(success: true, output: "Quit '\(target)'", screenshot: nil)
+                    : result, nil)
+
+            case "info":
+                guard !target.isEmpty else {
+                    return (ToolResult(success: false, output: "Missing 'target': provide a process name or PID", screenshot: nil), nil)
+                }
+                let escaped = target.replacingOccurrences(of: "'", with: "'\\''")
+                let result = exe.shell.execute(command: "ps aux | grep -i '\(escaped)' | grep -v grep", timeout: 10)
+                return (result.success
+                    ? ToolResult(success: true, output: result.output.isEmpty ? "No matching processes found for '\(target)'" : result.output, screenshot: nil)
+                    : result, nil)
+
+            case "cpu_usage":
+                let result = exe.shell.execute(command: "top -l 1 -s 0 | head -12", timeout: 15)
+                return (result.success
+                    ? ToolResult(success: true, output: result.output, screenshot: nil)
+                    : result, nil)
+
+            case "disk_usage":
+                let result = exe.shell.execute(command: "df -h /", timeout: 10)
+                return (result.success
+                    ? ToolResult(success: true, output: result.output, screenshot: nil)
+                    : result, nil)
+
+            default:
+                return (ToolResult(success: false, output: "Unknown process_manager action: \(action). Valid actions: list, kill, launch, quit, info, cpu_usage, disk_usage", screenshot: nil), nil)
+            }
+        }
+
+        // --- Network Info ---
+        handlers["network_info"] = { exe, input in
+            let action = input["action"]?.stringValue ?? "status"
+            switch action {
+            case "status":
+                let ports = exe.shell.execute(command: "networksetup -listallhardwareports", timeout: 10)
+                // Check which interfaces are active
+                let active = exe.shell.execute(command: "ifconfig | grep -E '^[a-z]|inet ' | grep -B1 'inet ' | grep -E '^[a-z]' | cut -d: -f1", timeout: 5)
+                var output = "Hardware Ports:\n\(ports.output)\n\nActive Interfaces: \(active.output.trimmingCharacters(in: .whitespacesAndNewlines))"
+                return (ToolResult(success: true, output: output, screenshot: nil), nil)
+
+            case "ip":
+                let publicIP = exe.shell.execute(command: "curl -s --connect-timeout 5 ifconfig.me", timeout: 10)
+                let localIP = exe.shell.execute(command: "ipconfig getifaddr en0 2>/dev/null || echo 'N/A'", timeout: 5)
+                let output = "Public IP: \(publicIP.output.trimmingCharacters(in: .whitespacesAndNewlines))\nLocal IP: \(localIP.output.trimmingCharacters(in: .whitespacesAndNewlines))"
+                return (ToolResult(success: true, output: output, screenshot: nil), nil)
+
+            case "wifi_name":
+                let wifi = exe.shell.execute(command: "networksetup -getairportnetwork en0 2>/dev/null || echo 'WiFi not available'", timeout: 5)
+                let name = wifi.output.replacingOccurrences(of: "Current Wi-Fi Network: ", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
+                return (ToolResult(success: true, output: "WiFi Network: \(name)", screenshot: nil), nil)
+
+            case "dns":
+                let dns = exe.shell.execute(command: "scutil --dns | grep 'nameserver\\[' | head -5", timeout: 5)
+                let output = dns.output.trimmingCharacters(in: .whitespacesAndNewlines)
+                return (ToolResult(success: true, output: output.isEmpty ? "No DNS servers found" : "DNS Servers:\n\(output)", screenshot: nil), nil)
+
+            case "ping":
+                let target = input["target"]?.stringValue ?? "google.com"
+                let safeTarget = target.replacingOccurrences(of: "'", with: "'\\''")
+                let ping = exe.shell.execute(command: "ping -c 3 '\(safeTarget)'", timeout: 15)
+                return (ToolResult(success: ping.success, output: ping.output, screenshot: nil), nil)
+
+            case "speed_test":
+                let speed = exe.shell.execute(command: "curl -o /dev/null -s -w 'Download speed: %{speed_download} bytes/sec\\nTotal time: %{time_total}s\\nSize downloaded: %{size_download} bytes' http://speedtest.tele2.net/1MB.zip", timeout: 30)
+                return (ToolResult(success: speed.success, output: speed.output, screenshot: nil), nil)
+
+            default:
+                return (ToolResult(success: false, output: "Unknown network_info action: \(action). Valid actions: status, ip, wifi_name, speed_test, dns, ping", screenshot: nil), nil)
+            }
+        }
+
+        // --- Battery Info ---
+        handlers["battery_info"] = { exe, input in
+            let batt = exe.shell.execute(command: "pmset -g batt", timeout: 5)
+            let raw = batt.output.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard batt.success, !raw.isEmpty else {
+                return (ToolResult(success: false, output: "Could not retrieve battery info (this Mac may not have a battery)", screenshot: nil), nil)
+            }
+            // Parse: extract percentage, source, and time remaining
+            var percentage = "N/A"
+            var source = "Unknown"
+            var timeRemaining = "N/A"
+            var charging = "N/A"
+
+            // Source line: "Now drawing from 'Battery Power'" or "'AC Power'"
+            if raw.contains("'AC Power'") {
+                source = "AC Power"
+            } else if raw.contains("'Battery Power'") {
+                source = "Battery Power"
+            }
+
+            // Battery line like: "-InternalBattery-0 (id=...)	85%; charging; 1:30 remaining"
+            let lines = raw.components(separatedBy: "\n")
+            for line in lines {
+                if line.contains("InternalBattery") || line.contains("%") {
+                    // Extract percentage
+                    if let range = line.range(of: #"(\d+)%"#, options: .regularExpression) {
+                        percentage = String(line[range])
+                    }
+                    // Extract charging status
+                    if line.contains("charging") && !line.contains("not charging") && !line.contains("discharging") {
+                        charging = "Charging"
+                    } else if line.contains("discharging") {
+                        charging = "Discharging"
+                    } else if line.contains("not charging") {
+                        charging = "Not Charging"
+                    } else if line.contains("charged") {
+                        charging = "Fully Charged"
+                    }
+                    // Extract time remaining
+                    if let range = line.range(of: #"\d+:\d+ remaining"#, options: .regularExpression) {
+                        timeRemaining = String(line[range])
+                    } else if line.contains("(no estimate)") {
+                        timeRemaining = "Calculating..."
+                    }
+                }
+            }
+
+            let output = "Battery: \(percentage), \(charging), Source: \(source), Time: \(timeRemaining)"
+            return (ToolResult(success: true, output: output, screenshot: nil), nil)
+        }
+
         // --- Email (via gws CLI) ---
         handlers["send_email"] = { exe, input in
             let to = input["to"]?.stringValue ?? ""
