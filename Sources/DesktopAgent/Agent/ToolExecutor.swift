@@ -1039,6 +1039,113 @@ final class ToolExecutor {
             return (ToolResult(success: true, output: output, screenshot: nil), nil)
         }
 
+        // --- Text to Speech ---
+        handlers["text_to_speech"] = { exe, input in
+            let action = input["action"]?.stringValue ?? "speak"
+
+            if action == "stop" {
+                let _ = exe.shell.execute(command: "killall say 2>/dev/null", timeout: 5)
+                return (ToolResult(success: true, output: "Speech stopped", screenshot: nil), nil)
+            }
+
+            let text = input["text"]?.stringValue ?? ""
+            guard !text.isEmpty else {
+                return (ToolResult(success: false, output: "Missing required field: text", screenshot: nil), nil)
+            }
+            let voice = input["voice"]?.stringValue
+            let rate = input["rate"]?.intValue
+
+            // Escape double quotes in text for shell
+            let safeText = text.replacingOccurrences(of: "\"", with: "\\\"")
+
+            var cmd = "say"
+            if let voice = voice, !voice.isEmpty {
+                let safeVoice = voice.replacingOccurrences(of: "\"", with: "\\\"")
+                cmd += " -v \"\(safeVoice)\""
+            }
+            if let rate = rate, rate > 0 {
+                cmd += " -r \(rate)"
+            }
+            cmd += " \"\(safeText)\" &"
+
+            let _ = exe.shell.execute(command: cmd, timeout: 5)
+            return (ToolResult(success: true, output: "Speaking: \"\(text.prefix(100))\(text.count > 100 ? "..." : "")\"", screenshot: nil), nil)
+        }
+
+        // --- System Appearance ---
+        handlers["system_appearance"] = { exe, input in
+            let action = input["action"]?.stringValue ?? ""
+
+            switch action {
+            case "get_wallpaper":
+                let result = exe.shell.execute(command: "osascript -e 'tell app \"System Events\" to get picture of desktop 1'", timeout: 5)
+                if result.success {
+                    let path = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
+                    return (ToolResult(success: true, output: "Current wallpaper: \(path)", screenshot: nil), nil)
+                }
+                // Fallback
+                let fallback = exe.shell.execute(command: "osascript -e 'tell app \"Finder\" to get desktop picture as alias'", timeout: 5)
+                return (fallback.success
+                    ? ToolResult(success: true, output: "Current wallpaper: \(fallback.output.trimmingCharacters(in: .whitespacesAndNewlines))", screenshot: nil)
+                    : ToolResult(success: false, output: "Failed to get wallpaper: \(fallback.output)", screenshot: nil), nil)
+
+            case "set_wallpaper":
+                let path = input["path"]?.stringValue ?? ""
+                guard !path.isEmpty else {
+                    return (ToolResult(success: false, output: "Missing required field: path (image file path)", screenshot: nil), nil)
+                }
+                let safePath = path.replacingOccurrences(of: "\"", with: "\\\"")
+                let result = exe.shell.execute(command: "osascript -e 'tell application \"Finder\" to set desktop picture to POSIX file \"\(safePath)\"'", timeout: 10)
+                return (result.success
+                    ? ToolResult(success: true, output: "Wallpaper set to: \(path)", screenshot: nil)
+                    : ToolResult(success: false, output: "Failed to set wallpaper: \(result.output)", screenshot: nil), nil)
+
+            case "list_desktops":
+                let result = exe.shell.execute(command: "osascript -e 'tell app \"System Events\" to get name of every desktop'", timeout: 5)
+                return (result.success
+                    ? ToolResult(success: true, output: "Desktops: \(result.output.trimmingCharacters(in: .whitespacesAndNewlines))", screenshot: nil)
+                    : ToolResult(success: false, output: "Failed to list desktops: \(result.output)", screenshot: nil), nil)
+
+            case "get_accent_color":
+                let result = exe.shell.execute(command: "defaults read -g AppleAccentColor 2>/dev/null", timeout: 5)
+                let raw = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
+                // Map integer to color name
+                let colorMap = ["-2": "graphite", "-1": "multicolor (default)", "0": "red", "1": "orange", "2": "yellow", "3": "green", "4": "blue", "5": "purple", "6": "pink"]
+                let colorName = colorMap[raw] ?? "multicolor (default)"
+                return (ToolResult(success: true, output: "Accent color: \(colorName) (raw: \(raw.isEmpty ? "not set" : raw))", screenshot: nil), nil)
+
+            case "set_accent_color":
+                let color = input["color"]?.stringValue?.lowercased() ?? ""
+                guard !color.isEmpty else {
+                    return (ToolResult(success: false, output: "Missing required field: color (blue/purple/pink/red/orange/yellow/green/graphite)", screenshot: nil), nil)
+                }
+                // Map color name to integer
+                let nameToInt: [String: Int] = ["red": 0, "orange": 1, "yellow": 2, "green": 3, "blue": 4, "purple": 5, "pink": 6, "graphite": -2]
+                guard let intVal = nameToInt[color] else {
+                    return (ToolResult(success: false, output: "Unknown color: \(color). Valid: blue, purple, pink, red, orange, yellow, green, graphite", screenshot: nil), nil)
+                }
+                let result = exe.shell.execute(command: "defaults write -g AppleAccentColor -int \(intVal)", timeout: 5)
+                if result.success {
+                    return (ToolResult(success: true, output: "Accent color set to \(color). Some apps may need to be restarted to reflect the change.", screenshot: nil), nil)
+                }
+                return (ToolResult(success: false, output: "Failed to set accent color: \(result.output)", screenshot: nil), nil)
+
+            case "toggle_stage_manager":
+                // Read current state
+                let stateResult = exe.shell.execute(command: "defaults read com.apple.WindowManager GloballyEnabled 2>/dev/null", timeout: 5)
+                let currentlyEnabled = stateResult.output.trimmingCharacters(in: .whitespacesAndNewlines) == "1"
+                let newState = currentlyEnabled ? "false" : "true"
+                let newLabel = currentlyEnabled ? "disabled" : "enabled"
+                let result = exe.shell.execute(command: "defaults write com.apple.WindowManager GloballyEnabled -bool \(newState) && killall Dock", timeout: 10)
+                return (result.success
+                    ? ToolResult(success: true, output: "Stage Manager \(newLabel)", screenshot: nil)
+                    : ToolResult(success: false, output: "Failed to toggle Stage Manager: \(result.output)", screenshot: nil), nil)
+
+            default:
+                return (ToolResult(success: false, output: "Unknown system_appearance action: \(action). Valid actions: get_wallpaper, set_wallpaper, list_desktops, get_accent_color, set_accent_color, toggle_stage_manager", screenshot: nil), nil)
+            }
+        }
+
         // --- Email (via gws CLI) ---
         handlers["send_email"] = { exe, input in
             let to = input["to"]?.stringValue ?? ""
@@ -1713,6 +1820,137 @@ final class ToolExecutor {
             default:
                 return (ToolResult(success: false, output: "Unknown timer_control action: \(action). Valid: set_timer, set_alarm, stopwatch_start, stopwatch_stop", screenshot: nil), nil)
             }
+        }
+
+        // --- Screen Capture (advanced) ---
+        handlers["screen_capture"] = { exe, input in
+            let action = input["action"]?.stringValue ?? ""
+            switch action {
+            case "capture_region":
+                guard let x = input["x"]?.intValue, let y = input["y"]?.intValue,
+                      let w = input["width"]?.intValue, let h = input["height"]?.intValue else {
+                    return (ToolResult(success: false, output: "capture_region requires x, y, width, height parameters", screenshot: nil), nil)
+                }
+                let outPath = "/tmp/osai_capture_\(Int(Date().timeIntervalSince1970)).png"
+                let cmd = "screencapture -x -R\(x),\(y),\(w),\(h) \(outPath)"
+                let result = exe.shell.execute(command: cmd, timeout: 10)
+                if result.success {
+                    return (ToolResult(success: true, output: "Region captured: \(outPath)", screenshot: nil), nil)
+                }
+                return (ToolResult(success: false, output: "Region capture failed: \(result.output)", screenshot: nil), nil)
+
+            case "capture_window":
+                let appName = input["app_name"]?.stringValue ?? ""
+                let outPath = "/tmp/osai_window_\(Int(Date().timeIntervalSince1970)).png"
+                if appName.isEmpty {
+                    // Interactive window select
+                    let cmd = "screencapture -x -w \(outPath)"
+                    let result = exe.shell.execute(command: cmd, timeout: 30)
+                    if result.success {
+                        return (ToolResult(success: true, output: "Window captured (interactive): \(outPath)", screenshot: nil), nil)
+                    }
+                    return (ToolResult(success: false, output: "Window capture failed: \(result.output)", screenshot: nil), nil)
+                }
+                // Capture specific app window by window ID
+                let safeApp = appName.replacingOccurrences(of: "\"", with: "\\\"")
+                let getIdCmd = "osascript -e 'tell application \"System Events\" to get id of first window of (first process whose name is \"\(safeApp)\")'"
+                let idResult = exe.shell.execute(command: getIdCmd, timeout: 10)
+                let windowId = idResult.output.trimmingCharacters(in: .whitespacesAndNewlines)
+                if idResult.success && !windowId.isEmpty {
+                    let captureCmd = "screencapture -x -l\(windowId) \(outPath)"
+                    let captureResult = exe.shell.execute(command: captureCmd, timeout: 10)
+                    if captureResult.success {
+                        return (ToolResult(success: true, output: "Window '\(appName)' captured: \(outPath)", screenshot: nil), nil)
+                    }
+                    return (ToolResult(success: false, output: "Window capture failed: \(captureResult.output)", screenshot: nil), nil)
+                }
+                return (ToolResult(success: false, output: "Could not find window ID for '\(appName)': \(idResult.output)", screenshot: nil), nil)
+
+            case "record_start":
+                let outPath = "/tmp/osai_recording.mov"
+                let pidFile = "/tmp/osai_recording.pid"
+                // Check if already recording
+                let checkResult = exe.shell.execute(command: "test -f \(pidFile) && kill -0 $(cat \(pidFile)) 2>/dev/null && echo running || echo stopped", timeout: 5)
+                if checkResult.output.trimmingCharacters(in: .whitespacesAndNewlines) == "running" {
+                    return (ToolResult(success: false, output: "A recording is already in progress. Use record_stop first.", screenshot: nil), nil)
+                }
+                // Start recording in background
+                let startCmd = "screencapture -v \(outPath) & echo $! > \(pidFile)"
+                let result = exe.shell.execute(command: startCmd, timeout: 5)
+                if result.success {
+                    return (ToolResult(success: true, output: "Screen recording started. Output will be saved to \(outPath). Use record_stop to finish.", screenshot: nil), nil)
+                }
+                return (ToolResult(success: false, output: "Failed to start recording: \(result.output)", screenshot: nil), nil)
+
+            case "record_stop":
+                let pidFile = "/tmp/osai_recording.pid"
+                let outPath = "/tmp/osai_recording.mov"
+                let readPidResult = exe.shell.execute(command: "cat \(pidFile) 2>/dev/null", timeout: 5)
+                let pid = readPidResult.output.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !pid.isEmpty else {
+                    return (ToolResult(success: false, output: "No recording in progress (PID file not found)", screenshot: nil), nil)
+                }
+                // Send SIGINT to stop screencapture gracefully (it finalizes the file)
+                let stopResult = exe.shell.execute(command: "kill -INT \(pid) 2>/dev/null; rm -f \(pidFile); sleep 1", timeout: 10)
+                if stopResult.success {
+                    return (ToolResult(success: true, output: "Recording stopped. File saved to \(outPath)", screenshot: nil), nil)
+                }
+                return (ToolResult(success: false, output: "Failed to stop recording: \(stopResult.output)", screenshot: nil), nil)
+
+            default:
+                return (ToolResult(success: false, output: "Unknown screen_capture action: \(action). Valid: capture_region, capture_window, record_start, record_stop", screenshot: nil), nil)
+            }
+        }
+
+        // --- OCR Text Extraction ---
+        handlers["ocr_text"] = { exe, input in
+            guard let imagePath = input["image_path"]?.stringValue, !imagePath.isEmpty else {
+                return (ToolResult(success: false, output: "Missing required field: image_path", screenshot: nil), nil)
+            }
+            let language = input["language"]?.stringValue ?? "en"
+            // Use inline Swift script with Vision framework for reliable OCR
+            let safePath = imagePath.replacingOccurrences(of: "'", with: "'\\''")
+            let safeLanguage = language.replacingOccurrences(of: "'", with: "'\\''")
+            let swiftScript = """
+            import Vision
+            import AppKit
+            let path = CommandLine.arguments[1]
+            let lang = CommandLine.arguments[2]
+            let url = URL(fileURLWithPath: path)
+            guard let image = NSImage(contentsOf: url),
+                  let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+                fputs("Error: Could not load image at \\(path)\\n", stderr)
+                exit(1)
+            }
+            let request = VNRecognizeTextRequest()
+            request.recognitionLevel = .accurate
+            request.recognitionLanguages = [lang]
+            request.usesLanguageCorrection = true
+            do {
+                try VNImageRequestHandler(cgImage: cgImage).perform([request])
+            } catch {
+                fputs("Error: \\(error.localizedDescription)\\n", stderr)
+                exit(1)
+            }
+            let text = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: "\\n")
+            if text.isEmpty {
+                print("(no text detected)")
+            } else {
+                print(text)
+            }
+            """
+            // Write the script to a temp file and execute it
+            let scriptPath = "/tmp/osai_ocr_script.swift"
+            let writeResult = exe.shell.execute(command: "cat > '\(scriptPath)' << 'OSAI_OCR_EOF'\n\(swiftScript)\nOSAI_OCR_EOF", timeout: 5)
+            guard writeResult.success else {
+                return (ToolResult(success: false, output: "Failed to write OCR script: \(writeResult.output)", screenshot: nil), nil)
+            }
+            let runResult = exe.shell.execute(command: "swift '\(scriptPath)' '\(safePath)' '\(safeLanguage)'", timeout: 60)
+            if runResult.success {
+                let text = runResult.output.trimmingCharacters(in: .whitespacesAndNewlines)
+                return (ToolResult(success: true, output: text, screenshot: nil), nil)
+            }
+            return (ToolResult(success: false, output: "OCR failed: \(runResult.output)", screenshot: nil), nil)
         }
 
         return handlers

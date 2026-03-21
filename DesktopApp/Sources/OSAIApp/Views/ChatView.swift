@@ -2345,7 +2345,7 @@ struct ChatView: View {
             zenMode: focusMode,
             onCancel: msg.isStreaming ? { appState.cancelProcessing() } : nil,
             onRetry: canRetry ? { appState.retryLastMessage() } : nil,
-            onReaction: msg.role == .assistant ? { reaction in appState.setReaction(messageId: msg.id, reaction: reaction) } : nil,
+            onReaction: (msg.role == .assistant || msg.role == .user) ? { reaction in appState.setReaction(messageId: msg.id, reaction: reaction) } : nil,
             onBranch: (msg.role == .user || msg.role == .assistant) && !msg.isStreaming ? {
                 let idx = conv.messages.firstIndex(where: { $0.id == msg.id }) ?? 0
                 appState.branchConversation(from: conv.id, atMessageIndex: idx)

@@ -1468,6 +1468,7 @@ struct MessageBubble: View {
     }
 
     private var userBubbleActions: some View {
+        VStack(alignment: .trailing, spacing: 4) {
         HStack(spacing: 6) {
             bookmarkButton
 
@@ -1593,6 +1594,13 @@ struct MessageBubble: View {
             }
 
             annotationView
+        }
+
+            // Reaction picker for user messages (on its own row)
+            if !message.isStreaming && !message.content.isEmpty && (isHovered || message.reaction != nil) {
+                reactionPickerButton
+                    .transition(.opacity)
+            }
         }
     }
 
@@ -2262,21 +2270,32 @@ struct MessageBubble: View {
 
     private var reactionPickerButton: some View {
         HStack(spacing: 2) {
-            reactionButton(.thumbsUp)
-            reactionButton(.thumbsDown)
+            ForEach(MessageReaction.allReactions, id: \.self) { reaction in
+                reactionButton(reaction)
+            }
         }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 3)
+        .background(.ultraThinMaterial)
+        .clipShape(Capsule())
+        .overlay(Capsule().stroke(AppTheme.borderGlass, lineWidth: 0.5))
     }
 
     private func reactionButton(_ reaction: MessageReaction) -> some View {
         let isSelected = message.reaction == reaction
         return Button(action: {
             let newReaction: MessageReaction? = isSelected ? nil : reaction
-            onReaction?(newReaction)
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) {
+                onReaction?(newReaction)
+            }
         }) {
-            Image(systemName: isSelected ? reaction.sfSymbolFilled : reaction.sfSymbol)
-                .font(.system(size: 10))
-                .foregroundColor(isSelected ? reaction.accentColor : AppTheme.textMuted.opacity(0.45))
-                .frame(width: 22, height: 20)
+            Text(reaction.emoji)
+                .font(.system(size: 14))
+                .scaleEffect(isSelected ? 1.2 : 1.0)
+                .opacity(isSelected ? 1.0 : 0.7)
+                .frame(width: 24, height: 22)
+                .background(isSelected ? reaction.accentColor.opacity(0.15) : Color.clear)
+                .clipShape(RoundedRectangle(cornerRadius: 6))
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -2288,14 +2307,17 @@ struct MessageBubble: View {
         switch reaction {
         case .thumbsUp: return "thumbs up"
         case .thumbsDown: return "thumbs down"
+        case .heart: return "heart"
+        case .laugh: return "laugh"
+        case .thinking: return "thinking"
+        case .star: return "star"
         }
     }
 
     private func reactionBadge(_ reaction: MessageReaction) -> some View {
-        Image(systemName: reaction.sfSymbolFilled)
-            .font(.system(size: 11))
-            .foregroundColor(reaction.accentColor)
-            .padding(4)
+        Text(reaction.emoji)
+            .font(.system(size: 16))
+            .padding(3)
             .background(AppTheme.bgCard)
             .clipShape(Circle())
             .overlay(Circle().stroke(AppTheme.borderGlass, lineWidth: 0.5))

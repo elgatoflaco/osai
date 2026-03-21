@@ -11,11 +11,19 @@ enum MessageRole: String, Codable {
 enum MessageReaction: String, Codable {
     case thumbsUp
     case thumbsDown
+    case heart
+    case laugh
+    case thinking
+    case star
 
     var sfSymbol: String {
         switch self {
         case .thumbsUp: return "hand.thumbsup"
         case .thumbsDown: return "hand.thumbsdown"
+        case .heart: return "heart"
+        case .laugh: return "face.smiling"
+        case .thinking: return "questionmark.bubble"
+        case .star: return "star"
         }
     }
 
@@ -23,6 +31,10 @@ enum MessageReaction: String, Codable {
         switch self {
         case .thumbsUp: return "hand.thumbsup.fill"
         case .thumbsDown: return "hand.thumbsdown.fill"
+        case .heart: return "heart.fill"
+        case .laugh: return "face.smiling.fill"
+        case .thinking: return "questionmark.bubble.fill"
+        case .star: return "star.fill"
         }
     }
 
@@ -30,8 +42,26 @@ enum MessageReaction: String, Codable {
         switch self {
         case .thumbsUp: return .green
         case .thumbsDown: return .red
+        case .heart: return .pink
+        case .laugh: return .yellow
+        case .thinking: return .purple
+        case .star: return .orange
         }
     }
+
+    var emoji: String {
+        switch self {
+        case .thumbsUp: return "👍"
+        case .thumbsDown: return "👎"
+        case .heart: return "❤️"
+        case .laugh: return "😂"
+        case .thinking: return "🤔"
+        case .star: return "⭐"
+        }
+    }
+
+    /// All reactions in display order
+    static let allReactions: [MessageReaction] = [.thumbsUp, .thumbsDown, .heart, .laugh, .thinking, .star]
 }
 
 /// Represents an activity happening during processing (MCP loading, tool call, etc.)

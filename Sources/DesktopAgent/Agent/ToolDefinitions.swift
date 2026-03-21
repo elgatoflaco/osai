@@ -3,7 +3,7 @@ import Foundation
 // MARK: - Tool Category for Dynamic Loading
 
 enum ToolCategory: String, CaseIterable {
-    case core           // always loaded: take_screenshot, click_element, type_text, press_key, run_shell, read_file, write_file, clipboard_manager, send_notification, spotlight_search, file_manager
+    case core           // always loaded: take_screenshot, click_element, type_text, press_key, run_shell, read_file, write_file, clipboard_manager, send_notification, spotlight_search, file_manager, screen_capture, ocr_text
     case gui            // get_ui_elements, scroll, drag, mouse_move, wait, list_windows, move_window, resize_window, get_screen_size, window_manager
     case web            // open_url (MCP chrome tools handled separately)
     case email          // send_email
@@ -19,7 +19,7 @@ enum ToolCategory: String, CaseIterable {
     case claudeCode     // claude_code
     case apps           // list_apps, get_frontmost_app, activate_app, open_app, calendar_control, reminders_control, contacts_lookup, imessage_send, notes_control, timer_control
     case files          // list_directory, file_info, read_clipboard, write_clipboard
-    case system         // system_info, notify, web_search, process_manager, network_info, battery_info, media_control
+    case system         // system_info, notify, web_search, process_manager, network_info, battery_info, media_control, text_to_speech, system_appearance
 }
 
 // MARK: - Tool Definitions for Claude
@@ -33,7 +33,7 @@ struct ToolDefinitions {
         var map: [String: ToolCategory] = [:]
 
         // Core (always loaded)
-        for name in ["take_screenshot", "click_element", "type_text", "press_key", "run_shell", "read_file", "write_file", "clipboard_manager", "send_notification", "spotlight_search", "file_manager"] {
+        for name in ["take_screenshot", "click_element", "type_text", "press_key", "run_shell", "read_file", "write_file", "clipboard_manager", "send_notification", "spotlight_search", "file_manager", "screen_capture", "ocr_text"] {
             map[name] = .core
         }
 
@@ -103,7 +103,7 @@ struct ToolDefinitions {
         }
 
         // System
-        for name in ["system_info", "notify", "web_search", "system_control", "media_control", "process_manager", "network_info", "battery_info"] {
+        for name in ["system_info", "notify", "web_search", "system_control", "media_control", "process_manager", "network_info", "battery_info", "text_to_speech", "system_appearance"] {
             map[name] = .system
         }
 
@@ -975,6 +975,37 @@ struct ToolDefinitions {
             )
         ),
 
+        // --- Text to Speech ---
+        ClaudeTool(
+            name: "text_to_speech",
+            description: "Read text aloud using macOS built-in speech synthesis. Runs in background so it doesn't block. Use action 'stop' to stop any ongoing speech.",
+            inputSchema: InputSchema(
+                type: "object",
+                properties: [
+                    "text": PropertySchema(type: "string", description: "Text to read aloud (required unless action is 'stop')", enumValues: nil),
+                    "voice": PropertySchema(type: "string", description: "Voice name (e.g. 'Samantha', 'Alex', 'Daniel'). Uses system default if omitted.", enumValues: nil),
+                    "rate": PropertySchema(type: "integer", description: "Speech rate in words per minute (e.g. 200). Uses system default if omitted.", enumValues: nil),
+                    "action": PropertySchema(type: "string", description: "Set to 'stop' to kill any ongoing speech", enumValues: ["speak", "stop"])
+                ],
+                required: ["text"]
+            )
+        ),
+
+        // --- System Appearance ---
+        ClaudeTool(
+            name: "system_appearance",
+            description: "Control macOS appearance settings: get/set wallpaper, list desktops, get/set accent color, toggle Stage Manager.",
+            inputSchema: InputSchema(
+                type: "object",
+                properties: [
+                    "action": PropertySchema(type: "string", description: "Appearance action to perform", enumValues: ["get_wallpaper", "set_wallpaper", "list_desktops", "get_accent_color", "set_accent_color", "toggle_stage_manager"]),
+                    "path": PropertySchema(type: "string", description: "Image file path (for set_wallpaper)", enumValues: nil),
+                    "color": PropertySchema(type: "string", description: "Accent color name (for set_accent_color)", enumValues: ["blue", "purple", "pink", "red", "orange", "yellow", "green", "graphite"])
+                ],
+                required: ["action"]
+            )
+        ),
+
         // --- Email (via gws CLI) ---
         ClaudeTool(
             name: "send_email",
@@ -987,6 +1018,38 @@ struct ToolDefinitions {
                     "body": PropertySchema(type: "string", description: "Body text (plain text)", enumValues: nil)
                 ],
                 required: ["to", "subject", "body"]
+            )
+        ),
+
+        // --- Screen Capture (advanced) ---
+        ClaudeTool(
+            name: "screen_capture",
+            description: "Advanced screen capture: capture a region, capture a specific window, or start/stop screen recording. Goes beyond take_screenshot with window-level and video recording support.",
+            inputSchema: InputSchema(
+                type: "object",
+                properties: [
+                    "action": PropertySchema(type: "string", description: "Capture action to perform", enumValues: ["capture_region", "capture_window", "record_start", "record_stop"]),
+                    "app_name": PropertySchema(type: "string", description: "Application name for capture_window action", enumValues: nil),
+                    "x": PropertySchema(type: "integer", description: "X coordinate for capture_region", enumValues: nil),
+                    "y": PropertySchema(type: "integer", description: "Y coordinate for capture_region", enumValues: nil),
+                    "width": PropertySchema(type: "integer", description: "Width for capture_region", enumValues: nil),
+                    "height": PropertySchema(type: "integer", description: "Height for capture_region", enumValues: nil)
+                ],
+                required: ["action"]
+            )
+        ),
+
+        // --- OCR Text Extraction ---
+        ClaudeTool(
+            name: "ocr_text",
+            description: "Extract text from an image file using macOS Vision framework OCR. Supports accurate text recognition in multiple languages.",
+            inputSchema: InputSchema(
+                type: "object",
+                properties: [
+                    "image_path": PropertySchema(type: "string", description: "Absolute path to the image file", enumValues: nil),
+                    "language": PropertySchema(type: "string", description: "Recognition language code (default: \"en\"). Examples: en, es, fr, de, zh, ja", enumValues: nil)
+                ],
+                required: ["image_path"]
             )
         ),
     ]
