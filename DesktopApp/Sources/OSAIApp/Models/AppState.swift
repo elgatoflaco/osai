@@ -4971,22 +4971,60 @@ class AppState: ObservableObject {
     }
 
     func deleteTask(_ task: TaskInfo) {
-        let path = NSHomeDirectory() + "/.desktop-agent/tasks/\(task.id).json"
-        try? FileManager.default.removeItem(atPath: path)
+        let taskPath = NSHomeDirectory() + "/.desktop-agent/tasks/\(task.id).json"
+        let plistPath = NSHomeDirectory() + "/Library/LaunchAgents/com.desktop-agent.task.\(task.id).plist"
+        let logPath = NSHomeDirectory() + "/.desktop-agent/tasks/\(task.id).log"
+        let shPath = NSHomeDirectory() + "/.desktop-agent/tasks/\(task.id).sh"
+
+        // Unload LaunchAgent first (stops the scheduled execution)
+        if FileManager.default.fileExists(atPath: plistPath) {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+            process.arguments = ["bootout", "gui/\(getuid())", plistPath]
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+            try? process.run()
+            process.waitUntilExit()
+            try? FileManager.default.removeItem(atPath: plistPath)
+        }
+
+        // Remove task JSON, log, and script
+        try? FileManager.default.removeItem(atPath: taskPath)
+        try? FileManager.default.removeItem(atPath: logPath)
+        try? FileManager.default.removeItem(atPath: shPath)
+
         tasks = service.loadTasks()
         showToast("Task deleted", type: .success)
     }
 
     func toggleTask(_ task: TaskInfo) {
-        let path = NSHomeDirectory() + "/.desktop-agent/tasks/\(task.id).json"
-        guard let data = FileManager.default.contents(atPath: path),
+        let taskPath = NSHomeDirectory() + "/.desktop-agent/tasks/\(task.id).json"
+        let plistPath = NSHomeDirectory() + "/Library/LaunchAgents/com.desktop-agent.task.\(task.id).plist"
+
+        guard let data = FileManager.default.contents(atPath: taskPath),
               var json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
 
         let newEnabled = !(task.enabled)
         json["enabled"] = newEnabled
         if let newData = try? JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted]) {
-            try? newData.write(to: URL(fileURLWithPath: path))
+            try? newData.write(to: URL(fileURLWithPath: taskPath))
         }
+
+        // Sync LaunchAgent: unload when disabling, load when enabling
+        if FileManager.default.fileExists(atPath: plistPath) {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+            if newEnabled {
+                process.arguments = ["bootstrap", "gui/\(getuid())", plistPath]
+            } else {
+                process.arguments = ["bootout", "gui/\(getuid())", plistPath]
+            }
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+            try? process.run()
+            process.waitUntilExit()
+        }
+
         tasks = service.loadTasks()
         showToast("Task \(newEnabled ? "enabled" : "disabled")", type: .info)
     }
