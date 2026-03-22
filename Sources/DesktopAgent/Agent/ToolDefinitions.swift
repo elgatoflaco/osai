@@ -185,18 +185,27 @@ struct ToolDefinitions {
     static let schedulerTools: [ClaudeTool] = [
         ClaudeTool(
             name: "schedule_task",
-            description: "Schedule a task to run osai in headless mode. Types: \"once\" (provide \"at\" as ISO 8601), \"daily\" (provide hour/minute), \"interval\" (provide minutes).",
+            description: """
+            Schedule a task to run automatically via macOS launchd. The task executes osai with the given command at the scheduled time.
+
+            Types: "once" (run once at ISO 8601 datetime), "daily" (run every day at hour:minute), "interval" (run every N minutes).
+
+            For delivery via Discord/WhatsApp/Telegram, add "deliver" field with format "platform:chatId" (e.g. "discord:dm:123456" or "whatsapp:34612345678@s.whatsapp.net").
+
+            IMPORTANT: Always verify the task was created by calling list_tasks after schedule_task. The command field should be a natural language instruction that osai will execute autonomously.
+            """,
             inputSchema: InputSchema(
                 type: "object",
                 properties: [
-                    "id": PropertySchema(type: "string", description: "Unique task ID (lowercase, hyphens)", enumValues: nil),
-                    "description": PropertySchema(type: "string", description: "Human-readable description", enumValues: nil),
-                    "command": PropertySchema(type: "string", description: "Prompt/instruction to execute when task runs", enumValues: nil),
+                    "id": PropertySchema(type: "string", description: "Unique task ID (lowercase, hyphens, e.g. 'morning-briefing', 'whatsapp-yan-2130')", enumValues: nil),
+                    "description": PropertySchema(type: "string", description: "Human-readable description shown in Tasks view", enumValues: nil),
+                    "command": PropertySchema(type: "string", description: "Natural language instruction for osai to execute (e.g. 'Send a WhatsApp message to Yan Adrover saying hello')", enumValues: nil),
                     "schedule_type": PropertySchema(type: "string", description: "Type of schedule", enumValues: ["once", "daily", "interval"]),
                     "hour": PropertySchema(type: "integer", description: "Hour (0-23) for daily schedule", enumValues: nil),
                     "minute": PropertySchema(type: "integer", description: "Minute (0-59) for daily schedule", enumValues: nil),
                     "minutes": PropertySchema(type: "integer", description: "Interval in minutes for recurring tasks", enumValues: nil),
-                    "at": PropertySchema(type: "string", description: "ISO 8601 datetime for one-time tasks", enumValues: nil)
+                    "at": PropertySchema(type: "string", description: "ISO 8601 datetime for one-time tasks (e.g. '2026-03-22T21:28:00+01:00')", enumValues: nil),
+                    "deliver": PropertySchema(type: "string", description: "Delivery target: 'discord:dm:userId', 'discord:channelId', 'whatsapp:phone@s.whatsapp.net', 'telegram:chatId'", enumValues: nil)
                 ],
                 required: ["id", "description", "command", "schedule_type"]
             )

@@ -1254,9 +1254,15 @@ final class AgentLoop {
 
         printColored("    📅 Scheduling: \(description)", color: .magenta)
 
-        // Attach delivery target from gateway context (so task results go back to the chat)
+        // Attach delivery target: explicit "deliver" param > gateway context > nil
         var delivery: ScheduledTask.DeliveryTarget? = nil
-        if let gw = gatewayContext {
+        if let deliverStr = input["deliver"]?.stringValue {
+            // Parse "platform:chatId" format (e.g. "discord:dm:123" or "whatsapp:34612@s.whatsapp.net")
+            let parts = deliverStr.split(separator: ":", maxSplits: 1)
+            if parts.count == 2 {
+                delivery = ScheduledTask.DeliveryTarget(platform: String(parts[0]), chatId: String(parts[1]))
+            }
+        } else if let gw = gatewayContext {
             delivery = ScheduledTask.DeliveryTarget(platform: gw.platform, chatId: gw.chatId)
         }
 
